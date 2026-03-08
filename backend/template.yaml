@@ -1,0 +1,2020 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: GroveWars - Clan-based territory capture game backend
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+  Stage:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, prod]
+  AllowedEmailDomain:
+    Type: String
+    Description: Allowed email domain for signup (e.g. college.edu)
+  FcmServerKey:
+    Type: String
+    Description: Firebase Cloud Messaging server key
+    NoEcho: true
+  HmacSecret:
+    Type: String
+    Description: HMAC secret for QR code signing
+    NoEcho: true
+  SesFromEmail:
+    Type: String
+    Description: SES sender email address
+    Default: noreply@grovewars.com
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: nodejs20.x
+    Timeout: 30
+    MemorySize: 256
+    Environment:
+      Variables:
+        STAGE: !Ref Stage
+        ALLOWED_EMAIL_DOMAIN: !Ref AllowedEmailDomain
+        FCM_SERVER_KEY: !Ref FcmServerKey
+        HMAC_SECRET: !Ref HmacSecret
+        SES_FROM_EMAIL: !Ref SesFromEmail
+        AWS_REGION_NAME: ap-south-1
+        USERS_TABLE: !Ref UsersTable
+        CLANS_TABLE: !Ref ClansTable
+        LOCATIONS_TABLE: !Ref LocationsTable
+        DAILY_CONFIG_TABLE: !Ref DailyConfigTable
+        PLAYER_ASSIGNMENTS_TABLE: !Ref PlayerAssignmentsTable
+        GAME_SESSIONS_TABLE: !Ref GameSessionsTable
+        PLAYER_LOCKS_TABLE: !Ref PlayerLocksTable
+        CAPTURED_SPACES_TABLE: !Ref CapturedSpacesTable
+        ASSET_CATALOG_TABLE: !Ref AssetCatalogTable
+        PLAYER_ASSETS_TABLE: !Ref PlayerAssetsTable
+        SPACE_DECORATIONS_TABLE: !Ref SpaceDecorationsTable
+        MAP_CALIBRATION_TABLE: !Ref MapCalibrationTable
+        ADMIN_NOTIFICATIONS_TABLE: !Ref AdminNotificationsTable
+        WS_CONNECTIONS_TABLE: !Ref WsConnectionsTable
+        ASSETS_BUCKET: !Ref AssetsBucket
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # =========================================================================
+  # Cognito Trigger Functions (defined BEFORE UserPool to break circular dep)
+  # =========================================================================
+  DefineAuthChallengeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-defineAuth
+      CodeUri: functions/auth/
+      Handler: defineAuthChallenge.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - defineAuthChallenge.ts
+        External:
+          - '@aws-sdk/*'
+
+  CreateAuthChallengeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-createAuth
+      CodeUri: functions/auth/
+      Handler: createAuthChallenge.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: "*"
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - createAuthChallenge.ts
+        External:
+          - '@aws-sdk/*'
+
+  VerifyAuthChallengeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-verifyAuth
+      CodeUri: functions/auth/
+      Handler: verifyAuthChallenge.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - verifyAuthChallenge.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Cognito (UserPool references trigger Lambdas above — no back-reference)
+  # =========================================================================
+  CognitoUserPool:
+    Type: AWS::Cognito::UserPool
+    Properties:
+      UserPoolName: !Sub grovewars-${Stage}-users
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      Schema:
+        - Name: email
+          AttributeDataType: String
+          Mutable: true
+          Required: true
+        - Name: clan
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+        - Name: displayName
+          AttributeDataType: String
+          Mutable: true
+          Required: false
+      LambdaConfig:
+        DefineAuthChallenge: !GetAtt DefineAuthChallengeFunction.Arn
+        CreateAuthChallenge: !GetAtt CreateAuthChallengeFunction.Arn
+        VerifyAuthChallengeResponse: !GetAtt VerifyAuthChallengeFunction.Arn
+      Policies:
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireUppercase: false
+          RequireLowercase: false
+          RequireNumbers: false
+          RequireSymbols: false
+
+  CognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
+    Properties:
+      ClientName: !Sub grovewars-${Stage}-client
+      UserPoolId: !Ref CognitoUserPool
+      ExplicitAuthFlows:
+        - ALLOW_CUSTOM_AUTH
+        - ALLOW_REFRESH_TOKEN_AUTH
+      AccessTokenValidity: 1
+      TokenValidityUnits:
+        AccessToken: hours
+        RefreshToken: days
+      RefreshTokenValidity: 30
+      GenerateSecret: false
+
+  CognitoAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: Admin
+      UserPoolId: !Ref CognitoUserPool
+      Description: Admin users for GroveWars dashboard
+
+  # Cognito Lambda trigger permissions
+  DefineAuthChallengeInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt DefineAuthChallengeFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt CognitoUserPool.Arn
+
+  CreateAuthChallengeInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CreateAuthChallengeFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt CognitoUserPool.Arn
+
+  VerifyAuthChallengeInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt VerifyAuthChallengeFunction.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt CognitoUserPool.Arn
+
+  # =========================================================================
+  # REST API Gateway
+  # =========================================================================
+  RestApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub grovewars-${Stage}-api
+      StageName: !Ref Stage
+      Auth:
+        DefaultAuthorizer: CognitoAuthorizer
+        AddDefaultAuthorizerToCorsPreflight: false
+        Authorizers:
+          CognitoAuthorizer:
+            UserPoolArn: !GetAtt CognitoUserPool.Arn
+      Cors:
+        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
+        AllowOrigin: "'*'"
+
+  # =========================================================================
+  # WebSocket API Gateway
+  # =========================================================================
+  WebSocketApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub grovewars-${Stage}-ws
+      ProtocolType: WEBSOCKET
+      RouteSelectionExpression: $request.body.action
+
+  WebSocketStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref WebSocketApi
+      StageName: !Ref Stage
+      AutoDeploy: true
+
+  # $connect route
+  WsConnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $connect
+      AuthorizationType: NONE
+      Target: !Sub integrations/${WsConnectIntegration}
+
+  WsConnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:ap-south-1:lambda:path/2015-03-31/functions/${WsConnectFunction.Arn}/invocations
+
+  WsConnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: WebSocketStage
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WsConnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/*/$connect
+
+  # $disconnect route
+  WsDisconnectRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $disconnect
+      AuthorizationType: NONE
+      Target: !Sub integrations/${WsDisconnectIntegration}
+
+  WsDisconnectIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:ap-south-1:lambda:path/2015-03-31/functions/${WsDisconnectFunction.Arn}/invocations
+
+  WsDisconnectPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: WebSocketStage
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WsDisconnectFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/*/$disconnect
+
+  # $default route
+  WsDefaultRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref WebSocketApi
+      RouteKey: $default
+      AuthorizationType: NONE
+      Target: !Sub integrations/${WsDefaultIntegration}
+
+  WsDefaultIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref WebSocketApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:ap-south-1:lambda:path/2015-03-31/functions/${WsDefaultFunction.Arn}/invocations
+
+  WsDefaultPermission:
+    Type: AWS::Lambda::Permission
+    DependsOn: WebSocketStage
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref WsDefaultFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/*/$default
+
+  # =========================================================================
+  # S3 Bucket
+  # =========================================================================
+  AssetsBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub grovewars-${Stage}-assets
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+      VersioningConfiguration:
+        Status: Enabled
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ['*']
+            AllowedMethods: [PUT]
+            AllowedHeaders: ['Content-Type']
+            MaxAge: 300
+
+  AssetsBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref AssetsBucket
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: '*'
+            Action: 's3:GetObject'
+            Resource: !Sub '${AssetsBucket.Arn}/maps/*'
+
+  # =========================================================================
+  # DynamoDB Tables (14 tables, all on-demand)
+  # =========================================================================
+
+  # 1. Users
+  UsersTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-users
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: clan
+          AttributeType: S
+        - AttributeName: todayXp
+          AttributeType: N
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: ClanIndex
+          KeySchema:
+            - AttributeName: clan
+              KeyType: HASH
+            - AttributeName: todayXp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: EmailIndex
+          KeySchema:
+            - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+
+  # 2. Clans
+  ClansTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-clans
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: clanId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: clanId
+          KeyType: HASH
+
+  # 3. Locations
+  LocationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-locations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: locationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: locationId
+          KeyType: HASH
+
+  # 4. Daily Config
+  DailyConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-daily-config
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+
+  # 5. Player Assignments
+  PlayerAssignmentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-player-assignments
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dateUserId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dateUserId
+          KeyType: HASH
+
+  # 6. Game Sessions
+  GameSessionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-game-sessions
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: sessionId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: sessionId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserDateIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # 7. Player Locks
+  PlayerLocksTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-player-locks
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dateUserLocation
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dateUserLocation
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # 8. Captured Spaces
+  CapturedSpacesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-captured-spaces
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: spaceId
+          AttributeType: S
+        - AttributeName: season
+          AttributeType: S
+        - AttributeName: dateCaptured
+          AttributeType: S
+      KeySchema:
+        - AttributeName: spaceId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: SeasonIndex
+          KeySchema:
+            - AttributeName: season
+              KeyType: HASH
+            - AttributeName: dateCaptured
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # 9. Asset Catalog
+  AssetCatalogTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-asset-catalog
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: assetId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: assetId
+          KeyType: HASH
+
+  # 10. Player Assets
+  PlayerAssetsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-player-assets
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userAssetId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: obtainedAt
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userAssetId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserAssetsIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: obtainedAt
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # 11. Space Decorations
+  SpaceDecorationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-space-decorations
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userSpaceId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userSpaceId
+          KeyType: HASH
+
+  # 12. Map Calibration
+  MapCalibrationTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-map-calibration
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: calibrationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: calibrationId
+          KeyType: HASH
+
+  # 13. Admin Notifications
+  AdminNotificationsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-admin-notifications
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: notificationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: notificationId
+          KeyType: HASH
+
+  # 14. WebSocket Connections
+  WsConnectionsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-ws-connections
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: connectionId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: connectionId
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+
+  # =========================================================================
+  # Auth Functions (NO authorizer)
+  # =========================================================================
+  SignupFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-signup
+      CodeUri: functions/auth/
+      Handler: signup.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:AdminSetUserPassword
+                - cognito-idp:AdminUpdateUserAttributes
+                - cognito-idp:AdminGetUser
+              Resource: !GetAtt CognitoUserPool.Arn
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ses:SendEmail
+              Resource: "*"
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /auth/signup
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - signup.ts
+        External:
+          - '@aws-sdk/*'
+
+  VerifyFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-verify
+      CodeUri: functions/auth/
+      Handler: verify.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminUpdateUserAttributes
+                - cognito-idp:AdminGetUser
+              Resource: !GetAtt CognitoUserPool.Arn
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /auth/verify
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - verify.ts
+        External:
+          - '@aws-sdk/*'
+
+  LoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-login
+      CodeUri: functions/auth/
+      Handler: login.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminInitiateAuth
+                - cognito-idp:AdminRespondToAuthChallenge
+                - cognito-idp:AdminGetUser
+              Resource: !GetAtt CognitoUserPool.Arn
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /auth/login
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - login.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Player Functions (Cognito authorizer)
+  # =========================================================================
+  GetProfileFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getProfile
+      CodeUri: functions/player/
+      Handler: getProfile.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/profile
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getProfile.ts
+        External:
+          - '@aws-sdk/*'
+
+  UpdateAvatarFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-updateAvatar
+      CodeUri: functions/player/
+      Handler: updateAvatar.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/avatar
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - updateAvatar.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetAssetsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getAssets
+      CodeUri: functions/player/
+      Handler: getAssets.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AssetCatalogTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/assets
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getAssets.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetStatsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getStats
+      CodeUri: functions/player/
+      Handler: getStats.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/stats
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getStats.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Map / Locations / Daily Info Functions
+  # =========================================================================
+  GetMapConfigFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getMapConfig
+      CodeUri: functions/
+      Handler: getMapConfig.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref AssetsBucket
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MapCalibrationTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /map/config
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getMapConfig.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetTodayLocationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getTodayLocations
+      CodeUri: functions/
+      Handler: getTodayLocations.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /locations/today
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getTodayLocations.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetDailyInfoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getDailyInfo
+      CodeUri: functions/
+      Handler: getDailyInfo.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /daily/info
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getDailyInfo.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Game Functions
+  # =========================================================================
+  ScanQrFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-scanQr
+      CodeUri: functions/game/
+      Handler: scanQR.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/scan
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - scanQR.ts
+        External:
+          - '@aws-sdk/*'
+
+  StartMinigameFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-startMinigame
+      CodeUri: functions/game/
+      Handler: startMinigame.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/start
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - startMinigame.ts
+        External:
+          - '@aws-sdk/*'
+
+  CompleteMinigameFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-completeMinigame
+      CodeUri: functions/game/
+      Handler: completeMinigame.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+          WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AssetCatalogTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - execute-api:ManageConnections
+              Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/complete
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - completeMinigame.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetCooldownFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getCooldown
+      CodeUri: functions/game/
+      Handler: getCooldown.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/cooldown
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getCooldown.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Scores Functions
+  # =========================================================================
+  GetClanScoresFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getClanScores
+      CodeUri: functions/scores/
+      Handler: getClanScores.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /scores/clans
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getClanScores.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetCaptureHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getCaptureHistory
+      CodeUri: functions/scores/
+      Handler: getCaptureHistory.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /scores/history
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getCaptureHistory.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Spaces Functions
+  # =========================================================================
+  GetCapturedSpacesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getCapturedSpaces
+      CodeUri: functions/spaces/
+      Handler: getCapturedSpaces.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /spaces/captured
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getCapturedSpaces.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetDecorationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getDecoration
+      CodeUri: functions/spaces/
+      Handler: getDecoration.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /spaces/{spaceId}/decoration
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getDecoration.ts
+        External:
+          - '@aws-sdk/*'
+
+  SaveDecorationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-saveDecoration
+      CodeUri: functions/spaces/
+      Handler: saveDecoration.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /spaces/{spaceId}/decoration
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - saveDecoration.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Admin Functions (Cognito authorizer - group check in handler)
+  # =========================================================================
+  LocationsCrudFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-locationsCrud
+      CodeUri: functions/admin/
+      Handler: locationsCrud.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+      Events:
+        ListCreate:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations
+            Method: GET
+        Create:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations
+            Method: POST
+        UpdateOne:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations/{locationId}
+            Method: PUT
+        DeleteOne:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations/{locationId}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - locationsCrud.ts
+        External:
+          - '@aws-sdk/*'
+
+  MapUploadUrlFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-mapUploadUrl
+      CodeUri: functions/admin/
+      Handler: mapUploadUrl.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/map/upload-url
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - mapUploadUrl.ts
+        External:
+          - '@aws-sdk/*'
+
+  SaveMapCalibrationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-saveMapCalibration
+      CodeUri: functions/admin/
+      Handler: saveMapCalibration.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref MapCalibrationTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/map/calibration
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - saveMapCalibration.ts
+        External:
+          - '@aws-sdk/*'
+
+  SetDailyConfigFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-setDailyConfig
+      CodeUri: functions/admin/
+      Handler: setDailyConfig.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/daily/config
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - setDailyConfig.ts
+        External:
+          - '@aws-sdk/*'
+
+  GenerateQrFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-generateQr
+      CodeUri: functions/admin/
+      Handler: generateQR.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/qr/generate
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - generateQR.ts
+        External:
+          - '@aws-sdk/*'
+
+  SendNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-sendNotification
+      CodeUri: functions/admin/
+      Handler: sendNotification.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminNotificationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+              Resource: !Sub arn:aws:ssm:ap-south-1:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/notifications/send
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - sendNotification.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetNotificationHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getNotificationHistory
+      CodeUri: functions/admin/
+      Handler: getNotificationHistory.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminNotificationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/notifications/history
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getNotificationHistory.ts
+        External:
+          - '@aws-sdk/*'
+
+  ImportRosterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-importRoster
+      CodeUri: functions/admin/
+      Handler: importRoster.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - cognito-idp:AdminCreateUser
+                - cognito-idp:AdminSetUserPassword
+                - cognito-idp:AdminUpdateUserAttributes
+                - cognito-idp:AdminGetUser
+              Resource: !GetAtt CognitoUserPool.Arn
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/roster/import
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - importRoster.ts
+        External:
+          - '@aws-sdk/*'
+
+  SeasonResetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-seasonReset
+      CodeUri: functions/admin/
+      Handler: seasonReset.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/season/reset
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - seasonReset.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analytics
+      CodeUri: functions/admin/
+      Handler: analytics.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analytics.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # WebSocket Functions
+  # =========================================================================
+  WsConnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-wsConnect
+      CodeUri: functions/
+      Handler: wsConnect.handler
+      Environment:
+        Variables:
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - wsConnect.ts
+        External:
+          - '@aws-sdk/*'
+
+  WsDisconnectFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-wsDisconnect
+      CodeUri: functions/
+      Handler: wsDisconnect.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - wsDisconnect.ts
+        External:
+          - '@aws-sdk/*'
+
+  WsDefaultFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-wsDefault
+      CodeUri: functions/
+      Handler: wsDefault.handler
+      Environment:
+        Variables:
+          WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - execute-api:ManageConnections
+              Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - wsDefault.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Scheduled Functions (Lambda definitions only — no inline Events)
+  # =========================================================================
+  DailyResetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-dailyReset
+      CodeUri: functions/scheduled/
+      Handler: dailyReset.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - dailyReset.ts
+        External:
+          - '@aws-sdk/*'
+
+  DailyScoringFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-dailyScoring
+      CodeUri: functions/scheduled/
+      Handler: dailyScoring.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - execute-api:ManageConnections
+              Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - dailyScoring.ts
+        External:
+          - '@aws-sdk/*'
+
+  AssetExpiryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-assetExpiry
+      CodeUri: functions/scheduled/
+      Handler: assetExpiry.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - assetExpiry.ts
+        External:
+          - '@aws-sdk/*'
+
+  AssetExpiryWarningFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-assetExpiryWarning
+      CodeUri: functions/scheduled/
+      Handler: assetExpiryWarning.handler
+      Environment:
+        Variables:
+          WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - execute-api:ManageConnections
+              Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - assetExpiryWarning.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # EventBridge Rules (separate resources — Lambda first, then rule, then permission)
+  # =========================================================================
+
+  # Daily Reset — 8:00 AM IST (2:30 UTC)
+  DailyResetRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-daily-reset
+      Description: Daily reset at 8:00 AM IST (2:30 UTC)
+      ScheduleExpression: cron(30 2 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DailyResetFunction.Arn
+          Id: DailyResetTarget
+
+  DailyResetPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DailyResetFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyResetRule.Arn
+
+  # Daily Scoring — 6:00 PM IST (12:30 UTC)
+  DailyScoringRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-daily-scoring
+      Description: Daily scoring at 6:00 PM IST (12:30 UTC)
+      ScheduleExpression: cron(30 12 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DailyScoringFunction.Arn
+          Id: DailyScoringTarget
+
+  DailyScoringPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DailyScoringFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyScoringRule.Arn
+
+  # Asset Expiry — midnight IST (18:30 UTC)
+  AssetExpiryRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-asset-expiry
+      Description: Asset expiry at midnight IST (18:30 UTC)
+      ScheduleExpression: cron(30 18 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AssetExpiryFunction.Arn
+          Id: AssetExpiryTarget
+
+  AssetExpiryPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AssetExpiryFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AssetExpiryRule.Arn
+
+  # Asset Expiry Warning — 9:00 PM IST (15:30 UTC)
+  AssetExpiryWarningRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-asset-expiry-warning
+      Description: Asset expiry warning at 9:00 PM IST (15:30 UTC)
+      ScheduleExpression: cron(30 15 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AssetExpiryWarningFunction.Arn
+          Id: AssetExpiryWarningTarget
+
+  AssetExpiryWarningPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref AssetExpiryWarningFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt AssetExpiryWarningRule.Arn
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  RestApiUrl:
+    Description: REST API Gateway URL
+    Value: !Sub https://${RestApi}.execute-api.ap-south-1.amazonaws.com/${Stage}
+
+  WebSocketApiUrl:
+    Description: WebSocket API Gateway URL
+    Value: !Sub wss://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}
+
+  UserPoolId:
+    Description: Cognito User Pool ID
+    Value: !Ref CognitoUserPool
+
+  UserPoolClientId:
+    Description: Cognito User Pool Client ID
+    Value: !Ref CognitoUserPoolClient
+
+  AssetsBucketName:
+    Description: S3 Assets Bucket Name
+    Value: !Ref AssetsBucket

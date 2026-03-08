@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+.aws-sam/
+
+# Environment
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test coverage
+coverage/
+
+# Vite
+*.local
+
+# Claude Code
+.claude/settings.local.json
+
+# Backend secrets and debug files
+backend/params.yaml
+backend/item.json
