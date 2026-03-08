@@ -1,0 +1,36 @@
+import { create } from 'zustand';
+
+interface DebugStore {
+  debugLocation: { latitude: number; longitude: number } | null;
+  isDebugMode: boolean;
+  tapToSetMode: boolean;
+  setDebugLocation: (latitude: number, longitude: number) => void;
+  clearDebugLocation: () => void;
+  toggleDebugMode: () => void;
+  toggleTapToSetMode: () => void;
+}
+
+export const useDebugStore = create<DebugStore>((set) => ({
+  debugLocation: null,
+  isDebugMode: false,
+  tapToSetMode: false,
+  setDebugLocation: (latitude, longitude) => {
+    if (!__DEV__) return;
+    set({ debugLocation: { latitude, longitude }, isDebugMode: true, tapToSetMode: false });
+  },
+  clearDebugLocation: () => {
+    if (!__DEV__) return;
+    set({ debugLocation: null, isDebugMode: false });
+  },
+  toggleDebugMode: () => {
+    if (!__DEV__) return;
+    set((s) => ({
+      isDebugMode: !s.isDebugMode,
+      debugLocation: s.isDebugMode ? null : s.debugLocation,
+    }));
+  },
+  toggleTapToSetMode: () => {
+    if (!__DEV__) return;
+    set({ tapToSetMode: true, isDebugMode: true });
+  },
+}));

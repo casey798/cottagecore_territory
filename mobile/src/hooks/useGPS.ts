@@ -1,0 +1,162 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { PermissionsAndroid, Platform } from 'react-native';
+import Geolocation, {
+  GeoPosition,
+} from 'react-native-geolocation-service';
+import { isWithinGameHours } from '@/utils/time';
+import { useDebugStore } from '@/store/useDebugStore';
+
+interface GPSState {
+  latitude: number | null;
+  longitude: number | null;
+  accuracy: number | null;
+  isTracking: boolean;
+  permissionDenied: boolean;
+  error: string | null;
+}
+
+async function requestLocationPermission(): Promise<boolean> {
+  if (Platform.OS !== 'android') return false;
+
+  const granted = await PermissionsAndroid.request(
+    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    {
+      title: 'GroveWars Location Permission',
+      message:
+        'GroveWars needs your location to show you ' +
+        'nearby challenges on the campus map.',
+      buttonNeutral: 'Ask Me Later',
+      buttonNegative: 'Cancel',
+      buttonPositive: 'OK',
+    },
+  );
+  return granted === PermissionsAndroid.RESULTS.GRANTED;
+}
+
+export function useGPS(): GPSState {
+  const debugLocation = useDebugStore((s) => s.debugLocation);
+  const isDebugMode = useDebugStore((s) => s.isDebugMode);
+
+  const [state, setState] = useState<GPSState>({
+    latitude: null,
+    longitude: null,
+    accuracy: null,
+    isTracking: false,
+    permissionDenied: false,
+    error: null,
+  });
+  const watchIdRef = useRef<number | null>(null);
+  const permissionCheckedRef = useRef(false);
+
+  const stopTracking = useCallback(() => {
+    if (watchIdRef.current !== null) {
+      Geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+      setState((prev) => ({ ...prev, isTracking: false }));
+    }
+  }, []);
+
+  const startTracking = useCallback(() => {
+    if (watchIdRef.current !== null) return;
+
+    const watchId = Geolocation.watchPosition(
+      (position: GeoPosition) => {
+        setState({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: position.coords.accuracy,
+          isTracking: true,
+          permissionDenied: false,
+          error: null,
+        });
+      },
+      (err) => {
+        setState((prev) => ({
+          ...prev,
+          error: err.message,
+          isTracking: false,
+        }));
+      },
+      {
+        enableHighAccuracy: true,
+        distanceFilter: 2,
+        interval: 3000,
+        fastestInterval: 1000,
+        showLocationDialog: true,
+        forceRequestLocation: true,
+      },
+    );
+    watchIdRef.current = watchId;
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    async function init() {
+      if (permissionCheckedRef.current) return;
+      permissionCheckedRef.current = true;
+
+      const hasPermission = await requestLocationPermission();
+
+      if (!mounted) return;
+
+      if (!hasPermission) {
+        setState((prev) => ({
+          ...prev,
+          permissionDenied: true,
+          error: 'PERMISSION_DENIED',
+          isTracking: false,
+        }));
+        return;
+      }
+
+      if (isWithinGameHours()) {
+        startTracking();
+      } else {
+        setState((prev) => ({
+          ...prev,
+          isTracking: false,
+          error: null,
+        }));
+      }
+    }
+
+    init();
+
+    return () => {
+      mounted = false;
+      stopTracking();
+    };
+  }, [startTracking, stopTracking]);
+
+  // Re-check game hours periodically
+  useEffect(() => {
+    if (state.permissionDenied) return;
+
+    const interval = setInterval(() => {
+      if (isWithinGameHours()) {
+        if (watchIdRef.current === null) {
+          startTracking();
+        }
+      } else {
+        stopTracking();
+      }
+    }, 30000);
+
+    return () => clearInterval(interval);
+  }, [state.permissionDenied, startTracking, stopTracking]);
+
+  // In dev debug mode, override with debug location
+  if (__DEV__ && isDebugMode && debugLocation) {
+    return {
+      latitude: debugLocation.latitude,
+      longitude: debugLocation.longitude,
+      accuracy: 5,
+      isTracking: true,
+      permissionDenied: false,
+      error: null,
+    };
+  }
+
+  return state;
+}

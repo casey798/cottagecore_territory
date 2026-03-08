@@ -1,0 +1,48 @@
+{
+  "project_info": {
+    "project_number": "425457815141",
+    "project_id": "grovewars-b37da",
+    "storage_bucket": "grovewars-b37da.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:425457815141:android:38f53edaa660816465c08c",
+        "android_client_info": {
+          "package_name": "com.grovewars"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFbcMpX3GJYYNgLx-k1jl0WNm0hJ06NGM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:425457815141:android:1cf25cc8fef846d665c08c",
+        "android_client_info": {
+          "package_name": "com.grovewars.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBFbcMpX3GJYYNgLx-k1jl0WNm0hJ06NGM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
