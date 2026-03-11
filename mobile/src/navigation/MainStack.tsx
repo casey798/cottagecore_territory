@@ -26,22 +26,29 @@ export type MainTabParamList = {
 
 export type MainModalParamList = {
   Tabs: undefined;
-  QRScanner: { locationName?: string } | undefined;
+  QRScanner: { locationId?: string; locationName?: string } | undefined;
   MinigameSelect: { locationId: string; locationName: string };
   MinigamePlay: {
     sessionId: string;
     minigameId: string;
     timeLimit: number;
+    salt: string;
+    locationId: string;
+    locationName: string;
     puzzleData?: Record<string, unknown>;
+    xpAvailable?: boolean;
   };
   Result: {
     result: 'win' | 'lose';
     xpEarned: number;
+    xpAwarded?: boolean;
     newTodayXp?: number;
     clanTodayXp?: number;
     chestDrop?: ChestDrop;
-    cooldownEndsAt?: string;
     locationLocked?: boolean;
+    locationId?: string;
+    locationName?: string;
+    minigameId?: string;
   };
   SpaceDecoration: { spaceId: string };
   CaptureCelebration: { clan: ClanId; spaceName: string };

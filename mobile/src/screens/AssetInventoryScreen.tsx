@@ -2,8 +2,10 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { useLockLandscape } from '@/hooks/useScreenOrientation';
 
 export default function AssetInventoryScreen() {
+  useLockLandscape();
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Asset Inventory</Text>

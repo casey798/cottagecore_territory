@@ -1,33 +1,53 @@
-import React, { useEffect, useMemo, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, Pressable, Linking } from 'react-native';
+import React, { useEffect, useMemo, useCallback, useState, useRef } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  Pressable,
+  Linking,
+  Animated,
+} from 'react-native';
 import { useNavigation } from '@react-navigation/native';
+import { useLockLandscape } from '@/hooks/useScreenOrientation';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { GAME_START_HOUR } from '@/constants/config';
+import { GAME_START_HOUR, DAILY_XP_CAP } from '@/constants/config';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useMapStore } from '@/store/useMapStore';
 import { useGameStore } from '@/store/useGameStore';
+import { useDebugStore } from '@/store/useDebugStore';
 import { useClanScores } from '@/hooks/useClanScores';
 import { useGPS } from '@/hooks/useGPS';
 import { useCountdown } from '@/hooks/useCountdown';
 import { getEndOfGameTimeToday, isWithinGameHours } from '@/utils/time';
 import { gpsToPixel } from '@/utils/affineTransform';
+import { haversineDistance, formatDistance } from '@/utils/distance';
 import { ClanScoreBar } from '@/components/common/ClanScoreBar';
 import { CountdownTimer } from '@/components/common/CountdownTimer';
-import { MapCanvas } from '@/components/map/MapCanvas';
+import { MapCanvas, ViewportRect } from '@/components/map/MapCanvas';
+import { MapMinimap } from '@/components/map/MapMinimap';
 import { DebugPanel } from '@/components/common/DebugPanel';
+import { useImage } from '@shopify/react-native-skia';
 import * as mapApi from '@/api/map';
 import { Location } from '@/types';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 
+interface LocationProximity {
+  locationId: string;
+  distance: number;
+  inRange: boolean;
+}
+
 export default function MainMapScreen() {
+  useLockLandscape();
   const navigation = useNavigation<Nav>();
   const { clans: scores } = useClanScores();
   const gps = useGPS();
   const clan = useAuthStore((s) => s.clan);
+  const isDebugMode = useDebugStore((s) => s.isDebugMode);
   const loadMapConfig = useMapStore((s) => s.loadMapConfig);
   const loadTodayLocations = useMapStore((s) => s.loadTodayLocations);
   const loadCapturedSpaces = useMapStore((s) => s.loadCapturedSpaces);
@@ -37,12 +57,34 @@ export default function MainMapScreen() {
   const setTodayLocations = useGameStore((s) => s.setTodayLocations);
   const setDailyInfo = useGameStore((s) => s.setDailyInfo);
   const setSelectedLocation = useGameStore((s) => s.setSelectedLocation);
-  const dailyInfo = useGameStore((s) => s.dailyInfo);
-  const currentStreak = useAuthStore((s) => s.userId); // placeholder — streak from profile
+  const xpEarnedAtLocations = useGameStore((s) => s.xpEarnedAtLocations);
+  const todayXp = useGameStore((s) => s.todayXp);
+
+  const [selectedPin, setSelectedPin] = useState<Location | null>(null);
+  const sheetAnim = useRef(new Animated.Value(0)).current;
+  const capturedSpaces = useMapStore((s) => s.capturedSpaces);
+
+  // Minimap state
+  const [viewport, setViewport] = useState<ViewportRect>({ x: 0, y: 0, width: 2000, height: 1125 });
+  const navigateFnRef = useRef<((mapX: number, mapY: number) => void) | null>(null);
+  const minimapImage = useImage(mapConfig?.mapImageUrl ?? null);
+
+  const handleViewportChange = useCallback((vp: ViewportRect) => {
+    setViewport(vp);
+  }, []);
+
+  const handleRegisterNavigate = useCallback((fn: (mapX: number, mapY: number) => void) => {
+    navigateFnRef.current = fn;
+  }, []);
+
+  const handleMinimapNavigate = useCallback((mapX: number, mapY: number) => {
+    navigateFnRef.current?.(mapX, mapY);
+  }, []);
 
   const endOfGame = useMemo(() => getEndOfGameTimeToday(), []);
   const countdown = useCountdown(endOfGame);
   const gameActive = isWithinGameHours();
+  const showPlayer = gameActive || (__DEV__ && isDebugMode);
 
   useEffect(() => {
     loadMapConfig();
@@ -55,7 +97,6 @@ export default function MainMapScreen() {
     async function loadDailyData() {
       try {
         const result = await mapApi.getDailyInfo();
-        console.log('[daily/info] response:', JSON.stringify(result, null, 2));
         if (result.success && result.data) {
           setDailyInfo(result.data);
         }
@@ -65,13 +106,6 @@ export default function MainMapScreen() {
     }
     loadDailyData();
   }, [setDailyInfo]);
-
-  // Log map dimensions when config loads
-  useEffect(() => {
-    if (mapConfig) {
-      console.log('[map] dimensions:', mapConfig.mapWidth, mapConfig.mapHeight, 'transform matrix:', JSON.stringify(mapConfig.transformMatrix));
-    }
-  }, [mapConfig]);
 
   // Sync map store locations to game store
   useEffect(() => {
@@ -90,6 +124,41 @@ export default function MainMapScreen() {
     }
   }, [gps.latitude, gps.longitude, gps.accuracy, updatePlayerPosition]);
 
+  // Compute proximity for each location
+  const proximities = useMemo<LocationProximity[]>(() => {
+    if (gps.latitude === null || gps.longitude === null) {
+      return todayLocations.map((loc) => ({
+        locationId: loc.locationId,
+        distance: Infinity,
+        inRange: false,
+      }));
+    }
+
+    return todayLocations.map((loc) => {
+      const dist = haversineDistance(
+        gps.latitude!,
+        gps.longitude!,
+        loc.gpsLat,
+        loc.gpsLng,
+      );
+      return {
+        locationId: loc.locationId,
+        distance: dist,
+        inRange: dist <= loc.geofenceRadius,
+      };
+    });
+  }, [gps.latitude, gps.longitude, todayLocations]);
+
+  const inRangeIds = useMemo(
+    () => new Set(proximities.filter((p) => p.inRange).map((p) => p.locationId)),
+    [proximities],
+  );
+
+  const xpExhaustedIds = useMemo(
+    () => new Set(Object.keys(xpEarnedAtLocations).filter((id) => xpEarnedAtLocations[id])),
+    [xpEarnedAtLocations],
+  );
+
   const playerPixel = useMemo(() => {
     if (
       gps.latitude === null ||
@@ -101,123 +170,92 @@ export default function MainMapScreen() {
     return gpsToPixel(gps.latitude, gps.longitude, mapConfig.transformMatrix);
   }, [gps.latitude, gps.longitude, mapConfig]);
 
-  const handleScanQR = useCallback(() => {
-    setSelectedLocation(null);
-    navigation.navigate('QRScanner');
-  }, [navigation, setSelectedLocation]);
+  // Bottom sheet animation
+  const openSheet = useCallback(
+    (location: Location) => {
+      setSelectedPin(location);
+      sheetAnim.setValue(0);
+      Animated.spring(sheetAnim, {
+        toValue: 1,
+        useNativeDriver: true,
+        tension: 80,
+        friction: 12,
+      }).start();
+    },
+    [sheetAnim],
+  );
+
+  const closeSheet = useCallback(() => {
+    Animated.timing(sheetAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start(() => setSelectedPin(null));
+  }, [sheetAnim]);
 
   const handlePinPress = useCallback(
     (location: Location) => {
-      setSelectedLocation(location.locationId);
-      navigation.navigate('QRScanner', { locationName: location.name });
+      openSheet(location);
     },
-    [navigation, setSelectedLocation],
+    [openSheet],
   );
+
+  const handleScanFromSheet = useCallback(() => {
+    if (!selectedPin) return;
+    setSelectedLocation(selectedPin.locationId);
+    closeSheet();
+    navigation.navigate('QRScanner', {
+      locationId: selectedPin.locationId,
+      locationName: selectedPin.name,
+    });
+  }, [selectedPin, navigation, setSelectedLocation, closeSheet]);
 
   const handleOpenSettings = () => {
     Linking.openSettings();
   };
 
-  const renderLocationItem = ({ item }: { item: Location }) => (
-    <Pressable
-      onPress={() => !item.locked && handlePinPress(item)}
-      style={[
-        styles.locationItem,
-        item.locked && styles.locationItemLocked,
-      ]}
-    >
-      <View
-        style={[
-          styles.locationDot,
-          { backgroundColor: item.locked ? PALETTE.stoneGrey : PALETTE.softGreen },
-        ]}
-      />
-      <Text
-        style={[styles.locationName, item.locked && styles.locationNameLocked]}
-      >
-        {item.name}
-      </Text>
-      {item.locked && <Text style={styles.lockIcon}>Locked</Text>}
-    </Pressable>
-  );
+  // Get proximity info for the selected pin
+  const selectedProximity = useMemo(() => {
+    if (!selectedPin) return null;
+    return proximities.find((p) => p.locationId === selectedPin.locationId) ?? null;
+  }, [selectedPin, proximities]);
+
+  const sheetTranslateY = sheetAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: [300, 0],
+  });
+
+  const CATEGORY_LABELS: Record<string, string> = {
+    courtyard: 'Courtyard',
+    garden: 'Garden',
+    corridor: 'Corridor',
+    classroom: 'Classroom',
+    other: 'Other',
+  };
 
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
         <ClanScoreBar scores={scores} />
-        <CountdownTimer
-          label="Scoring at"
-          formatted={countdown.formatted}
-          isExpired={countdown.isExpired}
-        />
-      </View>
-      <View style={styles.mainArea}>
-        <View style={styles.mapContainer}>
-          <MapCanvas
-            playerX={gameActive && playerPixel ? playerPixel.x : null}
-            playerY={gameActive && playerPixel ? playerPixel.y : null}
-            clan={clan}
-            locations={todayLocations}
-            onPinPress={handlePinPress}
+        {!gameActive ? (
+          <View style={styles.inactiveBadge}>
+            <Text style={styles.inactiveBadgeText}>
+              Starts at {GAME_START_HOUR}:00 AM
+            </Text>
+          </View>
+        ) : (
+          <CountdownTimer
+            label="Scoring at"
+            formatted={countdown.formatted}
+            isExpired={countdown.isExpired}
           />
-          {!gameActive && (
-            <View style={styles.outsideHoursBanner}>
-              <Text style={styles.outsideHoursText}>
-                Game starts at {GAME_START_HOUR}:00 AM
-              </Text>
-            </View>
-          )}
-          {gps.permissionDenied && (
-            <Pressable
-              style={styles.permissionBanner}
-              onPress={handleOpenSettings}
-            >
-              <Text style={styles.permissionBannerText}>
-                Location permission required to play. Tap to open settings.
-              </Text>
-            </Pressable>
-          )}
-          {!gps.permissionDenied && !gps.isTracking && !gps.error && gameActive && (
-            <View style={styles.loadingBanner}>
-              <Text style={styles.loadingBannerText}>
-                Requesting location...
-              </Text>
-            </View>
-          )}
-          {gps.error && gps.error !== 'PERMISSION_DENIED' && (
-            <View style={styles.errorBanner}>
-              <Text style={styles.errorBannerText}>
-                GPS error: {gps.error}
-              </Text>
-            </View>
-          )}
-          {__DEV__ && <DebugPanel />}
+        )}
+        <View style={styles.xpBadge}>
+          <Text style={styles.xpBadgeText}>
+            {todayXp}/{DAILY_XP_CAP} XP
+          </Text>
         </View>
-        <View style={styles.sidePanel}>
-          <Text style={styles.sidePanelTitle}>Today's Locations</Text>
-          <View style={styles.vineDivider} />
-          {dailyInfo?.targetSpace && (
-            <View style={styles.targetSpaceBox}>
-              <Text style={styles.targetLabel}>Today's Prize</Text>
-              <Text style={styles.targetName}>{dailyInfo.targetSpace.name}</Text>
-            </View>
-          )}
-          <FlatList
-            data={todayLocations}
-            renderItem={renderLocationItem}
-            keyExtractor={(item) => item.locationId}
-            style={styles.locationList}
-          />
-          <Pressable
-            style={({ pressed }) => [
-              styles.scanButton,
-              pressed && styles.scanButtonPressed,
-            ]}
-            onPress={handleScanQR}
-          >
-            <Text style={styles.scanButtonText}>Scan QR</Text>
-          </Pressable>
-          {/* TODO: remove before launch */}
+        {__DEV__ && (
           <Pressable
             style={({ pressed }) => [
               styles.signOutButton,
@@ -225,9 +263,152 @@ export default function MainMapScreen() {
             ]}
             onPress={() => useAuthStore.getState().logout()}
           >
-            <Text style={styles.signOutButtonText}>DEV: Sign Out</Text>
+            <Text style={styles.signOutButtonText}>Sign Out</Text>
           </Pressable>
-        </View>
+        )}
+      </View>
+      <View style={styles.mapContainer}>
+        <MapCanvas
+          playerX={showPlayer && playerPixel ? playerPixel.x : null}
+          playerY={showPlayer && playerPixel ? playerPixel.y : null}
+          clan={clan}
+          locations={todayLocations}
+          onPinPress={handlePinPress}
+          inRangeIds={inRangeIds}
+          xpExhaustedIds={xpExhaustedIds}
+          onViewportChange={handleViewportChange}
+          registerNavigate={handleRegisterNavigate}
+        />
+        {mapConfig && (
+          <MapMinimap
+            mapImage={minimapImage}
+            viewport={viewport}
+            playerX={showPlayer && playerPixel ? playerPixel.x : null}
+            playerY={showPlayer && playerPixel ? playerPixel.y : null}
+            clan={clan ?? null}
+            locations={todayLocations}
+            capturedSpaces={capturedSpaces}
+            transformMatrix={mapConfig.transformMatrix}
+            onNavigate={handleMinimapNavigate}
+            isDebugMode={isDebugMode}
+          />
+        )}
+        {gps.permissionDenied && (
+          <Pressable
+            style={styles.permissionBanner}
+            onPress={handleOpenSettings}
+          >
+            <Text style={styles.permissionBannerText}>
+              Location permission required to play. Tap to open settings.
+            </Text>
+          </Pressable>
+        )}
+        {!gps.permissionDenied && !gps.isTracking && !gps.error && gameActive && (
+          <View style={styles.loadingBanner}>
+            <Text style={styles.loadingBannerText}>
+              Requesting location...
+            </Text>
+          </View>
+        )}
+        {gps.weakSignal && (
+          <View style={styles.weakGpsBanner}>
+            <Text style={styles.weakGpsBannerText}>
+              GPS signal weak — move outdoors for better accuracy
+            </Text>
+          </View>
+        )}
+        {gps.error && gps.error !== 'PERMISSION_DENIED' && (
+          <View style={styles.errorBanner}>
+            <Text style={styles.errorBannerText}>
+              GPS error: {gps.error}
+            </Text>
+          </View>
+        )}
+        {__DEV__ && <DebugPanel />}
+        {__DEV__ && (
+          <View style={styles.devBadge}>
+            <Text style={styles.devBadgeText}>DEV</Text>
+          </View>
+        )}
+
+        {/* Bottom sheet backdrop */}
+        {selectedPin && (
+          <Pressable style={styles.backdrop} onPress={closeSheet} />
+        )}
+
+        {/* Bottom sheet */}
+        {selectedPin && (
+          <Animated.View
+            style={[
+              styles.bottomSheet,
+              { transform: [{ translateY: sheetTranslateY }] },
+            ]}
+          >
+            <View style={styles.sheetHandle} />
+            <Text style={styles.sheetLocationName}>{selectedPin.name}</Text>
+            <View style={styles.sheetCategoryBadge}>
+              <Text style={styles.sheetCategoryText}>
+                {CATEGORY_LABELS[selectedPin.category] ?? selectedPin.category}
+              </Text>
+            </View>
+
+            {selectedPin.locked ? (
+              <View style={styles.sheetStatusRow}>
+                <Text style={styles.sheetLockedText}>Locked for today.</Text>
+              </View>
+            ) : xpExhaustedIds.has(selectedPin.locationId) && selectedProximity?.inRange ? (
+              <>
+                <View style={styles.sheetStatusRow}>
+                  <Text style={styles.sheetXpExhaustedText}>
+                    XP already earned here today — practice mode only
+                  </Text>
+                </View>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.sheetScanButton,
+                    styles.sheetScanButtonExhausted,
+                    pressed && styles.sheetScanButtonPressed,
+                  ]}
+                  onPress={handleScanFromSheet}
+                >
+                  <Text style={styles.sheetScanButtonText}>Scan QR Code</Text>
+                </Pressable>
+              </>
+            ) : selectedProximity?.inRange ? (
+              <>
+                <View style={styles.sheetStatusRow}>
+                  <View style={styles.nearbyDot} />
+                  <Text style={styles.sheetNearbyText}>
+                    You're here! Ready to scan.
+                  </Text>
+                </View>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.sheetScanButton,
+                    pressed && styles.sheetScanButtonPressed,
+                  ]}
+                  onPress={handleScanFromSheet}
+                >
+                  <Text style={styles.sheetScanButtonText}>Scan QR Code</Text>
+                </Pressable>
+              </>
+            ) : (
+              <>
+                <Text style={styles.sheetDistanceText}>
+                  You need to be within {selectedPin.geofenceRadius}m to scan. ({formatDistance(selectedProximity?.distance ?? 0)} away)
+                </Text>
+                <Pressable
+                  style={[styles.sheetScanButton, styles.sheetScanButtonDisabled]}
+                  disabled
+                >
+                  <Text style={styles.sheetScanButtonTextDisabled}>
+                    Scan QR Code
+                  </Text>
+                </Pressable>
+              </>
+            )}
+          </Animated.View>
+        )}
       </View>
     </View>
   );
@@ -248,120 +429,20 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: PALETTE.warmBrown,
   },
-  mainArea: {
-    flex: 1,
-    flexDirection: 'row',
+  xpBadge: {
+    backgroundColor: PALETTE.cream,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 6,
+  },
+  xpBadgeText: {
+    fontSize: 11,
+    fontFamily: FONTS.bodyBold,
+    color: PALETTE.warmBrown,
   },
   mapContainer: {
-    flex: 7,
+    flex: 1,
     backgroundColor: PALETTE.deepGreen,
-  },
-  sidePanel: {
-    flex: 3,
-    backgroundColor: PALETTE.parchmentBg,
-    borderLeftWidth: 1,
-    borderLeftColor: PALETTE.warmBrown,
-    padding: 12,
-  },
-  sidePanelTitle: {
-    fontSize: 16,
-    fontFamily: FONTS.headerBold,
-    color: PALETTE.cream,
-    backgroundColor: PALETTE.warmBrown,
-    marginHorizontal: -12,
-    marginTop: -12,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginBottom: 0,
-  },
-  vineDivider: {
-    height: 1,
-    backgroundColor: PALETTE.softGreen,
-    marginVertical: 8,
-  },
-  targetSpaceBox: {
-    backgroundColor: PALETTE.cream,
-    borderRadius: 8,
-    padding: 8,
-    marginBottom: 8,
-    borderLeftWidth: 3,
-    borderLeftColor: PALETTE.honeyGold,
-  },
-  targetLabel: {
-    fontSize: 10,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.stoneGrey,
-    textTransform: 'uppercase',
-  },
-  targetName: {
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-    color: PALETTE.darkBrown,
-  },
-  locationList: {
-    flex: 1,
-  },
-  locationItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 8,
-    marginBottom: 4,
-    borderRadius: 6,
-    backgroundColor: PALETTE.cream,
-  },
-  locationItemLocked: {
-    opacity: 0.5,
-  },
-  locationDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
-  },
-  locationName: {
-    flex: 1,
-    fontSize: 13,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.darkBrown,
-  },
-  locationNameLocked: {
-    color: PALETTE.stoneGrey,
-  },
-  lockIcon: {
-    fontSize: 11,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.stoneGrey,
-  },
-  scanButton: {
-    backgroundColor: PALETTE.honeyGold,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-    borderBottomWidth: 2,
-    borderBottomColor: PALETTE.warmBrown,
-  },
-  scanButtonPressed: {
-    borderBottomWidth: 0,
-    transform: [{ translateY: 2 }],
-  },
-  scanButtonText: {
-    color: PALETTE.darkBrown,
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-  },
-  signOutButton: {
-    backgroundColor: '#8B3A1A',
-    paddingVertical: 8,
-    borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 8,
-  },
-  signOutButtonText: {
-    color: PALETTE.cream,
-    fontSize: 12,
-    fontFamily: FONTS.bodySemiBold,
   },
   permissionBanner: {
     position: 'absolute',
@@ -379,25 +460,16 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     textAlign: 'center',
   },
-  outsideHoursBanner: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    left: 0,
-    right: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  outsideHoursText: {
-    color: PALETTE.cream,
-    fontSize: 16,
-    fontFamily: FONTS.headerBold,
-    textAlign: 'center',
+  inactiveBadge: {
     backgroundColor: 'rgba(61, 43, 31, 0.75)',
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 12,
-    overflow: 'hidden',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+  },
+  inactiveBadgeText: {
+    color: PALETTE.cream,
+    fontSize: 12,
+    fontFamily: FONTS.bodySemiBold,
   },
   loadingBanner: {
     position: 'absolute',
@@ -413,6 +485,20 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: FONTS.bodyRegular,
   },
+  weakGpsBanner: {
+    position: 'absolute',
+    top: 8,
+    alignSelf: 'center',
+    backgroundColor: 'rgba(211, 168, 67, 0.9)',
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 8,
+  },
+  weakGpsBannerText: {
+    color: PALETTE.darkBrown,
+    fontSize: 11,
+    fontFamily: FONTS.bodySemiBold,
+  },
   errorBanner: {
     position: 'absolute',
     bottom: 12,
@@ -426,5 +512,153 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 12,
     fontFamily: FONTS.bodyRegular,
+  },
+  // Bottom sheet
+  backdrop: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.3)',
+    zIndex: 20,
+  },
+  bottomSheet: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: PALETTE.parchmentBg,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingHorizontal: 20,
+    paddingTop: 8,
+    paddingBottom: 16,
+    zIndex: 30,
+    elevation: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: PALETTE.stoneGrey,
+    borderRadius: 2,
+    alignSelf: 'center',
+    marginBottom: 10,
+  },
+  sheetLocationName: {
+    fontSize: 18,
+    fontFamily: FONTS.headerBold,
+    color: PALETTE.darkBrown,
+    marginBottom: 4,
+  },
+  sheetCategoryBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: PALETTE.softGreen + '30',
+    paddingHorizontal: 10,
+    paddingVertical: 3,
+    borderRadius: 10,
+    marginBottom: 10,
+  },
+  sheetCategoryText: {
+    fontSize: 11,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.deepGreen,
+  },
+  sheetStatusRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  nearbyDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#27AE60',
+    marginRight: 6,
+  },
+  sheetNearbyText: {
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    color: '#27AE60',
+  },
+  sheetDistanceText: {
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    color: '#D4A843',
+  },
+  sheetLockedText: {
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    color: '#C0392B',
+  },
+  sheetXpExhaustedText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.stoneGrey,
+  },
+  sheetScanButtonExhausted: {
+    backgroundColor: PALETTE.stoneGrey,
+    borderBottomColor: '#8A8071',
+  },
+  sheetScanButton: {
+    backgroundColor: PALETTE.honeyGold,
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    borderBottomWidth: 2,
+    borderBottomColor: PALETTE.warmBrown,
+  },
+  sheetScanButtonPressed: {
+    borderBottomWidth: 0,
+    transform: [{ translateY: 2 }],
+  },
+  sheetScanButtonDisabled: {
+    backgroundColor: PALETTE.stoneGrey,
+    borderBottomColor: '#8A8071',
+  },
+  sheetScanButtonText: {
+    color: PALETTE.darkBrown,
+    fontSize: 15,
+    fontFamily: FONTS.bodySemiBold,
+  },
+  sheetScanButtonTextDisabled: {
+    color: '#FFFFFF80',
+    fontSize: 15,
+    fontFamily: FONTS.bodySemiBold,
+  },
+  sheetHintText: {
+    fontSize: 12,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
+    marginTop: 6,
+  },
+  // DEV sign out in top bar
+  signOutButton: {
+    backgroundColor: '#8B3A1A',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 6,
+  },
+  signOutButtonText: {
+    color: PALETTE.cream,
+    fontSize: 10,
+    fontFamily: FONTS.bodySemiBold,
+  },
+  devBadge: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    backgroundColor: 'rgba(192, 57, 43, 0.7)',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    zIndex: 999,
+  },
+  devBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontFamily: FONTS.bodySemiBold,
+    letterSpacing: 1,
   },
 });

@@ -32,8 +32,35 @@ export function RootNavigator() {
   const isHydrated = useAuthStore((s) => s.isHydrated);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const tutorialDone = useAuthStore((s) => s.tutorialDone);
+  const restoreSession = useAuthStore((s) => s.restoreSession);
+  const logout = useAuthStore((s) => s.logout);
 
-  if (!isHydrated) {
+  const [sessionChecked, setSessionChecked] = React.useState(false);
+
+  // After Zustand rehydrates persisted state, verify the token is still valid
+  // before rendering the main app. This prevents the map screen from firing
+  // API calls with a stale or missing token.
+  React.useEffect(() => {
+    if (!isHydrated) return;
+
+    if (isAuthenticated) {
+      restoreSession()
+        .then((valid) => {
+          if (!valid) {
+            // Token is stale or Keychain is empty — send user to login
+            logout();
+          }
+        })
+        .finally(() => setSessionChecked(true));
+    } else {
+      // Not authenticated — nothing to verify
+      setSessionChecked(true);
+    }
+    // Only run once after hydration
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHydrated]);
+
+  if (!isHydrated || !sessionChecked) {
     return <LoadingScreen />;
   }
 

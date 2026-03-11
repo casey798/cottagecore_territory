@@ -122,9 +122,15 @@ export interface DailyConfig {
   difficulty: Difficulty;
 }
 
+export interface LocationMinigameSet {
+  minigameIds: string[];
+  completedMinigameIds: string[];
+}
+
 export interface PlayerAssignment {
   dateUserId: string;
   assignedLocationIds: string[];
+  locationMinigames?: Record<string, LocationMinigameSet>;
 }
 
 export interface GameSession {
@@ -358,6 +364,7 @@ export interface AvailableMinigame {
   name: string;
   timeLimit: number;
   description: string;
+  completed: boolean;
 }
 
 export interface ClanScore {

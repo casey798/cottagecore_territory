@@ -5,6 +5,20 @@ import { ClanId } from '@/types';
 import * as authApi from '@/api/auth';
 import * as playerApi from '@/api/player';
 import { storeTokens, clearTokens, getStoredTokens } from '@/api/client';
+import { DEV_CONFIG } from '@/constants/config';
+
+function maybeOverrideClan(clan: ClanId | null, email: string | null): ClanId | null {
+  if (
+    DEV_CONFIG.enabled &&
+    DEV_CONFIG.forceClan &&
+    email &&
+    email.toLowerCase() === DEV_CONFIG.forceClanEmail.toLowerCase()
+  ) {
+    console.warn(`[DEV] Clan overridden to ${DEV_CONFIG.forceClan} for test account`);
+    return DEV_CONFIG.forceClan as ClanId;
+  }
+  return clan;
+}
 
 interface AuthState {
   userId: string | null;
@@ -45,7 +59,7 @@ export const useAuthStore = create<AuthState>()(
             userId: result.data.userId,
             token: result.data.token,
             refreshToken: result.data.refreshToken,
-            clan: result.data.clan,
+            clan: maybeOverrideClan(result.data.clan, email),
             email,
             tutorialDone: result.data.tutorialDone,
             isAuthenticated: true,
@@ -76,11 +90,12 @@ export const useAuthStore = create<AuthState>()(
         if (!stored) return false;
         const result = await playerApi.getProfile();
         if (result.success && result.data) {
+          const currentEmail = useAuthStore.getState().email;
           set({
             userId: result.data.userId,
             token: stored.token,
             refreshToken: stored.refreshToken,
-            clan: result.data.clan,
+            clan: maybeOverrideClan(result.data.clan, currentEmail),
             tutorialDone: result.data.tutorialDone,
             isAuthenticated: true,
           });
@@ -102,12 +117,13 @@ export const useAuthStore = create<AuthState>()(
         }
         const result = await playerApi.getProfile();
         if (result.success && result.data) {
+          const restoredEmail = result.data.email ?? null;
           set({
             userId: result.data.userId,
             token: stored.token,
             refreshToken: stored.refreshToken,
-            clan: result.data.clan,
-            email: result.data.email ?? null,
+            clan: maybeOverrideClan(result.data.clan, restoredEmail),
+            email: restoredEmail,
             tutorialDone: result.data.tutorialDone,
             isAuthenticated: true,
             isLoading: false,

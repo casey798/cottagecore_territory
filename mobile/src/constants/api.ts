@@ -20,7 +20,6 @@ export const ENDPOINTS = {
   GAME_SCAN: '/game/scan',
   GAME_START: '/game/start',
   GAME_COMPLETE: '/game/complete',
-  GAME_COOLDOWN: '/game/cooldown',
   SCORES_CLANS: '/scores/clans',
   SCORES_HISTORY: '/scores/history',
   SPACES_CAPTURED: '/spaces/captured',

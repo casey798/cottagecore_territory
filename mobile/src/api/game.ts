@@ -5,14 +5,13 @@ import {
   ScanQRResponse,
   StartGameResponse,
   CompleteGameResponse,
-  CooldownResponse,
   GameResult,
 } from '@/types';
 
-export function scanQR(qrData: QrData, gpsLat: number, gpsLng: number) {
+export function scanQR(qrData: QrData) {
   return apiRequest<ScanQRResponse>(ENDPOINTS.GAME_SCAN, {
     method: 'POST',
-    body: JSON.stringify({ qrData, gpsLat, gpsLng }),
+    body: JSON.stringify({ qrData }),
   });
 }
 
@@ -31,14 +30,11 @@ export function completeMinigame(
   sessionId: string,
   result: GameResult,
   completionHash: string,
+  timeTaken: number,
   solutionData: Record<string, unknown>,
 ) {
   return apiRequest<CompleteGameResponse>(ENDPOINTS.GAME_COMPLETE, {
     method: 'POST',
-    body: JSON.stringify({ sessionId, result, completionHash, solutionData }),
+    body: JSON.stringify({ sessionId, result, completionHash, timeTaken, solutionData }),
   });
-}
-
-export function getCooldown() {
-  return apiRequest<CooldownResponse>(ENDPOINTS.GAME_COOLDOWN);
 }

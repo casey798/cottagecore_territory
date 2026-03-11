@@ -2,7 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import crypto from 'crypto';
 import { extractUserId } from '../../shared/auth';
 import { getItem, putItem } from '../../shared/db';
-import { generatePuzzle, MINIGAME_POOL } from '../../shared/minigames';
+import { MINIGAME_POOL } from '../../shared/minigames';
 import { success, error, ErrorCode } from '../../shared/response';
 import { startMinigameSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
@@ -76,9 +76,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const dailyConfig = await getItem<DailyConfig>('daily-config', { date: today });
     const difficulty = (dailyConfig?.difficulty as Difficulty) || Difficulty.Medium;
 
-    // Generate puzzle using shared minigames module
-    const puzzleData = generatePuzzle(minigameId, difficulty);
-
+    const meta = MINIGAME_POOL[minigameId];
     const sessionId = crypto.randomUUID();
     const salt = crypto.randomBytes(32).toString('hex');
     const now = new Date().toISOString();
@@ -98,21 +96,19 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       completionHash: '',
       coopPartnerId: coopPartnerId ?? null,
       _salt: salt,
-      puzzleData,
-      timeLimit: puzzleData.timeLimit,
+      timeLimit: meta.timeLimit,
     };
 
     await putItem('game-sessions', session as unknown as Record<string, unknown>);
 
-    // Return puzzle config without the solution
     return success({
       sessionId,
       serverTimestamp: now,
-      timeLimit: puzzleData.timeLimit,
+      timeLimit: meta.timeLimit,
+      salt,
       puzzleData: {
-        type: puzzleData.type,
-        config: puzzleData.config,
-        timeLimit: puzzleData.timeLimit,
+        type: minigameId,
+        difficulty,
       },
     });
   } catch (err) {

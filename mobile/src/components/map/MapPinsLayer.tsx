@@ -8,20 +8,21 @@ interface Props {
   locations: Location[];
   transformMatrix: AffineMatrix;
   onPinPress: (location: Location) => void;
-  eventBoostedIds?: Set<string>;
+  inRangeIds?: Set<string>;
+  xpExhaustedIds?: Set<string>;
 }
 
 export function MapPinsLayer({
   locations,
   transformMatrix,
   onPinPress,
-  eventBoostedIds,
+  inRangeIds,
+  xpExhaustedIds,
 }: Props) {
   const pinPositions = useMemo(
     () =>
       locations.map((loc) => {
         const pixel = gpsToPixel(loc.gpsLat, loc.gpsLng, transformMatrix);
-        console.log('[pin position]', loc.locationId, 'gps:', loc.gpsLat, loc.gpsLng, '-> pixel:', pixel.x, pixel.y);
         return { location: loc, pixel };
       }),
     [locations, transformMatrix],
@@ -43,7 +44,8 @@ export function MapPinsLayer({
           pixelX={pixel.x}
           pixelY={pixel.y}
           onPress={() => handlePress(location)}
-          eventBoosted={eventBoostedIds?.has(location.locationId)}
+          inRange={inRangeIds?.has(location.locationId)}
+          xpExhausted={xpExhaustedIds?.has(location.locationId)}
         />
       ))}
     </View>

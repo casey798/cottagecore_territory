@@ -9,16 +9,16 @@ interface CaptureResult {
 
 interface GameState {
   todayXp: number;
-  cooldownEndsAt: string | null;
   currentSessionId: string | null;
   lastScanResult: ScanQRResponse | null;
   captureResult: CaptureResult | null;
   selectedLocationId: string | null;
   todayLocations: Location[];
   dailyInfo: DailyInfo | null;
+  completedMinigamesAtLocation: Record<string, string[]>;
+  xpEarnedAtLocations: Record<string, boolean>;
   recordWin: () => void;
   recordLoss: () => void;
-  setCooldown: (endsAt: string) => void;
   clearSession: () => void;
   setSessionId: (id: string) => void;
   setScanResult: (result: ScanQRResponse) => void;
@@ -27,24 +27,25 @@ interface GameState {
   setSelectedLocation: (locationId: string | null) => void;
   setTodayLocations: (locations: Location[]) => void;
   setDailyInfo: (info: DailyInfo) => void;
+  markMinigameCompleted: (locationId: string, minigameId: string) => void;
+  markXpEarnedAtLocation: (locationId: string) => void;
 }
 
 export const useGameStore = create<GameState>((set) => ({
   todayXp: 0,
-  cooldownEndsAt: null,
   currentSessionId: null,
   lastScanResult: null,
   captureResult: null,
   selectedLocationId: null,
   todayLocations: [],
   dailyInfo: null,
+  completedMinigamesAtLocation: {},
+  xpEarnedAtLocations: {},
 
   recordWin: () =>
     set((state) => ({ todayXp: state.todayXp + XP_PER_WIN })),
 
   recordLoss: () => set({}),
-
-  setCooldown: (endsAt: string) => set({ cooldownEndsAt: endsAt }),
 
   clearSession: () =>
     set({ currentSessionId: null, lastScanResult: null }),
@@ -54,7 +55,13 @@ export const useGameStore = create<GameState>((set) => ({
   setScanResult: (result: ScanQRResponse) =>
     set({ lastScanResult: result }),
 
-  setTodayXp: (xp: number) => set({ todayXp: xp }),
+  setTodayXp: (xp: number) =>
+    set((state) => ({
+      todayXp: xp,
+      // Reset completed minigames and xp tracking on daily reset
+      completedMinigamesAtLocation: xp === 0 ? {} : state.completedMinigamesAtLocation,
+      xpEarnedAtLocations: xp === 0 ? {} : state.xpEarnedAtLocations,
+    })),
 
   setCaptureResult: (result: CaptureResult | null) =>
     set({ captureResult: result }),
@@ -67,4 +74,24 @@ export const useGameStore = create<GameState>((set) => ({
 
   setDailyInfo: (info: DailyInfo) =>
     set({ dailyInfo: info }),
+
+  markMinigameCompleted: (locationId: string, minigameId: string) =>
+    set((state) => {
+      const existing = state.completedMinigamesAtLocation[locationId] || [];
+      if (existing.includes(minigameId)) return state;
+      return {
+        completedMinigamesAtLocation: {
+          ...state.completedMinigamesAtLocation,
+          [locationId]: [...existing, minigameId],
+        },
+      };
+    }),
+
+  markXpEarnedAtLocation: (locationId: string) =>
+    set((state) => ({
+      xpEarnedAtLocations: {
+        ...state.xpEarnedAtLocations,
+        [locationId]: true,
+      },
+    })),
 }));

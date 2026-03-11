@@ -19,6 +19,7 @@ interface MapState {
   loadTodayLocations: () => Promise<void>;
   loadCapturedSpaces: () => Promise<void>;
   updatePlayerPosition: (position: PlayerPosition) => void;
+  lockLocation: (locationId: string) => void;
 }
 
 export const useMapStore = create<MapState>((set) => ({
@@ -65,4 +66,11 @@ export const useMapStore = create<MapState>((set) => ({
 
   updatePlayerPosition: (position: PlayerPosition) =>
     set({ playerPosition: position }),
+
+  lockLocation: (locationId: string) =>
+    set((state) => ({
+      todayLocations: state.todayLocations.map((loc) =>
+        loc.locationId === locationId ? { ...loc, locked: true } : loc,
+      ),
+    })),
 }));

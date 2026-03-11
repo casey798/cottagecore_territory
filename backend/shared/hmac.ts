@@ -48,3 +48,33 @@ export function verifyCompletionHash(
     Buffer.from(expected, 'hex')
   );
 }
+
+// Client-side completion hash — uses a shared hardcoded salt (not cryptographically secret,
+// just prevents trivially forged packets).
+const CLIENT_COMPLETION_SALT = 'grovewars-v1-completion-salt';
+
+export function generateClientCompletionHash(
+  sessionId: string,
+  result: string,
+  timeTaken: number
+): string {
+  const message = `${sessionId}:${result}:${timeTaken}`;
+  return crypto.createHmac('sha256', CLIENT_COMPLETION_SALT).update(message).digest('hex');
+}
+
+export function verifyClientCompletionHash(
+  hash: string,
+  sessionId: string,
+  result: string,
+  timeTaken: number
+): boolean {
+  const expected = generateClientCompletionHash(sessionId, result, timeTaken);
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(hash, 'hex'),
+      Buffer.from(expected, 'hex')
+    );
+  } catch {
+    return false;
+  }
+}

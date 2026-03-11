@@ -1,7 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { extractUserId } from '../../shared/auth';
-import { getItem, query } from '../../shared/db';
-import { isWithinGeofence } from '../../shared/geo';
+import { getItem, query, updateItem } from '../../shared/db';
 import { verifyQrPayload } from '../../shared/hmac';
 import { success, error, ErrorCode } from '../../shared/response';
 import { scanQrSchema } from '../../shared/schemas';
@@ -10,6 +9,7 @@ import { MINIGAME_POOL } from '../../shared/minigames';
 import {
   DailyConfig,
   Location,
+  LocationMinigameSet,
   PlayerAssignment,
   PlayerLock,
   User,
@@ -18,24 +18,29 @@ import {
 } from '../../shared/types';
 
 const DAILY_XP_CAP = 100;
-const COOLDOWN_MS = 300000; // 5 minutes
 
-function pickRandomMinigames(
-  count: number,
-  excludeIds: string[]
-): AvailableMinigame[] {
-  const pool = Object.entries(MINIGAME_POOL)
-    .filter(([id]) => !excludeIds.includes(id))
-    .map(([id, meta]) => ({
-      minigameId: id,
-      name: meta.name,
-      timeLimit: meta.timeLimit,
-      description: meta.description,
-    }));
+const PICK_COUNT = 5;
 
-  const shuffled = pool.sort(() => Math.random() - 0.5);
-  const available = Math.min(count, shuffled.length);
-  return shuffled.slice(0, Math.max(available, 3));
+function pickRandomMinigames(excludeIds: string[]): AvailableMinigame[] {
+  const allEntries = Object.entries(MINIGAME_POOL);
+
+  let pool = allEntries.filter(([id]) => !excludeIds.includes(id));
+
+  // Last resort: if all 12 played, ignore exclusions
+  if (pool.length === 0) {
+    pool = allEntries;
+  }
+
+  const mapped = pool.map(([id, meta]) => ({
+    minigameId: id,
+    name: meta.name,
+    timeLimit: meta.timeLimit,
+    description: meta.description,
+    completed: false,
+  }));
+
+  const shuffled = mapped.sort(() => Math.random() - 0.5);
+  return shuffled.slice(0, Math.min(PICK_COUNT, shuffled.length));
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -47,7 +52,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.VALIDATION_ERROR, parsed.error.message, 400);
     }
 
-    const { qrData, gpsLat, gpsLng } = parsed.data;
+    const { qrData } = parsed.data;
     const today = getTodayISTString();
 
     // Step 1: Check QR date matches today
@@ -69,21 +74,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     const locationId = qrData.l;
 
-    // Step 3: GPS within geofence
+    // Step 3: Location exists
     const location = await getItem<Location>('locations', { locationId });
     if (!location) {
       return error(ErrorCode.NOT_FOUND, 'Location not found', 400);
-    }
-
-    if (!isDevBypass && !isWithinGeofence(gpsLat, gpsLng, location.gpsLat, location.gpsLng, location.geofenceRadius)) {
-      return error(ErrorCode.GPS_OUT_OF_RANGE, 'You are not close enough to this location', 400);
     }
 
     // Step 4: Location in player's assigned set
     const dateUserId = `${today}#${userId}`;
     const assignment = await getItem<PlayerAssignment>('player-assignments', { dateUserId });
     if (!assignment || !assignment.assignedLocationIds.includes(locationId)) {
-      // Dev bypass: fall back to checking daily-config activeLocationIds
       if (isDevBypass && dailyConfig.activeLocationIds.includes(locationId)) {
         console.log(`[scanQR] Dev bypass: no assignment but location ${locationId} is in daily-config`);
       } else {
@@ -108,49 +108,107 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.DAILY_CAP_REACHED, 'You have reached the daily XP cap', 403);
     }
 
-    // Step 7: On cooldown
-    const { items: recentSessions } = await query<GameSession>(
-      'game-sessions',
-      'userId = :uid AND #d = :date',
-      { ':uid': userId, ':date': today },
-      {
-        indexName: 'UserDateIndex',
-        expressionNames: { '#d': 'date' },
-        scanIndexForward: false,
-        limit: 10,
+    // Step 7: Resolve minigame set (locked per player+location+day)
+    const savedSet = assignment?.locationMinigames?.[locationId];
+    let availableMinigames: AvailableMinigame[];
+
+    if (savedSet) {
+      // Return the locked set with completed flags
+      const completedSet = new Set(savedSet.completedMinigameIds);
+      availableMinigames = savedSet.minigameIds.map((id) => {
+        const meta = MINIGAME_POOL[id];
+        return {
+          minigameId: id,
+          name: meta.name,
+          timeLimit: meta.timeLimit,
+          description: meta.description,
+          completed: completedSet.has(id),
+        };
+      });
+
+      // All completed = exhausted
+      if (availableMinigames.every((m) => m.completed)) {
+        return error(
+          ErrorCode.LOCATION_EXHAUSTED,
+          "You've mastered all challenges here today — try another location!",
+          400,
+        );
       }
-    );
-
-    if (recentSessions.length > 0) {
-      // Find sessions with completedAt, sort desc
-      const completedSessions = recentSessions
-        .filter((s) => s.completedAt)
-        .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime());
-
-      if (completedSessions.length > 0) {
-        const lastSession = completedSessions[0];
-        const completedTime = new Date(lastSession.completedAt!).getTime();
-        const now = Date.now();
-        if (now - completedTime < COOLDOWN_MS) {
-          const cooldownEndsAt = new Date(completedTime + COOLDOWN_MS).toISOString();
-          return error(ErrorCode.ON_COOLDOWN, `On cooldown until ${cooldownEndsAt}`, 429);
+    } else {
+      // First scan at this location today — roll and lock a new set
+      const { items: recentSessions } = await query<GameSession>(
+        'game-sessions',
+        'userId = :uid AND #d = :date',
+        { ':uid': userId, ':date': today },
+        {
+          indexName: 'UserDateIndex',
+          expressionNames: { '#d': 'date' },
+          scanIndexForward: false,
+          limit: 50,
         }
+      );
+
+      const wonAtLocation = recentSessions
+        .filter((s) => s.locationId === locationId && s.result === 'win' && s.completedAt)
+        .map((s) => s.minigameId);
+
+      availableMinigames = pickRandomMinigames(wonAtLocation);
+
+      if (availableMinigames.length === 0) {
+        return error(
+          ErrorCode.LOCATION_EXHAUSTED,
+          "You've mastered all challenges here today — try another location!",
+          400,
+        );
+      }
+
+      // Save the locked set to the player-assignments record
+      const newSet: LocationMinigameSet = {
+        minigameIds: availableMinigames.map((m) => m.minigameId),
+        completedMinigameIds: [],
+      };
+
+      if (assignment) {
+        const updatedMap = {
+          ...(assignment.locationMinigames || {}),
+          [locationId]: newSet,
+        };
+
+        await updateItem(
+          'player-assignments',
+          { dateUserId },
+          'SET locationMinigames = :lm',
+          { ':lm': updatedMap },
+        );
       }
     }
 
-    // Exclude minigames already played at this location today
-    const playedAtLocation = recentSessions
-      .filter((s) => s.locationId === locationId)
-      .map((s) => s.minigameId);
-
-    // Success: pick 3-5 random minigames
-    const count = Math.floor(Math.random() * 3) + 3; // 3, 4, or 5
-    const availableMinigames = pickRandomMinigames(count, playedAtLocation);
+    // Check if XP was already earned at this location today
+    // (query sessions if we haven't already)
+    let xpAvailable = true;
+    if (savedSet) {
+      // Need to check game-sessions for XP status
+      const { items: recentSessions } = await query<GameSession>(
+        'game-sessions',
+        'userId = :uid AND #d = :date',
+        { ':uid': userId, ':date': today },
+        {
+          indexName: 'UserDateIndex',
+          expressionNames: { '#d': 'date' },
+          scanIndexForward: false,
+          limit: 50,
+        }
+      );
+      xpAvailable = !recentSessions.some(
+        (s) => s.locationId === locationId && s.result === 'win' && s.xpEarned > 0 && s.completedAt,
+      );
+    }
 
     return success({
       locationId,
       locationName: location.name,
       availableMinigames,
+      xpAvailable,
     });
   } catch (err) {
     console.error('scanQR error:', err);

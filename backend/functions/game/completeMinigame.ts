@@ -2,8 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import crypto from 'crypto';
 import { extractUserId } from '../../shared/auth';
 import { getItem, putItem, updateItem, query, scan } from '../../shared/db';
-import { verifyCompletionHash } from '../../shared/hmac';
-import { validateSolution } from '../../shared/minigames';
+import { verifyCompletionHash, verifyClientCompletionHash } from '../../shared/hmac';
 import { success, error, ErrorCode } from '../../shared/response';
 import { completeMinigameSchema } from '../../shared/schemas';
 import { getTodayISTString, getMidnightISTAsISO, getNext8amISTEpochSeconds } from '../../shared/time';
@@ -21,8 +20,6 @@ import {
 } from '../../shared/types';
 
 const XP_PER_WIN = 25;
-const COOLDOWN_MS = 300000; // 5 minutes
-const RATE_LIMIT_MS = 240000; // 4 minutes
 const BASE_CHEST_DROP_RATE = 0.15;
 const TIME_GRACE_SECONDS = 5;
 const MIN_COMPLETION_SECONDS = 5;
@@ -81,7 +78,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.VALIDATION_ERROR, parsed.error.message, 400);
     }
 
-    const { sessionId, result, completionHash, solutionData } = parsed.data;
+    const { sessionId, result, completionHash, timeTaken, solutionData } = parsed.data;
 
     // 1. Session exists and belongs to user
     const session = await getItem<GameSession>('game-sessions', { sessionId });
@@ -94,16 +91,30 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.SESSION_COMPLETED, 'Session has already been completed', 400);
     }
 
-    // 3. Verify completion hash
-    const salt = session._salt;
-    if (!salt || !verifyCompletionHash(completionHash, sessionId, userId, result, salt)) {
+    // 3. Verify completion hash — try client-salt hash first, then server-salt hash
+    const startedAtMs = new Date(session.startedAt).getTime();
+    const nowMs = Date.now();
+    const elapsedSeconds = Math.round((nowMs - startedAtMs) / 1000);
+
+    let hashValid = false;
+
+    // Try client-salt hash (sessionId:result:timeTaken with hardcoded salt)
+    // Use the client-provided timeTaken directly for verification
+    hashValid = verifyClientCompletionHash(completionHash, sessionId, result, timeTaken);
+
+    // Fallback: try server-salt hash (legacy: sessionId:userId:result with per-session salt)
+    if (!hashValid && session._salt) {
+      hashValid = verifyCompletionHash(completionHash, sessionId, userId, result, session._salt);
+    }
+
+    if (!hashValid) {
+      if (process.env.NODE_ENV === 'development') {
+        console.log('[DEV] completionHash check failed — sessionId:', sessionId, 'result:', result, 'timeTaken:', timeTaken);
+      }
       return error(ErrorCode.INVALID_HASH, 'Invalid completion hash', 400);
     }
 
-    // 4 & 5. Time validation
-    const startedAtMs = new Date(session.startedAt).getTime();
-    const nowMs = Date.now();
-    const elapsedSeconds = (nowMs - startedAtMs) / 1000;
+    // 4. Time validation — use server-side elapsed time for anti-cheat
     const timeLimit = session.timeLimit || 120;
 
     if (elapsedSeconds > timeLimit + TIME_GRACE_SECONDS) {
@@ -114,38 +125,42 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.SUSPICIOUS_TIME, 'Completion time is suspiciously fast', 400);
     }
 
-    // 6. Rate limit: last completion was >= 4 minutes ago
+    // 5. Query today's sessions (needed for duplicate check and per-location XP cap)
     const today = getTodayISTString();
-    const { items: todaySessions } = await query<GameSession>(
-      'game-sessions',
-      'userId = :uid AND #d = :date',
-      { ':uid': userId, ':date': today },
-      {
-        indexName: 'UserDateIndex',
-        expressionNames: { '#d': 'date' },
-        scanIndexForward: false,
-        limit: 10,
-      }
-    );
+    let todaySessions: GameSession[] = [];
+    if (result === GameResult.Win) {
+      const queryResult = await query<GameSession>(
+        'game-sessions',
+        'userId = :uid AND #d = :date',
+        { ':uid': userId, ':date': today },
+        {
+          indexName: 'UserDateIndex',
+          expressionNames: { '#d': 'date' },
+          scanIndexForward: false,
+          limit: 50,
+        }
+      );
+      todaySessions = queryResult.items;
 
-    const completedSessions = todaySessions
-      .filter((s) => s.completedAt && s.sessionId !== sessionId)
-      .sort((a, b) => new Date(b.completedAt!).getTime() - new Date(a.completedAt!).getTime());
+      const alreadyWon = todaySessions.some(
+        (s) =>
+          s.sessionId !== sessionId &&
+          s.locationId === session.locationId &&
+          s.minigameId === session.minigameId &&
+          s.result === GameResult.Win &&
+          s.completedAt !== null,
+      );
 
-    if (completedSessions.length > 0) {
-      const lastCompletedMs = new Date(completedSessions[0].completedAt!).getTime();
-      if (nowMs - lastCompletedMs < RATE_LIMIT_MS) {
-        return error(ErrorCode.RATE_LIMITED, 'Please wait before completing another game', 429);
+      if (alreadyWon) {
+        return error(
+          ErrorCode.MINIGAME_ALREADY_PLAYED,
+          "You've already completed this challenge here today",
+          400,
+        );
       }
     }
 
-    // 7. Validate solution
-    if (session.puzzleData) {
-      const solutionValid = validateSolution(session.puzzleData, solutionData);
-      if (!solutionValid && result === GameResult.Win) {
-        return error(ErrorCode.VALIDATION_ERROR, 'Invalid solution', 400);
-      }
-    }
+    // No puzzle solution re-validation — solutionData is stored for analytics only.
 
     const now = new Date().toISOString();
     const gameResult = result as GameResult;
@@ -153,66 +168,31 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (gameResult === GameResult.Win) {
       // --- WIN PATH ---
 
-      // 1. Award XP and update streak for player
-      const { newTodayXp, clan: clanId } = await awardXpAndStreak(userId, today);
+      // Check if XP was already earned at this location today (per-location XP cap)
+      const alreadyEarnedXpHere = todaySessions.some(
+        (s) =>
+          s.sessionId !== sessionId &&
+          s.locationId === session.locationId &&
+          s.result === GameResult.Win &&
+          s.xpEarned > 0 &&
+          s.completedAt !== null,
+      );
 
-      // 2. Atomic clan XP (ADD expression + SET timestamp)
+      const xpToAward = alreadyEarnedXpHere ? 0 : XP_PER_WIN;
+      let newTodayXp = 0;
       let clanTodayXp = 0;
-      if (clanId) {
-        const updatedClan = await updateItem(
-          'clans',
-          { clanId },
-          'SET todayXpTimestamp = :ts ADD todayXp :xp',
-          { ':ts': now, ':xp': XP_PER_WIN }
-        );
-        clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
-      }
-
-      // 3 & 4. Chest drop
-      const location = await getItem<Location>('locations', { locationId: session.locationId });
-      const chestDropModifier = location?.chestDropModifier ?? 1;
-      const chestDropped = Math.random() < BASE_CHEST_DROP_RATE * chestDropModifier;
-
+      let clanId = '';
       let chestDrop: ChestDrop = { dropped: false };
       let chestAssetId: string | null = null;
+      let chestDropped = false;
 
-      if (chestDropped) {
-        const asset = await selectWeightedRandomAsset();
-        if (asset) {
-          const userAssetId = crypto.randomUUID();
-          chestAssetId = asset.assetId;
+      if (xpToAward > 0) {
+        // First win at this location — full rewards
+        const xpResult = await awardXpAndStreak(userId, today);
+        newTodayXp = xpResult.newTodayXp;
+        clanId = xpResult.clan;
 
-          const playerAsset: PlayerAsset = {
-            userAssetId,
-            userId,
-            assetId: asset.assetId,
-            obtainedAt: now,
-            obtainedFrom: AssetObtainedFrom.Chest,
-            locationId: session.locationId,
-            placed: false,
-            expiresAt: getMidnightISTAsISO(),
-            expired: false,
-          };
-
-          await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
-
-          chestDrop = {
-            dropped: true,
-            asset: {
-              assetId: asset.assetId,
-              name: asset.name,
-              category: asset.category,
-              rarity: asset.rarity,
-              imageKey: asset.imageKey,
-            },
-          };
-        }
-      }
-
-      // 6. Co-op: repeat XP/streak for partner (single chest roll)
-      if (session.coopPartnerId) {
-        await awardXpAndStreak(session.coopPartnerId, today);
-        // Atomic clan XP for partner (same clan, so same clanId)
+        // Atomic clan XP
         if (clanId) {
           const updatedClan = await updateItem(
             'clans',
@@ -222,38 +202,109 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           );
           clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
         }
+
+        // Chest drop
+        const location = await getItem<Location>('locations', { locationId: session.locationId });
+        const chestDropModifier = location?.chestDropModifier ?? 1;
+        chestDropped = Math.random() < BASE_CHEST_DROP_RATE * chestDropModifier;
+
+        if (chestDropped) {
+          const asset = await selectWeightedRandomAsset();
+          if (asset) {
+            const userAssetId = crypto.randomUUID();
+            chestAssetId = asset.assetId;
+
+            const playerAsset: PlayerAsset = {
+              userAssetId,
+              userId,
+              assetId: asset.assetId,
+              obtainedAt: now,
+              obtainedFrom: AssetObtainedFrom.Chest,
+              locationId: session.locationId,
+              placed: false,
+              expiresAt: getMidnightISTAsISO(),
+              expired: false,
+            };
+
+            await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
+
+            chestDrop = {
+              dropped: true,
+              asset: {
+                assetId: asset.assetId,
+                name: asset.name,
+                category: asset.category,
+                rarity: asset.rarity,
+                imageKey: asset.imageKey,
+              },
+            };
+          }
+        }
+
+        // Co-op: repeat XP/streak for partner
+        if (session.coopPartnerId) {
+          await awardXpAndStreak(session.coopPartnerId, today);
+          if (clanId) {
+            const updatedClan = await updateItem(
+              'clans',
+              { clanId },
+              'SET todayXpTimestamp = :ts ADD todayXp :xp',
+              { ':ts': now, ':xp': XP_PER_WIN }
+            );
+            clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
+          }
+        }
+      } else {
+        // Already earned XP here — just get current user XP for response
+        const user = await getItem<User>('users', { userId });
+        newTodayXp = user?.todayXp ?? 0;
+        clanId = user?.clan ?? '';
       }
 
-      // 7. Update session
+      // Update session (store solutionData for analytics)
       await updateItem(
         'game-sessions',
         { sessionId },
-        'SET completedAt = :completedAt, #r = :result, xpEarned = :xp, chestDropped = :chest, chestAssetId = :chestId, completionHash = :hash',
+        'SET completedAt = :completedAt, #r = :result, xpEarned = :xp, chestDropped = :chest, chestAssetId = :chestId, completionHash = :hash, solutionData = :sd',
         {
           ':completedAt': now,
           ':result': GameResult.Win,
-          ':xp': XP_PER_WIN,
+          ':xp': xpToAward,
           ':chest': chestDropped,
           ':chestId': chestAssetId,
           ':hash': completionHash,
+          ':sd': solutionData ?? {},
         },
         { '#r': 'result' }
       );
 
-      // 8. Cooldown
-      const cooldownEndsAt = new Date(Date.now() + COOLDOWN_MS).toISOString();
+      // Append minigameId to completedMinigameIds in player-assignments (non-fatal)
+      try {
+        const dateUserId = `${today}#${userId}`;
+        await updateItem(
+          'player-assignments',
+          { dateUserId },
+          'SET #lm.#locId.#cIds = list_append(#lm.#locId.#cIds, :newIds)',
+          { ':newIds': [session.minigameId] },
+          { '#lm': 'locationMinigames', '#locId': session.locationId, '#cIds': 'completedMinigameIds' },
+        );
+      } catch (err) {
+        console.warn('[completeMinigame] Failed to update completedMinigameIds:', err);
+      }
 
-      // 9. WebSocket broadcast (non-fatal)
-      const stage = process.env.STAGE || 'dev';
-      await broadcastScoreUpdate(stage);
+      // WebSocket broadcast (non-fatal)
+      if (xpToAward > 0) {
+        const stage = process.env.STAGE || 'dev';
+        await broadcastScoreUpdate(stage);
+      }
 
       return success({
         result: GameResult.Win,
-        xpEarned: XP_PER_WIN,
+        xpEarned: xpToAward,
+        xpAwarded: xpToAward > 0,
         newTodayXp,
         clanTodayXp,
         chestDrop,
-        cooldownEndsAt,
       });
     } else {
       // --- LOSE PATH ---
@@ -274,12 +325,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       await updateItem(
         'game-sessions',
         { sessionId },
-        'SET completedAt = :completedAt, #r = :result, xpEarned = :xp, completionHash = :hash',
+        'SET completedAt = :completedAt, #r = :result, xpEarned = :xp, completionHash = :hash, solutionData = :sd',
         {
           ':completedAt': now,
           ':result': GameResult.Lose,
           ':xp': 0,
           ':hash': completionHash,
+          ':sd': solutionData ?? {},
         },
         { '#r': 'result' }
       );

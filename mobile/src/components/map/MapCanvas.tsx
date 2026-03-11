@@ -30,9 +30,16 @@ import { isWithinMapBounds, getEdgeIndicator } from '@/utils/mapBounds';
 import { pixelToGps } from '@/utils/affineTransform';
 import { MapPinsLayer } from './MapPinsLayer';
 
-const MIN_ZOOM = 0.8;
-const MAX_ZOOM = 3;
+const MIN_ZOOM = 0.75;
+const MAX_ZOOM = 4;
 const INITIAL_ZOOM = 1.5;
+
+export interface ViewportRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 interface Props {
   playerX?: number | null;
@@ -40,10 +47,13 @@ interface Props {
   clan?: ClanId | null;
   locations?: Location[];
   onPinPress?: (location: Location) => void;
-  eventBoostedIds?: Set<string>;
+  inRangeIds?: Set<string>;
+  xpExhaustedIds?: Set<string>;
+  onViewportChange?: (viewport: ViewportRect) => void;
+  registerNavigate?: (fn: (mapX: number, mapY: number) => void) => void;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, eventBoostedIds }: Props) {
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
   const image = useImage(mapConfig?.mapImageUrl ?? null);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
@@ -118,6 +128,32 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, event
     hasCentered.value = true;
   }, [translateX, translateY, savedTranslateX, savedTranslateY, scale, savedScale, hasCentered]);
 
+  // Report current viewport to parent (for minimap)
+  const reportViewport = useCallback(() => {
+    if (!onViewportChange || viewW.value === 0 || viewH.value === 0) return;
+    const s = scale.value;
+    onViewportChange({
+      x: -translateX.value / s,
+      y: -translateY.value / s,
+      width: viewW.value / s,
+      height: viewH.value / s,
+    });
+  }, [onViewportChange, scale, translateX, translateY, viewW, viewH]);
+
+  // Navigate to a map-pixel point (called from minimap tap)
+  const navigateToPoint = useCallback((mapX: number, mapY: number) => {
+    if (!mapConfig) return;
+    centerOn(mapX, mapY, scale.value,
+      viewW.value, viewH.value, mapConfig.mapWidth, mapConfig.mapHeight);
+    // Report after centering
+    setTimeout(reportViewport, 0);
+  }, [mapConfig, scale, viewW, viewH, centerOn, reportViewport]);
+
+  // Register the navigate function with the parent
+  useEffect(() => {
+    registerNavigate?.(navigateToPoint);
+  }, [registerNavigate, navigateToPoint]);
+
   // Center on player or map center when image loads
   useEffect(() => {
     if (!mapConfig || hasCentered.value) return;
@@ -127,9 +163,10 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, event
     const focusY = playerY ?? mapConfig.mapHeight / 2;
     centerOn(focusX, focusY, INITIAL_ZOOM,
       viewW.value, viewH.value, mapConfig.mapWidth, mapConfig.mapHeight);
+    setTimeout(reportViewport, 0);
   }, [
     mapConfig, playerX, playerY,
-    viewW, viewH, centerOn,
+    viewW, viewH, centerOn, reportViewport,
   ]);
 
   // Also trigger centering after layout
@@ -142,7 +179,8 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, event
     const focusY = playerY ?? mapConfig.mapHeight / 2;
     centerOn(focusX, focusY, INITIAL_ZOOM,
       width, height, mapConfig.mapWidth, mapConfig.mapHeight);
-  }, [onLayout, mapConfig, playerX, playerY, centerOn, hasCentered]);
+    setTimeout(reportViewport, 0);
+  }, [onLayout, mapConfig, playerX, playerY, centerOn, hasCentered, reportViewport]);
 
   // Saved focal point for pinch gesture (track two-finger drag during pinch)
   const savedFocalX = useSharedValue(0);
@@ -216,6 +254,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, event
       savedScale.value = scale.value;
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
+      runOnJS(reportViewport)();
     });
 
   // --- Pan gesture: single-finger drag only ---
@@ -243,6 +282,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, event
       'worklet';
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
+      runOnJS(reportViewport)();
     });
 
   // --- Double-tap: toggle between INITIAL_ZOOM and 3.5x ---
@@ -269,6 +309,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, event
       savedScale.value = targetScale;
       savedTranslateX.value = clamped.x;
       savedTranslateY.value = clamped.y;
+      runOnJS(reportViewport)();
     });
 
   // --- Debug: tap-to-set location (single tap, only in tapToSetMode) ---
@@ -507,7 +548,8 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, event
                 locations={locations}
                 transformMatrix={mapConfig.transformMatrix}
                 onPinPress={onPinPress}
-                eventBoostedIds={eventBoostedIds}
+                inRangeIds={inRangeIds}
+                xpExhaustedIds={xpExhaustedIds}
               />
             )}
         </Animated.View>

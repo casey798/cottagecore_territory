@@ -775,6 +775,42 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  DevResetFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-devReset
+      CodeUri: functions/player/
+      Handler: devReset.handler
+      Environment:
+        Variables:
+          STAGE: !Ref Stage
+          USER_POOL_ID: !Ref CognitoUserPool
+          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /dev/reset
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - devReset.ts
+        External:
+          - '@aws-sdk/*'
+
   UpdateAvatarFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1119,37 +1155,6 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - completeMinigame.ts
-        External:
-          - '@aws-sdk/*'
-
-  GetCooldownFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub grovewars-${Stage}-getCooldown
-      CodeUri: functions/game/
-      Handler: getCooldown.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref GameSessionsTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RestApi
-            Path: /game/cooldown
-            Method: GET
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-          - getCooldown.ts
         External:
           - '@aws-sdk/*'
 

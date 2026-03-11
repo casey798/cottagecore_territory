@@ -6,13 +6,17 @@ import Geolocation, {
 import { isWithinGameHours } from '@/utils/time';
 import { useDebugStore } from '@/store/useDebugStore';
 
-interface GPSState {
+const GPS_ACCURACY_OK = 25;
+const GPS_ACCURACY_WEAK = 50;
+
+export interface GPSState {
   latitude: number | null;
   longitude: number | null;
   accuracy: number | null;
   isTracking: boolean;
   permissionDenied: boolean;
   error: string | null;
+  weakSignal: boolean;
 }
 
 async function requestLocationPermission(): Promise<boolean> {
@@ -44,6 +48,7 @@ export function useGPS(): GPSState {
     isTracking: false,
     permissionDenied: false,
     error: null,
+    weakSignal: false,
   });
   const watchIdRef = useRef<number | null>(null);
   const permissionCheckedRef = useRef(false);
@@ -61,13 +66,23 @@ export function useGPS(): GPSState {
 
     const watchId = Geolocation.watchPosition(
       (position: GeoPosition) => {
+        const acc = position.coords.accuracy;
+        const weak = acc > GPS_ACCURACY_WEAK;
+
+        if (acc > GPS_ACCURACY_OK && acc <= GPS_ACCURACY_WEAK) {
+          console.warn(
+            `[GPS] Accuracy ${acc.toFixed(1)}m is between ${GPS_ACCURACY_OK}-${GPS_ACCURACY_WEAK}m — proceeding with warning`,
+          );
+        }
+
         setState({
           latitude: position.coords.latitude,
           longitude: position.coords.longitude,
-          accuracy: position.coords.accuracy,
+          accuracy: acc,
           isTracking: true,
           permissionDenied: false,
           error: null,
+          weakSignal: weak,
         });
       },
       (err) => {
@@ -155,6 +170,7 @@ export function useGPS(): GPSState {
       isTracking: true,
       permissionDenied: false,
       error: null,
+      weakSignal: false,
     };
   }
 

@@ -16,6 +16,7 @@ export function getTodayISTString(): string {
 }
 
 export function isWithinGameHours(): boolean {
+  if (__DEV__) return true;
   const now = getNowIST();
   const hour = now.getHours();
   return hour >= GAME_START_HOUR && hour < GAME_END_HOUR;

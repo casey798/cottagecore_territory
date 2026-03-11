@@ -14,7 +14,8 @@ const ERROR_MESSAGES: Record<string, string> = {
     "You've already lost at this location today. Try a different spot!",
   [ErrorCode.DailyCapReached]:
     "You've earned all 100 XP for today! Come back tomorrow.",
-  [ErrorCode.OnCooldown]: 'Cooldown active. Wait before playing again.',
+  [ErrorCode.LocationExhausted]:
+    "You've mastered all challenges here today — try another location!",
 };
 
 describe('QRScannerScreen error messages', () => {
@@ -42,8 +43,8 @@ describe('QRScannerScreen error messages', () => {
     expect(ERROR_MESSAGES[ErrorCode.DailyCapReached]).toContain('100 XP');
   });
 
-  it('maps ON_COOLDOWN to cooldown message', () => {
-    expect(ERROR_MESSAGES[ErrorCode.OnCooldown]).toContain('Cooldown');
+  it('maps LOCATION_EXHAUSTED to exhausted message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.LocationExhausted]).toContain('mastered all challenges');
   });
 
   it('returns undefined for unknown error codes', () => {

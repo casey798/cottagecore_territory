@@ -5,18 +5,14 @@ jest.mock('../../../shared/db');
 jest.mock('../../../shared/time');
 jest.mock('../../../shared/hmac');
 jest.mock('../../../shared/auth');
-jest.mock('../../../shared/minigames', () => ({
-  validateSolution: jest.fn().mockReturnValue(true),
-}));
 jest.mock('../../../functions/websocket/broadcast', () => ({
   broadcastScoreUpdate: jest.fn().mockResolvedValue(undefined),
 }));
 
 import { getItem, putItem, updateItem, query, scan } from '../../../shared/db';
 import { getTodayISTString, getMidnightISTAsISO, getNext8amISTEpochSeconds } from '../../../shared/time';
-import { verifyCompletionHash } from '../../../shared/hmac';
+import { verifyCompletionHash, verifyClientCompletionHash } from '../../../shared/hmac';
 import { extractUserId } from '../../../shared/auth';
-import { validateSolution } from '../../../shared/minigames';
 
 const mockGetItem = getItem as jest.MockedFunction<typeof getItem>;
 const mockPutItem = putItem as jest.MockedFunction<typeof putItem>;
@@ -27,8 +23,8 @@ const mockGetTodayISTString = getTodayISTString as jest.MockedFunction<typeof ge
 const mockGetMidnightISTAsISO = getMidnightISTAsISO as jest.MockedFunction<typeof getMidnightISTAsISO>;
 const mockGetNext8amISTEpochSeconds = getNext8amISTEpochSeconds as jest.MockedFunction<typeof getNext8amISTEpochSeconds>;
 const mockVerifyCompletionHash = verifyCompletionHash as jest.MockedFunction<typeof verifyCompletionHash>;
+const mockVerifyClientCompletionHash = verifyClientCompletionHash as jest.MockedFunction<typeof verifyClientCompletionHash>;
 const mockExtractUserId = extractUserId as jest.MockedFunction<typeof extractUserId>;
-const mockValidateSolution = validateSolution as jest.MockedFunction<typeof validateSolution>;
 
 const TODAY = '2026-03-07';
 const USER_ID = 'user-abc-123';
@@ -91,6 +87,7 @@ function makeValidBody() {
     sessionId: SESSION_ID,
     result: 'win',
     completionHash: COMPLETION_HASH,
+    timeTaken: 30,
     solutionData: { answer: 42 },
   };
 }
@@ -113,12 +110,6 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     coopPartnerId: null,
     _salt: SALT,
     timeLimit: 120,
-    puzzleData: {
-      type: 'grove-words',
-      config: { wordLength: 5, maxGuesses: 6 },
-      solution: { answer: 'BLOOM' },
-      timeLimit: 120,
-    },
     ...overrides,
   };
 }
@@ -144,12 +135,13 @@ describe('completeMinigame handler', () => {
     mockGetTodayISTString.mockReturnValue(TODAY);
     mockGetMidnightISTAsISO.mockReturnValue('2026-03-07T18:30:00.000Z');
     mockGetNext8amISTEpochSeconds.mockReturnValue(1741363800);
-    mockVerifyCompletionHash.mockReturnValue(true);
-    mockValidateSolution.mockReturnValue(true);
+    // Default: client hash succeeds
+    mockVerifyClientCompletionHash.mockReturnValue(true);
+    mockVerifyCompletionHash.mockReturnValue(false);
     mockUpdateItem.mockResolvedValue({ todayXp: 25, seasonXp: 25 });
     mockPutItem.mockResolvedValue(undefined);
-    mockScan.mockResolvedValue({ items: [] }); // No WS connections, no asset catalog
-    mockQuery.mockResolvedValue({ items: [] }); // No previous sessions (rate limit)
+    mockScan.mockResolvedValue({ items: [] });
+    mockQuery.mockResolvedValue({ items: [] });
   });
 
   describe('win path', () => {
@@ -260,6 +252,52 @@ describe('completeMinigame handler', () => {
       );
       expect(clanCalls.length).toBe(2);
     });
+
+    it('appends minigameId to completedMinigameIds in player-assignments on win', async () => {
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'game-sessions') return makeSession();
+        if (table === 'users') return makeUser();
+        if (table === 'locations') return { locationId: LOCATION_ID, chestDropModifier: 1 };
+        if (table === 'clans') return { clanId: 'ember', todayXp: 25 };
+        return undefined;
+      });
+
+      mockUpdateItem.mockResolvedValue({ todayXp: 25, seasonXp: 25 });
+
+      const event = makeEvent(makeValidBody());
+      await handler(event);
+
+      // Verify completedMinigameIds was updated via list_append
+      expect(mockUpdateItem).toHaveBeenCalledWith(
+        'player-assignments',
+        { dateUserId: `${TODAY}#${USER_ID}` },
+        'SET #lm.#locId.#cIds = list_append(#lm.#locId.#cIds, :newIds)',
+        { ':newIds': ['grove-words'] },
+        { '#lm': 'locationMinigames', '#locId': LOCATION_ID, '#cIds': 'completedMinigameIds' },
+      );
+    });
+
+    it('stores solutionData on the session for analytics', async () => {
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'game-sessions') return makeSession();
+        if (table === 'users') return makeUser();
+        if (table === 'locations') return { locationId: LOCATION_ID, chestDropModifier: 1 };
+        if (table === 'clans') return { clanId: 'ember', todayXp: 25 };
+        return undefined;
+      });
+
+      const event = makeEvent(makeValidBody());
+      await handler(event);
+
+      // Session update should include solutionData
+      expect(mockUpdateItem).toHaveBeenCalledWith(
+        'game-sessions',
+        { sessionId: SESSION_ID },
+        expect.stringContaining('solutionData'),
+        expect.objectContaining({ ':sd': { answer: 42 } }),
+        expect.anything()
+      );
+    });
   });
 
   describe('lose path', () => {
@@ -332,7 +370,8 @@ describe('completeMinigame handler', () => {
       expect(responseBody.error.code).toBe('SESSION_COMPLETED');
     });
 
-    it('returns INVALID_HASH when completionHash does not match', async () => {
+    it('returns INVALID_HASH when neither client nor server hash matches', async () => {
+      mockVerifyClientCompletionHash.mockReturnValue(false);
       mockVerifyCompletionHash.mockReturnValue(false);
 
       mockGetItem.mockImplementation(async (table: string) => {
@@ -346,6 +385,26 @@ describe('completeMinigame handler', () => {
 
       expect(result.statusCode).toBe(400);
       expect(responseBody.error.code).toBe('INVALID_HASH');
+    });
+
+    it('accepts server-salt hash as fallback when client hash fails', async () => {
+      mockVerifyClientCompletionHash.mockReturnValue(false);
+      mockVerifyCompletionHash.mockReturnValue(true);
+
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'game-sessions') return makeSession();
+        if (table === 'users') return makeUser();
+        if (table === 'locations') return { locationId: LOCATION_ID, chestDropModifier: 1 };
+        if (table === 'clans') return { clanId: 'ember', todayXp: 25 };
+        return undefined;
+      });
+
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.data.result).toBe('win');
     });
 
     it('returns SUSPICIOUS_TIME when completion is too fast (< 5 seconds)', async () => {
@@ -382,9 +441,7 @@ describe('completeMinigame handler', () => {
       expect(responseBody.error.code).toBe('SUSPICIOUS_TIME');
     });
 
-    it('returns RATE_LIMITED when last completion was less than 4 minutes ago', async () => {
-      const threeMinutesAgo = new Date(Date.now() - 3 * 60 * 1000).toISOString();
-
+    it('returns MINIGAME_ALREADY_PLAYED when same minigame already won at this location today', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'game-sessions') return makeSession();
         return undefined;
@@ -395,7 +452,10 @@ describe('completeMinigame handler', () => {
           {
             sessionId: 'prev-session',
             userId: USER_ID,
-            completedAt: threeMinutesAgo,
+            locationId: LOCATION_ID,
+            minigameId: 'grove-words',
+            result: 'win',
+            completedAt: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
             date: TODAY,
           },
         ],
@@ -405,24 +465,8 @@ describe('completeMinigame handler', () => {
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
-      expect(result.statusCode).toBe(429);
-      expect(responseBody.error.code).toBe('RATE_LIMITED');
-    });
-
-    it('returns VALIDATION_ERROR when solution is invalid for a win claim', async () => {
-      mockValidateSolution.mockReturnValue(false);
-
-      mockGetItem.mockImplementation(async (table: string) => {
-        if (table === 'game-sessions') return makeSession();
-        return undefined;
-      });
-
-      const event = makeEvent(makeValidBody());
-      const result = await handler(event);
-      const responseBody = JSON.parse(result.body);
-
       expect(result.statusCode).toBe(400);
-      expect(responseBody.error.code).toBe('VALIDATION_ERROR');
+      expect(responseBody.error.code).toBe('MINIGAME_ALREADY_PLAYED');
     });
   });
 });

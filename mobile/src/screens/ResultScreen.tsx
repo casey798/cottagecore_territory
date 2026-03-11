@@ -11,9 +11,11 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { PALETTE, UI, CLAN_COLORS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { useCountdown } from '@/hooks/useCountdown';
 import { useClanStore } from '@/store/useClanStore';
+import { useGameStore } from '@/store/useGameStore';
+import { useMapStore } from '@/store/useMapStore';
 import { AssetRarity } from '@/types';
+import { useLockPortrait } from '@/hooks/useScreenOrientation';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type ResultRoute = RouteProp<MainModalParamList, 'Result'>;
@@ -26,6 +28,7 @@ const RARITY_COLORS: Record<AssetRarity, string> = {
 };
 
 export default function ResultScreen() {
+  useLockPortrait();
   const navigation = useNavigation<Nav>();
   const route = useRoute<ResultRoute>();
   const {
@@ -34,13 +37,32 @@ export default function ResultScreen() {
     newTodayXp,
     clanTodayXp,
     chestDrop,
-    cooldownEndsAt,
     locationLocked,
+    locationId,
+    locationName,
+    minigameId,
+    xpAwarded,
   } = route.params;
 
   const clans = useClanStore((s) => s.clans);
-  const countdown = useCountdown(cooldownEndsAt || null);
+  const lockLocation = useMapStore((s) => s.lockLocation);
+  const markMinigameCompleted = useGameStore((s) => s.markMinigameCompleted);
+  const markXpEarnedAtLocation = useGameStore((s) => s.markXpEarnedAtLocation);
   const isWin = result === 'win';
+  const didEarnXp = xpAwarded !== false;
+
+  // Mark minigame as completed on win, or lock location on lose
+  useEffect(() => {
+    if (isWin && locationId && minigameId) {
+      markMinigameCompleted(locationId, minigameId);
+    }
+    if (isWin && didEarnXp && locationId) {
+      markXpEarnedAtLocation(locationId);
+    }
+    if (!isWin && locationLocked && locationId) {
+      lockLocation(locationId);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // XP bounce animation
   const scaleAnim = useRef(new Animated.Value(0)).current;
@@ -70,10 +92,12 @@ export default function ResultScreen() {
     navigation.popToTop();
   };
 
-  const canPlayAgain = isWin && countdown.isExpired;
-
-  const handlePlayAgain = () => {
-    navigation.popToTop();
+  const handlePlayAgainHere = () => {
+    if (locationId && locationName) {
+      navigation.replace('MinigameSelect', { locationId, locationName });
+    } else {
+      navigation.popToTop();
+    }
   };
 
   const sortedClans = [...clans].sort((a, b) => b.todayXp - a.todayXp);
@@ -83,20 +107,31 @@ export default function ResultScreen() {
       <View style={styles.content}>
         {isWin ? (
           <>
-            <Animated.Text
-              style={[
-                styles.xpGain,
-                { transform: [{ scale: scaleAnim }] },
-              ]}
-            >
-              +{xpEarned} XP
-            </Animated.Text>
-            <Text style={styles.clanXpText}>
-              Your clan now has {clanTodayXp ?? 0} XP today!
-            </Text>
-            <Text style={styles.playerXpText}>
-              Your XP: {newTodayXp ?? 0}/100
-            </Text>
+            {didEarnXp ? (
+              <>
+                <Animated.Text
+                  style={[
+                    styles.xpGain,
+                    { transform: [{ scale: scaleAnim }] },
+                  ]}
+                >
+                  +{xpEarned} XP
+                </Animated.Text>
+                <Text style={styles.clanXpText}>
+                  Your clan now has {clanTodayXp ?? 0} XP today!
+                </Text>
+                <Text style={styles.playerXpText}>
+                  Your XP: {newTodayXp ?? 0}/100
+                </Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.practiceWinTitle}>Challenge Complete!</Text>
+                <Text style={styles.practiceWinSubtitle}>
+                  No XP earned — you've already harvested this grove today.
+                </Text>
+              </>
+            )}
 
             {chestDrop?.dropped && chestDrop.asset ? (
               <Animated.View style={[styles.chestContainer, { opacity: chestAnim }]}>
@@ -118,11 +153,6 @@ export default function ResultScreen() {
               <Text style={styles.noChest}>No chest this time...</Text>
             )}
 
-            {!countdown.isExpired && (
-              <Text style={styles.cooldownText}>
-                Next game in {countdown.formatted}
-              </Text>
-            )}
           </>
         ) : (
           <>
@@ -155,18 +185,27 @@ export default function ResultScreen() {
       </View>
 
       <View style={styles.buttonRow}>
-        <TouchableOpacity style={styles.backBtn} onPress={handleBackToMap}>
-          <Text style={styles.backBtnText}>Back to Map</Text>
-        </TouchableOpacity>
-        {isWin && (
-          <TouchableOpacity
-            style={[styles.playAgainBtn, !canPlayAgain && styles.playAgainDisabled]}
-            onPress={handlePlayAgain}
-            disabled={!canPlayAgain}
-          >
-            <Text style={styles.playAgainBtnText}>
-              {canPlayAgain ? 'Play Again' : `Cooldown ${countdown.formatted}`}
-            </Text>
+        {isWin && didEarnXp ? (
+          <>
+            <TouchableOpacity style={styles.playAgainBtn} onPress={handlePlayAgainHere}>
+              <Text style={styles.playAgainBtnText}>Play Again Here</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.backBtn} onPress={handleBackToMap}>
+              <Text style={styles.backBtnText}>Back to Map</Text>
+            </TouchableOpacity>
+          </>
+        ) : isWin && !didEarnXp ? (
+          <>
+            <TouchableOpacity style={styles.backBtn} onPress={handleBackToMap}>
+              <Text style={styles.backBtnText}>Find Another Location</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={handlePlayAgainHere}>
+              <Text style={styles.secondaryBtnText}>Play Again Here</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <TouchableOpacity style={styles.backBtn} onPress={handleBackToMap}>
+            <Text style={styles.backBtnText}>Find Another Location</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -177,8 +216,8 @@ export default function ResultScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    paddingHorizontal: 32,
-    paddingVertical: 20,
+    paddingHorizontal: 24,
+    paddingTop: 40,
   },
   bgWin: {
     backgroundColor: '#F5EACB',
@@ -249,11 +288,18 @@ const styles = StyleSheet.create({
     color: PALETTE.stoneGrey,
     marginBottom: 16,
   },
-  cooldownText: {
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
+  practiceWinTitle: {
+    fontSize: 28,
+    fontFamily: FONTS.headerBold,
     color: PALETTE.warmBrown,
-    marginTop: 8,
+    marginBottom: 8,
+  },
+  practiceWinSubtitle: {
+    fontSize: 14,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
+    marginBottom: 20,
   },
   loseTitle: {
     fontSize: 28,
@@ -269,11 +315,11 @@ const styles = StyleSheet.create({
     marginBottom: 20,
   },
   miniScoreboard: {
-    marginTop: 20,
+    marginTop: 24,
     backgroundColor: PALETTE.cream,
     borderRadius: 10,
-    padding: 12,
-    width: 200,
+    padding: 14,
+    alignSelf: 'stretch',
   },
   miniClanRow: {
     flexDirection: 'row',
@@ -298,15 +344,17 @@ const styles = StyleSheet.create({
     color: PALETTE.stoneGrey,
   },
   buttonRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 16,
+    alignItems: 'center',
+    gap: 12,
+    paddingBottom: 16,
   },
   backBtn: {
     backgroundColor: PALETTE.warmBrown,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
     borderRadius: 10,
+    alignSelf: 'stretch',
+    alignItems: 'center',
   },
   backBtnText: {
     color: PALETTE.cream,
@@ -315,16 +363,28 @@ const styles = StyleSheet.create({
   },
   playAgainBtn: {
     backgroundColor: PALETTE.softGreen,
-    paddingHorizontal: 24,
-    paddingVertical: 12,
+    paddingHorizontal: 32,
+    paddingVertical: 14,
     borderRadius: 10,
-  },
-  playAgainDisabled: {
-    backgroundColor: PALETTE.stoneGrey,
-    opacity: 0.7,
+    alignSelf: 'stretch',
+    alignItems: 'center',
   },
   playAgainBtnText: {
     color: '#FFFFFF',
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+  },
+  secondaryBtn: {
+    paddingHorizontal: 32,
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignSelf: 'stretch',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: PALETTE.warmBrown,
+  },
+  secondaryBtnText: {
+    color: PALETTE.warmBrown,
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
   },

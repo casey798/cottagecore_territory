@@ -1,11 +1,29 @@
-import React from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, Pressable, Animated } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
+import { lockLandscape } from '@/hooks/useScreenOrientation';
+import { useLockLandscape } from '@/hooks/useScreenOrientation';
 
 export default function TutorialScreen() {
+  useLockLandscape();
   const setTutorialDone = useAuthStore((s) => s.setTutorialDone);
+  const [ready, setReady] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(1)).current;
+
+  useEffect(() => {
+    // Black fade: start opaque, wait for orientation change, then fade out
+    const timer = setTimeout(() => {
+      lockLandscape();
+      Animated.timing(fadeAnim, {
+        toValue: 0,
+        duration: 250,
+        useNativeDriver: true,
+      }).start(() => setReady(true));
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [fadeAnim]);
 
   return (
     <View style={styles.container}>
@@ -21,6 +39,14 @@ export default function TutorialScreen() {
       >
         <Text style={styles.skipButtonText}>Skip</Text>
       </Pressable>
+
+      {/* Black fade overlay to mask orientation change */}
+      {!ready && (
+        <Animated.View
+          style={[styles.fadeOverlay, { opacity: fadeAnim }]}
+          pointerEvents="none"
+        />
+      )}
     </View>
   );
 }
@@ -60,5 +86,9 @@ const styles = StyleSheet.create({
     color: PALETTE.darkBrown,
     fontSize: 16,
     fontFamily: FONTS.bodySemiBold,
+  },
+  fadeOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: '#000',
   },
 });

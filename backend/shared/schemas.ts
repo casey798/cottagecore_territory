@@ -45,8 +45,6 @@ export const qrPayloadSchema = z.object({
 
 export const scanQrSchema = z.object({
   qrData: qrPayloadSchema,
-  gpsLat: z.number().min(-90).max(90),
-  gpsLng: z.number().min(-180).max(180),
 });
 
 export const startMinigameSchema = z.object({
@@ -59,6 +57,7 @@ export const completeMinigameSchema = z.object({
   sessionId: z.string().uuid(),
   result: gameResultSchema,
   completionHash: z.string(),
+  timeTaken: z.number().int().min(0),
   solutionData: z.record(z.unknown()),
 });
 

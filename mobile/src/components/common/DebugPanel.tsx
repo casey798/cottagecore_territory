@@ -11,7 +11,9 @@ import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useDebugStore } from '@/store/useDebugStore';
 import { useMapStore } from '@/store/useMapStore';
+import { useGameStore } from '@/store/useGameStore';
 import { useGPS } from '@/hooks/useGPS';
+import { apiRequest } from '@/api/client';
 
 export function DebugPanel() {
   if (!__DEV__) return null;
@@ -27,6 +29,8 @@ export function DebugPanel() {
   const toggleDebugMode = useDebugStore((s) => s.toggleDebugMode);
   const toggleTapToSetMode = useDebugStore((s) => s.toggleTapToSetMode);
   const todayLocations = useMapStore((s) => s.todayLocations ?? []);
+  const loadTodayLocations = useMapStore((s) => s.loadTodayLocations);
+  const [resetting, setResetting] = useState(false);
 
   // Get real GPS state (this will return debug values if debug is on,
   // but we also show the raw state for reference)
@@ -37,6 +41,26 @@ export function DebugPanel() {
     const lng = parseFloat(lngInput);
     if (isNaN(lat) || isNaN(lng)) return;
     setDebugLocation(lat, lng);
+  };
+
+  const handleResetScores = async () => {
+    if (resetting) return;
+    setResetting(true);
+    try {
+      const result = await apiRequest('/dev/reset', { method: 'POST' });
+      console.log('[DebugPanel] devReset response:', JSON.stringify(result));
+
+      // Reset client-side stores
+      useGameStore.getState().setTodayXp(0); // also clears completedMinigames & xpEarnedAtLocations
+      useGameStore.getState().clearSession();
+
+      // Reload locations to clear locked state
+      await loadTodayLocations();
+    } catch (err) {
+      console.warn('[DebugPanel] devReset error:', err);
+    } finally {
+      setResetting(false);
+    }
   };
 
   const handleQuickLocation = (lat: number, lng: number) => {
@@ -134,6 +158,17 @@ export function DebugPanel() {
             ))}
           </>
         )}
+
+        {/* Reset Scores */}
+        <Pressable
+          style={[styles.resetButton, resetting && styles.resetButtonDisabled]}
+          onPress={handleResetScores}
+          disabled={resetting}
+        >
+          <Text style={styles.resetButtonText}>
+            {resetting ? 'Resetting...' : 'Reset Scores'}
+          </Text>
+        </Pressable>
 
         {/* Tap Map to Set Location */}
         <Pressable
@@ -287,6 +322,23 @@ const styles = StyleSheet.create({
   },
   setButtonText: {
     color: PALETTE.darkBrown,
+    fontSize: 10,
+    fontFamily: FONTS.bodySemiBold,
+  },
+  resetButton: {
+    backgroundColor: '#C0392B',
+    paddingVertical: 5,
+    borderRadius: 4,
+    alignItems: 'center',
+    marginBottom: 6,
+    borderWidth: 1,
+    borderColor: '#E74C3C',
+  },
+  resetButtonDisabled: {
+    opacity: 0.5,
+  },
+  resetButtonText: {
+    color: '#FFFFFF',
     fontSize: 10,
     fontFamily: FONTS.bodySemiBold,
   },

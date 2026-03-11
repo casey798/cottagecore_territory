@@ -6,13 +6,14 @@ jest.mock('../../../shared/time');
 jest.mock('../../../shared/hmac');
 jest.mock('../../../shared/auth');
 
-import { getItem, query } from '../../../shared/db';
+import { getItem, query, updateItem } from '../../../shared/db';
 import { getTodayISTString } from '../../../shared/time';
 import { verifyQrPayload } from '../../../shared/hmac';
 import { extractUserId } from '../../../shared/auth';
 
 const mockGetItem = getItem as jest.MockedFunction<typeof getItem>;
 const mockQuery = query as jest.MockedFunction<typeof query>;
+const mockUpdateItem = updateItem as jest.MockedFunction<typeof updateItem>;
 const mockGetTodayISTString = getTodayISTString as jest.MockedFunction<typeof getTodayISTString>;
 const mockVerifyQrPayload = verifyQrPayload as jest.MockedFunction<typeof verifyQrPayload>;
 const mockExtractUserId = extractUserId as jest.MockedFunction<typeof extractUserId>;
@@ -78,8 +79,6 @@ function makeValidBody() {
       d: TODAY,
       h: VALID_HMAC,
     },
-    gpsLat: 13.0,
-    gpsLng: 80.2,
   };
 }
 
@@ -89,6 +88,7 @@ describe('scanQR handler', () => {
     mockExtractUserId.mockReturnValue(USER_ID);
     mockGetTodayISTString.mockReturnValue(TODAY);
     mockVerifyQrPayload.mockReturnValue(true);
+    mockUpdateItem.mockResolvedValue(undefined);
   });
 
   function setupSuccessPath(): void {
@@ -176,47 +176,6 @@ describe('scanQR handler', () => {
 
       expect(result.statusCode).toBe(400);
       expect(responseBody.error.code).toBe('QR_INVALID');
-    });
-
-    it('returns GPS_OUT_OF_RANGE when GPS coordinates are far from location', async () => {
-      mockGetItem.mockImplementation(async (table: string) => {
-        if (table === 'daily-config') {
-          return {
-            date: TODAY,
-            qrSecret: 'secret',
-            activeLocationIds: [LOCATION_ID],
-            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
-          };
-        }
-        if (table === 'locations') {
-          return {
-            locationId: LOCATION_ID,
-            name: 'Test Location',
-            gpsLat: 13.0,
-            gpsLng: 80.2,
-            geofenceRadius: 50,
-            category: 'courtyard',
-            active: true,
-            chestDropModifier: 1,
-            notes: '',
-          };
-        }
-        return undefined;
-      });
-
-      const body = makeValidBody();
-      body.gpsLat = 13.01;
-      body.gpsLng = 80.21;
-      const event = makeEvent(body);
-
-      const result = await handler(event);
-      const responseBody = JSON.parse(result.body);
-
-      expect(result.statusCode).toBe(400);
-      expect(responseBody.error.code).toBe('GPS_OUT_OF_RANGE');
     });
 
     it('returns NOT_ASSIGNED when location is not in player assignments', async () => {
@@ -365,77 +324,10 @@ describe('scanQR handler', () => {
       expect(responseBody.error.code).toBe('DAILY_CAP_REACHED');
     });
 
-    it('returns ON_COOLDOWN when last session completed less than 5 minutes ago', async () => {
-      const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
-
-      mockGetItem.mockImplementation(async (table: string) => {
-        if (table === 'daily-config') {
-          return {
-            date: TODAY,
-            qrSecret: 'secret',
-            activeLocationIds: [LOCATION_ID],
-            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
-          };
-        }
-        if (table === 'locations') {
-          return {
-            locationId: LOCATION_ID,
-            name: 'Test Location',
-            gpsLat: 13.0,
-            gpsLng: 80.2,
-            geofenceRadius: 100,
-            category: 'courtyard',
-            active: true,
-            chestDropModifier: 1,
-            notes: '',
-          };
-        }
-        if (table === 'player-assignments') {
-          return {
-            dateUserId: `${TODAY}#${USER_ID}`,
-            assignedLocationIds: [LOCATION_ID],
-          };
-        }
-        if (table === 'player-locks') {
-          return undefined;
-        }
-        if (table === 'users') {
-          return {
-            userId: USER_ID,
-            todayXp: 25,
-            clan: 'ember',
-          };
-        }
-        return undefined;
-      });
-
-      mockQuery.mockResolvedValue({
-        items: [
-          {
-            sessionId: 'session-prev',
-            userId: USER_ID,
-            completedAt: twoMinutesAgo,
-            date: TODAY,
-            locationId: 'other-location',
-            minigameId: 'grove-words',
-          },
-        ],
-      });
-
-      const event = makeEvent(makeValidBody());
-      const result = await handler(event);
-      const responseBody = JSON.parse(result.body);
-
-      expect(result.statusCode).toBe(429);
-      expect(responseBody.error.code).toBe('ON_COOLDOWN');
-    });
   });
 
   describe('success path', () => {
-    it('returns 3-5 available minigames when all validations pass', async () => {
+    it('returns exactly 5 available minigames with completed flag on first scan', async () => {
       setupSuccessPath();
 
       const event = makeEvent(makeValidBody());
@@ -448,40 +340,150 @@ describe('scanQR handler', () => {
       expect(responseBody.data).toHaveProperty('locationName', 'Test Location');
       expect(responseBody.data).toHaveProperty('availableMinigames');
       expect(Array.isArray(responseBody.data.availableMinigames)).toBe(true);
-      expect(responseBody.data.availableMinigames.length).toBeGreaterThanOrEqual(3);
-      expect(responseBody.data.availableMinigames.length).toBeLessThanOrEqual(5);
+      expect(responseBody.data.availableMinigames.length).toBe(5);
 
       const minigame = responseBody.data.availableMinigames[0];
       expect(minigame).toHaveProperty('minigameId');
       expect(minigame).toHaveProperty('name');
       expect(minigame).toHaveProperty('timeLimit');
       expect(minigame).toHaveProperty('description');
+      expect(minigame).toHaveProperty('completed', false);
     });
 
-    it('excludes already-played minigames at this location', async () => {
+    it('saves the minigame set to player-assignments on first scan', async () => {
+      setupSuccessPath();
+
+      const event = makeEvent(makeValidBody());
+      await handler(event);
+
+      // Verify updateItem was called with the locationMinigames map
+      expect(mockUpdateItem).toHaveBeenCalledWith(
+        'player-assignments',
+        { dateUserId: `${TODAY}#${USER_ID}` },
+        'SET locationMinigames = :lm',
+        expect.objectContaining({
+          ':lm': expect.objectContaining({
+            [LOCATION_ID]: expect.objectContaining({
+              minigameIds: expect.any(Array),
+              completedMinigameIds: [],
+            }),
+          }),
+        }),
+      );
+    });
+
+    it('returns the saved set on re-scan instead of re-rolling', async () => {
+      const savedMinigameIds = ['grove-words', 'kindred', 'stone-pairs', 'pips', 'vine-trail'];
+
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'daily-config') {
           return {
-            date: TODAY,
-            qrSecret: 'secret',
-            activeLocationIds: [LOCATION_ID],
+            date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
+            status: 'active', difficulty: 'medium', winnerClan: null,
           };
         }
         if (table === 'locations') {
           return {
-            locationId: LOCATION_ID,
-            name: 'Test Location',
-            gpsLat: 13.0,
-            gpsLng: 80.2,
-            geofenceRadius: 100,
-            category: 'courtyard',
-            active: true,
-            chestDropModifier: 1,
-            notes: '',
+            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
+            geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1, notes: '',
+          };
+        }
+        if (table === 'player-assignments') {
+          return {
+            dateUserId: `${TODAY}#${USER_ID}`,
+            assignedLocationIds: [LOCATION_ID],
+            locationMinigames: {
+              [LOCATION_ID]: {
+                minigameIds: savedMinigameIds,
+                completedMinigameIds: ['grove-words'],
+              },
+            },
+          };
+        }
+        if (table === 'player-locks') return undefined;
+        if (table === 'users') return { userId: USER_ID, todayXp: 25, clan: 'ember' };
+        return undefined;
+      });
+
+      mockQuery.mockResolvedValue({ items: [] });
+
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      const ids = responseBody.data.availableMinigames.map((m: { minigameId: string }) => m.minigameId);
+      expect(ids).toEqual(savedMinigameIds);
+
+      // grove-words should be marked completed
+      const groveWords = responseBody.data.availableMinigames.find(
+        (m: { minigameId: string }) => m.minigameId === 'grove-words',
+      );
+      expect(groveWords.completed).toBe(true);
+
+      // Others should not be completed
+      const kindred = responseBody.data.availableMinigames.find(
+        (m: { minigameId: string }) => m.minigameId === 'kindred',
+      );
+      expect(kindred.completed).toBe(false);
+    });
+
+    it('returns LOCATION_EXHAUSTED when all minigames in saved set are completed', async () => {
+      const savedMinigameIds = ['grove-words', 'kindred', 'stone-pairs', 'pips', 'vine-trail'];
+
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'daily-config') {
+          return {
+            date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
+            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
+            status: 'active', difficulty: 'medium', winnerClan: null,
+          };
+        }
+        if (table === 'locations') {
+          return {
+            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
+            geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1, notes: '',
+          };
+        }
+        if (table === 'player-assignments') {
+          return {
+            dateUserId: `${TODAY}#${USER_ID}`,
+            assignedLocationIds: [LOCATION_ID],
+            locationMinigames: {
+              [LOCATION_ID]: {
+                minigameIds: savedMinigameIds,
+                completedMinigameIds: [...savedMinigameIds],
+              },
+            },
+          };
+        }
+        if (table === 'player-locks') return undefined;
+        if (table === 'users') return { userId: USER_ID, todayXp: 25, clan: 'ember' };
+        return undefined;
+      });
+
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(400);
+      expect(responseBody.error.code).toBe('LOCATION_EXHAUSTED');
+    });
+
+    it('excludes already-won minigames when rolling first set', async () => {
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'daily-config') {
+          return {
+            date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
+            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
+            status: 'active', difficulty: 'medium', winnerClan: null,
+          };
+        }
+        if (table === 'locations') {
+          return {
+            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
+            geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1, notes: '',
           };
         }
         if (table === 'player-assignments') {
@@ -490,26 +492,17 @@ describe('scanQR handler', () => {
             assignedLocationIds: [LOCATION_ID],
           };
         }
-        if (table === 'player-locks') {
-          return undefined;
-        }
-        if (table === 'users') {
-          return { userId: USER_ID, todayXp: 25, clan: 'ember' };
-        }
+        if (table === 'player-locks') return undefined;
+        if (table === 'users') return { userId: USER_ID, todayXp: 25, clan: 'ember' };
         return undefined;
       });
 
-      // Player already played grove-words at this location
       const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
       mockQuery.mockResolvedValue({
         items: [
           {
-            sessionId: 'session-old',
-            userId: USER_ID,
-            completedAt: tenMinutesAgo,
-            date: TODAY,
-            locationId: LOCATION_ID,
-            minigameId: 'grove-words',
+            sessionId: 'session-old', userId: USER_ID, completedAt: tenMinutesAgo,
+            date: TODAY, locationId: LOCATION_ID, minigameId: 'grove-words', result: 'win',
           },
         ],
       });
@@ -523,70 +516,6 @@ describe('scanQR handler', () => {
         (m: { minigameId: string }) => m.minigameId
       );
       expect(minigameIds).not.toContain('grove-words');
-    });
-
-    it('passes after cooldown has elapsed (>5 minutes since last session)', async () => {
-      const sixMinutesAgo = new Date(Date.now() - 6 * 60 * 1000).toISOString();
-
-      mockGetItem.mockImplementation(async (table: string) => {
-        if (table === 'daily-config') {
-          return {
-            date: TODAY,
-            qrSecret: 'secret',
-            activeLocationIds: [LOCATION_ID],
-            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
-          };
-        }
-        if (table === 'locations') {
-          return {
-            locationId: LOCATION_ID,
-            name: 'Test Location',
-            gpsLat: 13.0,
-            gpsLng: 80.2,
-            geofenceRadius: 100,
-            category: 'courtyard',
-            active: true,
-            chestDropModifier: 1,
-            notes: '',
-          };
-        }
-        if (table === 'player-assignments') {
-          return {
-            dateUserId: `${TODAY}#${USER_ID}`,
-            assignedLocationIds: [LOCATION_ID],
-          };
-        }
-        if (table === 'player-locks') {
-          return undefined;
-        }
-        if (table === 'users') {
-          return { userId: USER_ID, todayXp: 25, clan: 'ember' };
-        }
-        return undefined;
-      });
-
-      mockQuery.mockResolvedValue({
-        items: [
-          {
-            sessionId: 'session-prev',
-            userId: USER_ID,
-            completedAt: sixMinutesAgo,
-            date: TODAY,
-            locationId: 'other-location',
-            minigameId: 'kindred',
-          },
-        ],
-      });
-
-      const event = makeEvent(makeValidBody());
-      const result = await handler(event);
-      const responseBody = JSON.parse(result.body);
-
-      expect(result.statusCode).toBe(200);
-      expect(responseBody.success).toBe(true);
     });
   });
 });

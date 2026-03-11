@@ -7,6 +7,7 @@ import {
   Alert,
   KeyboardAvoidingView,
   ScrollView,
+  SafeAreaView,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -15,10 +16,12 @@ import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { AppTextInput } from '@/components/common/AppTextInput';
 import * as authApi from '@/api/auth';
+import { useLockPortrait } from '@/hooks/useScreenOrientation';
 
 type Nav = NativeStackNavigationProp<RootStackParamList, 'Login'>;
 
 export default function LoginScreen() {
+  useLockPortrait();
   const navigation = useNavigation<Nav>();
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
@@ -51,51 +54,75 @@ export default function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.screen} behavior="height">
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
-        <View style={styles.container}>
-          <View style={styles.leftPanel}>
-            <View style={styles.illustrationPlaceholder}>
+    <SafeAreaView style={styles.screen}>
+      <KeyboardAvoidingView style={styles.flex} behavior="padding">
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          keyboardShouldPersistTaps="handled"
+        >
+          {/* Top section — logo and tagline */}
+          <View style={styles.topSection}>
+            <View style={styles.logoContainer}>
               <Text style={styles.logoText}>GroveWars</Text>
-              <Text style={styles.placeholderText}>Cottagecore Illustration</Text>
+              <View style={styles.logoUnderline} />
+            </View>
+            <Text style={styles.tagline}>
+              Four clans. One campus.{'\n'}Who will claim it?
+            </Text>
+          </View>
+
+          {/* Elder Moss dialogue */}
+          <View style={styles.elderSection}>
+            <View style={styles.elderPortrait}>
+              <Text style={styles.elderEmoji}>🧙</Text>
+            </View>
+            <View style={styles.dialogueBox}>
+              <Text style={styles.dialogueText}>
+                Welcome back, grove keeper...
+              </Text>
+              <View style={styles.dialogueTail} />
             </View>
           </View>
-          <View style={styles.divider} />
-          <View style={styles.rightPanel}>
-            <Text style={styles.title}>GroveWars</Text>
-            <Text style={styles.subtitle}>Enter your college email</Text>
-            <AppTextInput
-              style={[styles.input, inputFocused && styles.inputFocused]}
-              placeholder="you@student.tce.edu"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-              autoCapitalize="none"
-              autoCorrect={false}
-              editable={!loading}
-              onFocus={() => setInputFocused(true)}
-              onBlur={() => setInputFocused(false)}
-            />
-            <Pressable
-              style={({ pressed }) => [
-                styles.button,
-                pressed && styles.buttonPressed,
-                loading && styles.buttonDisabled,
-              ]}
-              onPress={handleSendCode}
-              disabled={loading}
-            >
-              <Text style={styles.buttonText}>
-                {loading ? 'Sending...' : 'Send Code'}
-              </Text>
-            </Pressable>
+
+          {/* Input section */}
+          <View style={styles.inputSection}>
+            <View style={styles.parchmentPanel}>
+              <Text style={styles.inputLabel}>Enter your college email</Text>
+              <AppTextInput
+                style={[styles.input, inputFocused && styles.inputFocused]}
+                placeholder="you@student.tce.edu"
+                value={email}
+                onChangeText={setEmail}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+                editable={!loading}
+                onFocus={() => setInputFocused(true)}
+                onBlur={() => setInputFocused(false)}
+              />
+              <Pressable
+                style={({ pressed }) => [
+                  styles.button,
+                  pressed && styles.buttonPressed,
+                  loading && styles.buttonDisabled,
+                ]}
+                onPress={handleSendCode}
+                disabled={loading}
+              >
+                <Text style={styles.buttonText}>
+                  {loading ? 'Sending...' : 'Enter the Grove'}
+                </Text>
+              </Pressable>
+            </View>
           </View>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+
+          {/* Bottom hint */}
+          <Text style={styles.hintText}>
+            First time? You'll receive a verification code.
+          </Text>
+        </ScrollView>
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
@@ -104,74 +131,124 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: PALETTE.parchmentBg,
   },
+  flex: {
+    flex: 1,
+  },
   scrollContent: {
     flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingBottom: 24,
   },
-  container: {
-    flex: 1,
-    flexDirection: 'row',
-    backgroundColor: PALETTE.parchmentBg,
-  },
-  leftPanel: {
-    flex: 1,
-    justifyContent: 'center',
+  // Top section
+  topSection: {
     alignItems: 'center',
-    backgroundColor: PALETTE.parchmentBg,
-  },
-  illustrationPlaceholder: {
-    width: '80%',
-    height: '80%',
-    borderRadius: 16,
-    backgroundColor: PALETTE.parchmentBg,
-    borderWidth: 2,
-    borderColor: PALETTE.softGreen,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  logoText: {
-    fontSize: 28,
-    fontFamily: FONTS.headerBold,
-    color: PALETTE.darkBrown,
-    marginBottom: 8,
-  },
-  placeholderText: {
-    color: PALETTE.stoneGrey,
-    fontSize: 12,
-    fontFamily: FONTS.bodyRegular,
-  },
-  divider: {
-    width: 1,
-    backgroundColor: PALETTE.warmBrown,
-    marginVertical: 24,
-  },
-  rightPanel: {
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: 32,
-    backgroundColor: PALETTE.parchmentBg,
-  },
-  title: {
-    fontSize: 32,
-    fontFamily: FONTS.headerBold,
-    color: PALETTE.darkBrown,
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 14,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.stoneGrey,
+    paddingTop: 48,
     marginBottom: 24,
   },
-  input: {
+  logoContainer: {
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  logoText: {
+    fontSize: 42,
+    fontFamily: FONTS.headerBold,
+    color: PALETTE.darkBrown,
+  },
+  logoUnderline: {
+    width: 80,
+    height: 3,
+    backgroundColor: PALETTE.honeyGold,
+    borderRadius: 2,
+    marginTop: 4,
+  },
+  tagline: {
+    fontSize: 16,
+    fontFamily: FONTS.headerRegular,
+    color: PALETTE.warmBrown,
+    textAlign: 'center',
+    lineHeight: 24,
+  },
+  // Elder Moss
+  elderSection: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    marginBottom: 28,
+    paddingHorizontal: 8,
+  },
+  elderPortrait: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: PALETTE.softGreen + '30',
+    borderWidth: 2.5,
+    borderColor: PALETTE.warmBrown,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  elderEmoji: {
+    fontSize: 28,
+  },
+  dialogueBox: {
+    flex: 1,
+    backgroundColor: PALETTE.cream,
     borderWidth: 1.5,
+    borderColor: PALETTE.warmBrown,
+    borderRadius: 12,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  dialogueText: {
+    fontSize: 14,
+    fontFamily: FONTS.headerRegular,
+    color: PALETTE.darkBrown,
+    fontStyle: 'italic',
+  },
+  dialogueTail: {
+    position: 'absolute',
+    left: -8,
+    top: 16,
+    width: 0,
+    height: 0,
+    borderTopWidth: 6,
+    borderBottomWidth: 6,
+    borderRightWidth: 8,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderRightColor: PALETTE.warmBrown,
+  },
+  // Input section
+  inputSection: {
+    marginBottom: 20,
+  },
+  parchmentPanel: {
+    backgroundColor: PALETTE.cream,
+    borderWidth: 2,
+    borderColor: PALETTE.warmBrown,
+    borderRadius: 16,
+    padding: 20,
+    elevation: 3,
+    shadowColor: PALETTE.darkBrown,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.darkBrown,
+    marginBottom: 10,
+  },
+  input: {
+    borderWidth: 2,
     borderColor: PALETTE.warmBrown,
     borderRadius: 10,
     paddingHorizontal: 16,
-    paddingVertical: 12,
+    paddingVertical: 14,
     fontSize: 16,
     fontFamily: FONTS.bodyRegular,
     color: PALETTE.darkBrown,
-    backgroundColor: PALETTE.cream,
+    backgroundColor: PALETTE.parchmentBg,
     marginBottom: 16,
   },
   inputFocused: {
@@ -182,19 +259,26 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: 'center',
-    borderBottomWidth: 2,
+    borderBottomWidth: 3,
     borderBottomColor: PALETTE.warmBrown,
   },
   buttonPressed: {
     borderBottomWidth: 0,
-    transform: [{ translateY: 2 }],
+    transform: [{ translateY: 3 }],
   },
   buttonDisabled: {
     opacity: 0.6,
   },
   buttonText: {
     color: PALETTE.darkBrown,
-    fontSize: 16,
+    fontSize: 17,
     fontFamily: FONTS.bodySemiBold,
+  },
+  // Bottom
+  hintText: {
+    fontSize: 12,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
   },
 });

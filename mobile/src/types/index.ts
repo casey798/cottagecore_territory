@@ -86,6 +86,7 @@ export interface MinigameInfo {
   name: string;
   timeLimit: number;
   description: string;
+  completed?: boolean;
 }
 
 export interface QrData {
@@ -99,6 +100,7 @@ export interface ScanQRResponse {
   locationId: string;
   locationName: string;
   availableMinigames: MinigameInfo[];
+  xpAvailable?: boolean;
 }
 
 export interface GameSession {
@@ -121,6 +123,7 @@ export interface StartGameResponse {
   sessionId: string;
   serverTimestamp: string;
   timeLimit: number;
+  salt: string;
   puzzleData: Record<string, unknown>;
 }
 
@@ -138,17 +141,11 @@ export interface ChestDrop {
 export interface CompleteGameResponse {
   result: GameResult;
   xpEarned: number;
+  xpAwarded?: boolean;
   newTodayXp?: number;
   clanTodayXp?: number;
   chestDrop: ChestDrop;
-  cooldownEndsAt?: string;
   locationLocked?: boolean;
-}
-
-export interface CooldownResponse {
-  onCooldown: boolean;
-  cooldownEndsAt: string | null;
-  remainingSeconds: number;
 }
 
 export interface ClanScore {
@@ -282,7 +279,8 @@ export enum ErrorCode {
   NotAssigned = 'NOT_ASSIGNED',
   LocationLocked = 'LOCATION_LOCKED',
   DailyCapReached = 'DAILY_CAP_REACHED',
-  OnCooldown = 'ON_COOLDOWN',
+  MinigameAlreadyPlayed = 'MINIGAME_ALREADY_PLAYED',
+  LocationExhausted = 'LOCATION_EXHAUSTED',
   SessionNotFound = 'SESSION_NOT_FOUND',
   SessionCompleted = 'SESSION_COMPLETED',
   InvalidHash = 'INVALID_HASH',

@@ -1,6 +1,6 @@
-import React, { useCallback, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, BackHandler, Modal, Pressable } from 'react-native';
+import { useNavigation, useRoute, RouteProp, EventArg } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { PALETTE, UI } from '@/constants/colors';
@@ -8,9 +8,14 @@ import { FONTS } from '@/constants/fonts';
 import { useCountdown } from '@/hooks/useCountdown';
 import { useGameStore } from '@/store/useGameStore';
 import { useAuthStore } from '@/store/useAuthStore';
-import { generateCompletionHash } from '@/utils/hmac';
+import { generateCompletionHash, generateClientCompletionHash } from '@/utils/hmac';
 import * as gameApi from '@/api/game';
 import { GameResult } from '@/types';
+import { MinigameResult, MinigamePlayProps } from '@/types/minigame';
+import { useLockPortrait } from '@/hooks/useScreenOrientation';
+import GroveWordsGame from '@/minigames/grove-words/GroveWordsGame';
+import KindredGame from '@/minigames/kindred/KindredGame';
+import StonePairsGame from '@/minigames/stone-pairs/StonePairsGame';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type PlayRoute = RouteProp<MainModalParamList, 'MinigamePlay'>;
@@ -30,8 +35,16 @@ const MINIGAME_NAMES: Record<string, string> = {
   'path-weaver': 'Path Weaver',
 };
 
+const IMPLEMENTED_MINIGAMES: Record<string, React.ComponentType<MinigamePlayProps>> = {
+  'grove-words': GroveWordsGame,
+  'kindred': KindredGame,
+  'stone-pairs': StonePairsGame,
+};
+
 interface MinigameCompleteData {
-  result: 'win' | 'lose';
+  result: 'win' | 'lose' | 'timeout';
+  completionHash: string;
+  timeTaken: number;
   solutionData: Record<string, unknown>;
 }
 
@@ -42,6 +55,7 @@ function MinigamePlaceholder({
   minigameId: string;
   onComplete: (data: MinigameCompleteData) => void;
 }) {
+  useLockPortrait();
   return (
     <View style={placeholderStyles.container}>
       <Text style={placeholderStyles.name}>
@@ -51,13 +65,13 @@ function MinigamePlaceholder({
       <View style={placeholderStyles.buttons}>
         <TouchableOpacity
           style={[placeholderStyles.btn, placeholderStyles.btnWin]}
-          onPress={() => onComplete({ result: 'win', solutionData: {} })}
+          onPress={() => onComplete({ result: 'win', completionHash: '', timeTaken: 0, solutionData: {} })}
         >
           <Text style={placeholderStyles.btnText}>Simulate Win</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[placeholderStyles.btn, placeholderStyles.btnLose]}
-          onPress={() => onComplete({ result: 'lose', solutionData: {} })}
+          onPress={() => onComplete({ result: 'lose', completionHash: '', timeTaken: 0, solutionData: {} })}
         >
           <Text style={placeholderStyles.btnText}>Simulate Lose</Text>
         </TouchableOpacity>
@@ -109,13 +123,13 @@ const placeholderStyles = StyleSheet.create({
 export default function MinigamePlayScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<PlayRoute>();
-  const { sessionId, minigameId, timeLimit } = route.params;
+  const { sessionId, minigameId, timeLimit, salt, locationId, locationName, xpAvailable } = route.params;
   const userId = useAuthStore((s) => s.userId) || '';
   const todayXp = useGameStore((s) => s.todayXp);
   const recordWin = useGameStore((s) => s.recordWin);
-  const setCooldown = useGameStore((s) => s.setCooldown);
   const [submitting, setSubmitting] = useState(false);
   const hasCompletedRef = useRef(false);
+  const startTimeRef = useRef(Date.now());
 
   const timerEnd = useRef(new Date(Date.now() + timeLimit * 1000)).current;
   const countdown = useCountdown(timerEnd);
@@ -126,39 +140,42 @@ export default function MinigamePlayScreen() {
       hasCompletedRef.current = true;
       setSubmitting(true);
 
-      // If timer expired, force lose
-      const finalResult: GameResult = countdown.isExpired ? 'lose' : data.result;
+      // Send original result (win/lose/timeout) — backend accepts all three
+      const finalResult: GameResult = data.result;
 
-      const completionHash = generateCompletionHash(
-        sessionId,
-        userId,
-        finalResult,
-        sessionId, // salt — server stores _salt on session
-      );
+      // Use the hash from the minigame component if provided, otherwise compute for placeholders
+      let completionHash = data.completionHash;
+      let timeTaken = data.timeTaken;
+      if (!completionHash) {
+        // Placeholder fallback: use old server-salt-based hash
+        timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
+        completionHash = generateCompletionHash(sessionId, userId, finalResult, salt);
+      }
 
       try {
         const result = await gameApi.completeMinigame(
           sessionId,
           finalResult,
           completionHash,
+          timeTaken,
           data.solutionData,
         );
 
         if (result.success && result.data) {
           if (result.data.result === 'win') {
             recordWin();
-            if (result.data.cooldownEndsAt) {
-              setCooldown(result.data.cooldownEndsAt);
-            }
           }
           navigation.replace('Result', {
             result: result.data.result === 'win' ? 'win' : 'lose',
             xpEarned: result.data.xpEarned,
+            xpAwarded: result.data.xpAwarded,
             newTodayXp: result.data.newTodayXp,
             clanTodayXp: result.data.clanTodayXp,
             chestDrop: result.data.chestDrop,
-            cooldownEndsAt: result.data.cooldownEndsAt,
             locationLocked: result.data.locationLocked,
+            locationId,
+            locationName,
+            minigameId,
           });
         } else {
           Alert.alert('Error', result.error?.message || 'Failed to submit result.');
@@ -171,17 +188,73 @@ export default function MinigamePlayScreen() {
         setSubmitting(false);
       }
     },
-    [sessionId, userId, countdown.isExpired, submitting, navigation, recordWin, setCooldown],
+    [sessionId, userId, submitting, navigation, recordWin, salt],
   );
+
+  const handleMinigameComplete = useCallback(
+    (minigameResult: MinigameResult) => {
+      handleComplete({
+        result: minigameResult.result,
+        completionHash: minigameResult.completionHash,
+        timeTaken: minigameResult.timeTaken,
+        solutionData: minigameResult.solutionData,
+      });
+    },
+    [handleComplete],
+  );
+
+  // ---- Back-navigation intercept (location lock on abandon) ----------------
+  const [showLeaveModal, setShowLeaveModal] = useState(false);
+  const pendingNavActionRef = useRef<EventArg<'beforeRemove', true, any> | null>(null);
+
+  // Intercept React Navigation's beforeRemove event
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
+      // Allow navigation if game is already finished or submitting
+      if (hasCompletedRef.current || submitting) return;
+
+      // Prevent default navigation and show confirmation modal
+      e.preventDefault();
+      pendingNavActionRef.current = e;
+      setShowLeaveModal(true);
+    });
+    return unsubscribe;
+  }, [navigation, submitting]);
+
+  // Intercept Android hardware back button
+  useEffect(() => {
+    const handler = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (hasCompletedRef.current || submitting) return false;
+      setShowLeaveModal(true);
+      return true; // consume the event
+    });
+    return () => handler.remove();
+  }, [submitting]);
+
+  const handleLeaveConfirm = useCallback(() => {
+    setShowLeaveModal(false);
+    // Fire a lose through the same path as any other loss
+    const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
+    const hash = generateClientCompletionHash(sessionId, 'lose', elapsed);
+    handleComplete({ result: 'lose', completionHash: hash, timeTaken: elapsed, solutionData: { abandoned: true } });
+  }, [handleComplete, sessionId]);
+
+  const handleLeaveCancel = useCallback(() => {
+    setShowLeaveModal(false);
+    pendingNavActionRef.current = null;
+  }, []);
 
   // Auto-lose on timer expiry
   React.useEffect(() => {
     if (countdown.isExpired && !hasCompletedRef.current) {
-      handleComplete({ result: 'lose', solutionData: {} });
+      const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
+      const hash = generateClientCompletionHash(sessionId, 'timeout', elapsed);
+      handleComplete({ result: 'timeout', completionHash: hash, timeTaken: elapsed, solutionData: {} });
     }
-  }, [countdown.isExpired, handleComplete]);
+  }, [countdown.isExpired, handleComplete, sessionId]);
 
   const gameName = MINIGAME_NAMES[minigameId] || minigameId;
+  const MinigameComponent = IMPLEMENTED_MINIGAMES[minigameId];
 
   return (
     <View style={styles.container}>
@@ -194,18 +267,54 @@ export default function MinigamePlayScreen() {
         </View>
         <Text style={styles.xpText}>{todayXp} XP</Text>
       </View>
+      {xpAvailable === false && (
+        <View style={styles.practiceBar}>
+          <Text style={styles.practiceText}>Practice mode — no XP</Text>
+        </View>
+      )}
       <View style={styles.gameArea}>
-        {/* TODO: render actual minigame components here based on minigameId */}
-        <MinigamePlaceholder
-          minigameId={minigameId}
-          onComplete={handleComplete}
-        />
+        {MinigameComponent ? (
+          <MinigameComponent
+            sessionId={sessionId}
+            timeLimit={timeLimit}
+            onComplete={handleMinigameComplete}
+          />
+        ) : (
+          <MinigamePlaceholder
+            minigameId={minigameId}
+            onComplete={handleComplete}
+          />
+        )}
       </View>
       {submitting && (
         <View style={styles.submittingOverlay}>
           <Text style={styles.submittingText}>Submitting...</Text>
         </View>
       )}
+      {/* Leave-game confirmation modal */}
+      <Modal
+        visible={showLeaveModal}
+        transparent
+        animationType="fade"
+        onRequestClose={handleLeaveCancel}
+      >
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Leave game?</Text>
+            <Text style={styles.modalBody}>
+              Leaving now will lock this location for the rest of the day — just like a loss. Are you sure?
+            </Text>
+            <View style={styles.modalButtons}>
+              <Pressable style={[styles.modalBtn, styles.modalBtnStay]} onPress={handleLeaveCancel}>
+                <Text style={styles.modalBtnStayText}>Stay</Text>
+              </Pressable>
+              <Pressable style={[styles.modalBtn, styles.modalBtnLeave]} onPress={handleLeaveConfirm}>
+                <Text style={styles.modalBtnLeaveText}>Leave anyway</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -250,6 +359,16 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.honeyGold,
   },
+  practiceBar: {
+    backgroundColor: PALETTE.stoneGrey,
+    paddingVertical: 6,
+    alignItems: 'center',
+  },
+  practiceText: {
+    fontSize: 12,
+    fontFamily: FONTS.bodySemiBold,
+    color: '#FFFFFF',
+  },
   gameArea: {
     flex: 1,
   },
@@ -262,6 +381,62 @@ const styles = StyleSheet.create({
   submittingText: {
     color: PALETTE.cream,
     fontSize: 18,
+    fontFamily: FONTS.bodySemiBold,
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCard: {
+    width: '80%',
+    backgroundColor: PALETTE.cream,
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontFamily: FONTS.headerBold,
+    color: PALETTE.darkBrown,
+    marginBottom: 12,
+  },
+  modalBody: {
+    fontSize: 14,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.darkBrown,
+    textAlign: 'center',
+    lineHeight: 20,
+    marginBottom: 24,
+  },
+  modalButtons: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  modalBtn: {
+    paddingHorizontal: 24,
+    paddingVertical: 12,
+    borderRadius: 10,
+    minWidth: 110,
+    alignItems: 'center',
+  },
+  modalBtnStay: {
+    backgroundColor: PALETTE.deepGreen,
+  },
+  modalBtnStayText: {
+    color: PALETTE.cream,
+    fontSize: 15,
+    fontFamily: FONTS.bodyBold,
+  },
+  modalBtnLeave: {
+    backgroundColor: 'transparent',
+    borderWidth: 2,
+    borderColor: PALETTE.mutedRose,
+  },
+  modalBtnLeaveText: {
+    color: PALETTE.mutedRose,
+    fontSize: 15,
     fontFamily: FONTS.bodySemiBold,
   },
 });

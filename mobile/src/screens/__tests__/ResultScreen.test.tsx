@@ -6,9 +6,7 @@ jest.mock('react-native/Libraries/Animated/NativeAnimatedHelper');
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ popToTop: jest.fn() }),
   useRoute: () => ({ params: mockParams }),
-}));
-jest.mock('@/hooks/useCountdown', () => ({
-  useCountdown: () => ({ remaining: 0, formatted: '0:00', isExpired: true }),
+  useFocusEffect: (cb: () => void) => cb(),
 }));
 jest.mock('@/store/useClanStore', () => ({
   useClanStore: (selector: (s: unknown) => unknown) =>
@@ -17,6 +15,19 @@ jest.mock('@/store/useClanStore', () => ({
         { clanId: 'ember', todayXp: 500, seasonXp: 2000, spacesCaptured: 3 },
         { clanId: 'tide', todayXp: 750, seasonXp: 1800, spacesCaptured: 2 },
       ],
+    }),
+}));
+jest.mock('@/store/useGameStore', () => ({
+  useGameStore: (selector: (s: unknown) => unknown) =>
+    selector({
+      markMinigameCompleted: jest.fn(),
+      markXpEarnedAtLocation: jest.fn(),
+    }),
+}));
+jest.mock('@/store/useMapStore', () => ({
+  useMapStore: (selector: (s: unknown) => unknown) =>
+    selector({
+      lockLocation: jest.fn(),
     }),
 }));
 
@@ -37,7 +48,6 @@ describe('ResultScreen', () => {
       newTodayXp: 50,
       clanTodayXp: 200,
       chestDrop: { dropped: false },
-      cooldownEndsAt: null,
       locationLocked: false,
     };
 
@@ -64,7 +74,6 @@ describe('ResultScreen', () => {
           imageKey: 'banners/golden.png',
         },
       },
-      cooldownEndsAt: null,
       locationLocked: false,
     };
 
@@ -82,7 +91,6 @@ describe('ResultScreen', () => {
       newTodayXp: 25,
       clanTodayXp: 100,
       chestDrop: { dropped: false },
-      cooldownEndsAt: null,
       locationLocked: false,
     };
 
@@ -96,7 +104,6 @@ describe('ResultScreen', () => {
       result: 'lose',
       xpEarned: 0,
       chestDrop: { dropped: false },
-      cooldownEndsAt: null,
       locationLocked: false,
     };
 
@@ -110,7 +117,6 @@ describe('ResultScreen', () => {
       result: 'lose',
       xpEarned: 0,
       chestDrop: { dropped: false },
-      cooldownEndsAt: null,
       locationLocked: true,
     };
 
@@ -122,6 +128,23 @@ describe('ResultScreen', () => {
     ).toBeTruthy();
   });
 
+  it('win with xpAwarded=false shows practice message', () => {
+    mockParams = {
+      result: 'win',
+      xpEarned: 0,
+      xpAwarded: false,
+      chestDrop: { dropped: false },
+      locationLocked: false,
+    };
+
+    const { getByText } = render(<ResultScreen />);
+
+    expect(getByText('Challenge Complete!')).toBeTruthy();
+    expect(
+      getByText("No XP earned — you've already harvested this grove today."),
+    ).toBeTruthy();
+  });
+
   it('shows mini clan scoreboard', () => {
     mockParams = {
       result: 'win',
@@ -129,7 +152,6 @@ describe('ResultScreen', () => {
       newTodayXp: 25,
       clanTodayXp: 100,
       chestDrop: { dropped: false },
-      cooldownEndsAt: null,
       locationLocked: false,
     };
 

@@ -85,8 +85,15 @@ export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {},
 ): Promise<ApiResponse<T>> {
-  const stored = await getStoredTokens();
-  const token = stored?.token;
+  // Read token from the Zustand auth store first (always up-to-date in memory),
+  // then fall back to Keychain for cases where the store hasn't loaded yet.
+  const { useAuthStore } = require('@/store/useAuthStore');
+  const storeToken: string | null = useAuthStore.getState().token;
+  let token = storeToken;
+  if (!token) {
+    const stored = await getStoredTokens();
+    token = stored?.token ?? null;
+  }
 
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',

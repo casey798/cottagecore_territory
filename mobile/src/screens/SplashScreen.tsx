@@ -3,8 +3,10 @@ import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
+import { useLockPortrait } from '@/hooks/useScreenOrientation';
 
 export default function SplashScreen() {
+  useLockPortrait();
   const restoreSession = useAuthStore((s) => s.restoreSession);
 
   useEffect(() => {

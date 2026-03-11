@@ -15,12 +15,12 @@ import {
   useCameraDevice,
   useCodeScanner,
 } from 'react-native-vision-camera';
-import Orientation from 'react-native-orientation-locker';
 import { MainModalParamList } from '@/navigation/MainStack';
+import { useLockPortrait } from '@/hooks/useScreenOrientation';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { useGPS } from '@/hooks/useGPS';
 import { useGameStore } from '@/store/useGameStore';
+import { useMapStore } from '@/store/useMapStore';
 import { parseQrPayload } from '@/utils/qrValidation';
 import { getTodayISTString } from '@/utils/time';
 import * as gameApi from '@/api/game';
@@ -34,43 +34,47 @@ const ERROR_MESSAGES: Record<string, string> = {
     "This QR code is from a previous day. Ask admin for today's code.",
   [ErrorCode.QrInvalid]:
     "Invalid QR code. Make sure you're scanning the official GroveWars code.",
-  [ErrorCode.GpsOutOfRange]:
-    "You're not close enough to this location. Move closer and try again.",
   [ErrorCode.NotAssigned]:
     "This location isn't in your assignment today. Check your map for your locations.",
   [ErrorCode.LocationLocked]:
     "You've already lost at this location today. Try a different spot!",
   [ErrorCode.DailyCapReached]:
     "You've earned all 100 XP for today! Come back tomorrow.",
-  [ErrorCode.OnCooldown]: 'Cooldown active. Wait before playing again.',
+  [ErrorCode.LocationExhausted]:
+    "You've mastered all challenges here today — try another location!",
 };
 
-const GPS_TIMEOUT_MS = 10000;
 const ERROR_RESUME_MS = 3000;
 
 export default function QRScannerScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
   const locationName = route.params?.locationName;
-  const gps = useGPS();
+  const prefilledLocationId = route.params?.locationId;
   const setScanResult = useGameStore((s) => s.setScanResult);
+  const todayLocations = useMapStore((s) => s.todayLocations);
   const [processing, setProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [gpsTimedOut, setGpsTimedOut] = useState(false);
   const [cameraPermission, setCameraPermission] = useState<string | null>(null);
-  const mountTimeRef = useRef(Date.now());
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const hasGps = gps.latitude !== null && gps.longitude !== null;
   const device = useCameraDevice('back');
 
-  // Lock to portrait on mount, restore landscape on unmount
+  useLockPortrait();
+
+  // Check if location is locked — redirect back immediately
   useEffect(() => {
-    Orientation.lockToPortrait();
-    return () => {
-      Orientation.lockToLandscape();
-    };
-  }, []);
+    if (prefilledLocationId) {
+      const loc = todayLocations.find((l) => l.locationId === prefilledLocationId);
+      if (loc?.locked) {
+        Alert.alert(
+          'Location Locked',
+          'The grove has closed this path for today...',
+          [{ text: 'OK', onPress: () => navigation.goBack() }],
+        );
+      }
+    }
+  }, [prefilledLocationId, todayLocations, navigation]);
 
   // Request camera permission on mount
   useEffect(() => {
@@ -80,23 +84,6 @@ export default function QRScannerScreen() {
     }
     requestCamera();
   }, []);
-
-  useEffect(() => {
-    if (hasGps || gps.permissionDenied) return;
-
-    const remaining = GPS_TIMEOUT_MS - (Date.now() - mountTimeRef.current);
-    if (remaining <= 0) {
-      setGpsTimedOut(true);
-      return;
-    }
-
-    const timer = setTimeout(() => setGpsTimedOut(true), remaining);
-    return () => clearTimeout(timer);
-  }, [hasGps, gps.permissionDenied]);
-
-  useEffect(() => {
-    if (hasGps) setGpsTimedOut(false);
-  }, [hasGps]);
 
   // Cleanup error timer on unmount
   useEffect(() => {
@@ -114,6 +101,38 @@ export default function QRScannerScreen() {
     }, ERROR_RESUME_MS);
   }, []);
 
+  const handleScanResult = useCallback(
+    async (qrData: { v: number; l: string; d: string; h: string }) => {
+      // Client-side lock guard
+      const scannedLoc = todayLocations.find((l) => l.locationId === qrData.l);
+      if (scannedLoc?.locked) {
+        showErrorAndResume('The grove has closed this path for today...');
+        return;
+      }
+
+      try {
+        const result = await gameApi.scanQR(qrData);
+        if (result.success && result.data) {
+          setScanResult(result.data);
+          navigation.replace('MinigameSelect', {
+            locationId: result.data.locationId,
+            locationName: result.data.locationName,
+          });
+        } else {
+          const code = result.error?.code || '';
+          const message =
+            ERROR_MESSAGES[code] ||
+            result.error?.message ||
+            'Something went wrong. Please try again.';
+          showErrorAndResume(message);
+        }
+      } catch {
+        showErrorAndResume('Something went wrong. Please try again.');
+      }
+    },
+    [setScanResult, navigation, showErrorAndResume, todayLocations],
+  );
+
   const handleQRDetected = useCallback(
     async (rawData: string) => {
       if (processing || errorMsg) return;
@@ -125,38 +144,9 @@ export default function QRScannerScreen() {
         return;
       }
 
-      if (!gps.latitude || !gps.longitude) {
-        showErrorAndResume(
-          'Still acquiring your location. Please wait a moment and try again.',
-        );
-        return;
-      }
-
-      try {
-        const result = await gameApi.scanQR(qrData, gps.latitude, gps.longitude);
-        if (result.success && result.data) {
-          setScanResult(result.data);
-          navigation.replace('MinigameSelect', {
-            locationId: result.data.locationId,
-            locationName: result.data.locationName,
-          });
-        } else {
-          const code = result.error?.code || '';
-          let message =
-            ERROR_MESSAGES[code] ||
-            result.error?.message ||
-            'Something went wrong. Please try again.';
-          // Append cooldown seconds for ON_COOLDOWN
-          if (code === ErrorCode.OnCooldown && result.error?.message) {
-            message = result.error.message;
-          }
-          showErrorAndResume(message);
-        }
-      } catch {
-        showErrorAndResume('Something went wrong. Please try again.');
-      }
+      await handleScanResult(qrData);
     },
-    [processing, errorMsg, gps.latitude, gps.longitude, setScanResult, navigation, showErrorAndResume],
+    [processing, errorMsg, showErrorAndResume, handleScanResult],
   );
 
   const codeScanner = useCodeScanner({
@@ -167,41 +157,6 @@ export default function QRScannerScreen() {
       }
     },
   });
-
-  const renderGpsBanner = () => {
-    if (gps.permissionDenied) {
-      return (
-        <View style={[styles.gpsBanner, styles.gpsBannerError]}>
-          <Text style={styles.gpsBannerText}>
-            Location permission denied. Enable it in Settings to scan QR codes.
-          </Text>
-        </View>
-      );
-    }
-
-    if (!hasGps && gpsTimedOut) {
-      return (
-        <View style={[styles.gpsBanner, styles.gpsBannerWarning]}>
-          <Text style={styles.gpsBannerText}>
-            GPS signal weak. Move to an open area or check location settings.
-          </Text>
-        </View>
-      );
-    }
-
-    if (!hasGps) {
-      return (
-        <View style={[styles.gpsBanner, styles.gpsBannerLoading]}>
-          <ActivityIndicator size="small" color={PALETTE.cream} />
-          <Text style={[styles.gpsBannerText, { marginLeft: 8 }]}>
-            Waiting for GPS signal...
-          </Text>
-        </View>
-      );
-    }
-
-    return null;
-  };
 
   const renderCamera = () => {
     // Still checking permission
@@ -273,7 +228,6 @@ export default function QRScannerScreen() {
           <Text style={styles.errorText}>{errorMsg}</Text>
         </View>
       )}
-      {renderGpsBanner()}
       <TouchableOpacity
         style={styles.backButton}
         onPress={() => navigation.goBack()}
@@ -285,26 +239,38 @@ export default function QRScannerScreen() {
         <TouchableOpacity
           style={styles.devButton}
           onPress={() => {
+            if (processing) return;
+
             const todayLocations = useGameStore.getState().todayLocations;
             if (!todayLocations || todayLocations.length === 0) {
               Alert.alert('No locations', 'No locations assigned today');
               return;
             }
-            console.log('[DEV Scan] GPS coords being sent:', {
-              lat: gps.latitude,
-              lng: gps.longitude,
-              accuracy: gps.accuracy,
-            });
-            console.log('[DEV Scan] Target location:', todayLocations[0].locationId, todayLocations[0].name);
-            const today = getTodayISTString();
-            handleQRDetected(
-              JSON.stringify({
-                v: 1,
-                l: todayLocations[0].locationId,
-                d: today,
-                h: 'dev-bypass',
-              }),
-            );
+
+            const doScan = (loc: { locationId: string; name: string }) => {
+              console.log('[DEV Scan] Target location:', loc.locationId, loc.name);
+              const today = getTodayISTString();
+              setProcessing(true);
+              handleScanResult({ v: 1, l: loc.locationId, d: today, h: 'dev-bypass' });
+            };
+
+            // If locationId was pre-filled from the bottom sheet, use it directly
+            if (prefilledLocationId) {
+              const matched = todayLocations.find((l) => l.locationId === prefilledLocationId);
+              if (matched) {
+                doScan(matched);
+                return;
+              }
+            }
+
+            // Otherwise show picker
+            const buttons = todayLocations.map((loc) => ({
+              text: loc.name,
+              onPress: () => doScan(loc),
+            }));
+            buttons.push({ text: 'Cancel', onPress: () => {} });
+
+            Alert.alert('Select Location', 'Pick a location to simulate scan:', buttons);
           }}
         >
           <Text style={styles.devButtonText}>DEV: Simulate Scan</Text>
@@ -400,31 +366,6 @@ const styles = StyleSheet.create({
   errorText: {
     color: '#FFFFFF',
     fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-    textAlign: 'center',
-  },
-  gpsBanner: {
-    position: 'absolute',
-    bottom: 72,
-    alignSelf: 'center',
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  gpsBannerLoading: {
-    backgroundColor: 'rgba(61, 43, 31, 0.85)',
-  },
-  gpsBannerWarning: {
-    backgroundColor: 'rgba(211, 168, 67, 0.9)',
-  },
-  gpsBannerError: {
-    backgroundColor: 'rgba(192, 57, 43, 0.9)',
-  },
-  gpsBannerText: {
-    color: PALETTE.cream,
-    fontSize: 13,
     fontFamily: FONTS.bodySemiBold,
     textAlign: 'center',
   },

@@ -1,4 +1,4 @@
-import { canEarnXp, xpToWinsRemaining, isOnCooldown } from '../xpCalculations';
+import { canEarnXp, xpToWinsRemaining } from '../xpCalculations';
 
 describe('xpCalculations', () => {
   describe('canEarnXp', () => {
@@ -34,19 +34,4 @@ describe('xpCalculations', () => {
     });
   });
 
-  describe('isOnCooldown', () => {
-    it('returns false for null', () => {
-      expect(isOnCooldown(null)).toBe(false);
-    });
-
-    it('returns true for future time', () => {
-      const future = new Date(Date.now() + 60000).toISOString();
-      expect(isOnCooldown(future)).toBe(true);
-    });
-
-    it('returns false for past time', () => {
-      const past = new Date(Date.now() - 60000).toISOString();
-      expect(isOnCooldown(past)).toBe(false);
-    });
-  });
 });
