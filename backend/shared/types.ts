@@ -386,9 +386,6 @@ export interface ChestDrop {
 }
 
 export interface JwtPayload {
-  sub: string;
-  email: string;
-  'custom:clan': string;
-  'custom:displayName': string;
-  'cognito:groups'?: string[];
+  uid: string;
+  email?: string;
 }

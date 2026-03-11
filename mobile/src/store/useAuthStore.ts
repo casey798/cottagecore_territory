@@ -6,6 +6,8 @@ import * as authApi from '@/api/auth';
 import * as playerApi from '@/api/player';
 import { storeTokens, clearTokens, getStoredTokens } from '@/api/client';
 import { DEV_CONFIG } from '@/constants/config';
+import { apiRequest } from '@/api/client';
+import { ENDPOINTS } from '@/constants/api';
 
 function maybeOverrideClan(clan: ClanId | null, email: string | null): ClanId | null {
   if (
@@ -23,15 +25,15 @@ function maybeOverrideClan(clan: ClanId | null, email: string | null): ClanId | 
 interface AuthState {
   userId: string | null;
   token: string | null;
-  refreshToken: string | null;
   clan: ClanId | null;
   email: string | null;
   tutorialDone: boolean;
   isAuthenticated: boolean;
   isHydrated: boolean;
   isLoading: boolean;
-  login: (email: string, code: string) => Promise<boolean>;
+  googleSignIn: () => Promise<{ success: boolean; errorCode?: string; errorMessage?: string }>;
   logout: () => Promise<void>;
+  setClan: (clan: ClanId) => Promise<boolean>;
   refreshSession: () => Promise<boolean>;
   setTutorialDone: () => void;
   restoreSession: () => Promise<boolean>;
@@ -42,7 +44,6 @@ export const useAuthStore = create<AuthState>()(
     (set) => ({
       userId: null,
       token: null,
-      refreshToken: null,
       clan: null,
       email: null,
       tutorialDone: false,
@@ -50,39 +51,70 @@ export const useAuthStore = create<AuthState>()(
       isHydrated: false,
       isLoading: false,
 
-      login: async (email: string, code: string) => {
+      googleSignIn: async () => {
         set({ isLoading: true });
-        const result = await authApi.login(email, code);
+        const result = await authApi.googleSignIn();
         if (result.success && result.data) {
-          await storeTokens(result.data.token, result.data.refreshToken);
+          await storeTokens(result.data.token, '');
           set({
             userId: result.data.userId,
             token: result.data.token,
-            refreshToken: result.data.refreshToken,
-            clan: maybeOverrideClan(result.data.clan, email),
-            email,
+            clan: maybeOverrideClan(result.data.clan, null),
+            email: null,
             tutorialDone: result.data.tutorialDone,
             isAuthenticated: true,
             isLoading: false,
           });
-          return true;
+
+          // Warm up the Lambda authorizer by making a profile call.
+          // This also fetches the latest user data (e.g. clan from roster).
+          const profile = await playerApi.getProfile();
+          if (profile.success && profile.data) {
+            const profileEmail = profile.data.email ?? null;
+            set({
+              clan: maybeOverrideClan(profile.data.clan, profileEmail),
+              email: profileEmail,
+              tutorialDone: profile.data.tutorialDone,
+            });
+          }
+
+          return { success: true };
         }
         set({ isLoading: false });
-        return false;
+        return {
+          success: false,
+          errorCode: result.error?.code,
+          errorMessage: result.error?.message,
+        };
       },
 
       logout: async () => {
+        await authApi.signOut();
         await clearTokens();
         set({
           userId: null,
           token: null,
-          refreshToken: null,
           clan: null,
           email: null,
           tutorialDone: false,
           isAuthenticated: false,
           isLoading: false,
         });
+      },
+
+      setClan: async (clan: ClanId) => {
+        const result = await apiRequest<{ clan: ClanId }>(
+          ENDPOINTS.PLAYER_CLAN,
+          {
+            method: 'PUT',
+            body: JSON.stringify({ clan }),
+          }
+        );
+        if (result.success) {
+          set({ clan });
+          return true;
+        }
+        return false;
       },
 
       refreshSession: async () => {
@@ -94,7 +126,6 @@ export const useAuthStore = create<AuthState>()(
           set({
             userId: result.data.userId,
             token: stored.token,
-            refreshToken: stored.refreshToken,
             clan: maybeOverrideClan(result.data.clan, currentEmail),
             tutorialDone: result.data.tutorialDone,
             isAuthenticated: true,
@@ -121,7 +152,6 @@ export const useAuthStore = create<AuthState>()(
           set({
             userId: result.data.userId,
             token: stored.token,
-            refreshToken: stored.refreshToken,
             clan: maybeOverrideClan(result.data.clan, restoredEmail),
             email: restoredEmail,
             tutorialDone: result.data.tutorialDone,
@@ -141,7 +171,6 @@ export const useAuthStore = create<AuthState>()(
       partialize: (state) => ({
         userId: state.userId,
         token: state.token,
-        refreshToken: state.refreshToken,
         clan: state.clan,
         tutorialDone: state.tutorialDone,
         email: state.email,

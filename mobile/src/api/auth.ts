@@ -1,175 +1,112 @@
-import {
-  CognitoUserPool,
-  CognitoUser,
-  CognitoUserSession,
-  AuthenticationDetails,
-} from 'amazon-cognito-identity-js';
-import { USER_POOL_ID, USER_POOL_CLIENT_ID } from '@/constants/api';
+import { getAuth, signInWithCredential, signOut as firebaseSignOut, GoogleAuthProvider } from '@react-native-firebase/auth';
+import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { BASE_URL, ENDPOINTS } from '@/constants/api';
 import { ApiResponse, ClanId } from '@/types';
-import { storeTokens } from './client';
 
-const userPool = new CognitoUserPool({
-  UserPoolId: USER_POOL_ID,
-  ClientId: USER_POOL_CLIENT_ID,
-});
+const GOOGLE_WEB_CLIENT_ID =
+  '425457815141-c7qp4l9sjkn5fgcv9t3odnu83j4nd3nh.apps.googleusercontent.com';
 
-interface AuthResult {
+let googleSignInConfigured = false;
+
+export function configureGoogleSignIn(): void {
+  if (googleSignInConfigured) return;
+  GoogleSignin.configure({
+    webClientId: GOOGLE_WEB_CLIENT_ID,
+  });
+  googleSignInConfigured = true;
+}
+
+export interface AuthResult {
   userId: string;
   token: string;
-  refreshToken: string;
-  clan: ClanId;
+  clan: ClanId | null;
   tutorialDone: boolean;
 }
 
-// Persists the CognitoUser between signup (initiateAuth) and verify (sendCustomChallengeAnswer)
-let pendingCognitoUser: CognitoUser | null = null;
+export async function googleSignIn(): Promise<ApiResponse<AuthResult>> {
+  try {
+    // Ensure configured (idempotent)
+    configureGoogleSignIn();
 
-function extractAuthResult(
-  session: CognitoUserSession,
-): AuthResult {
-  const token = session.getIdToken().getJwtToken();
-  const refreshToken = session.getRefreshToken().getToken();
-  const payload = session.getIdToken().decodePayload();
-  return {
-    userId: payload.sub as string,
-    token,
-    refreshToken,
-    clan: (payload['custom:clan'] || 'ember') as ClanId,
-    tutorialDone: payload['custom:tutorialDone'] === 'true',
-  };
-}
+    // Sign out first to force account picker
+    try { await GoogleSignin.signOut(); } catch { /* ok */ }
 
-export function signup(email: string): Promise<ApiResponse<{ message: string }>> {
-  return new Promise((resolve) => {
-    const cognitoUser = new CognitoUser({
-      Username: email,
-      Pool: userPool,
-    });
+    // Sign in with Google
+    await GoogleSignin.hasPlayServices();
+    const signInResult = await GoogleSignin.signIn();
+    const idToken = signInResult.data?.idToken;
 
-    cognitoUser.initiateAuth(
-      new AuthenticationDetails({
-        Username: email,
-      }),
-      {
-        onSuccess: () => {
-          resolve({
-            success: true,
-            data: { message: `Verification code sent to ${email}` },
-          });
-        },
-        onFailure: (err) => {
-          const code = err.code === 'UserNotFoundException'
-            ? 'NOT_IN_ROSTER'
-            : 'AUTH_ERROR';
-          resolve({
-            success: false,
-            error: { code, message: err.message },
-          });
-        },
-        customChallenge: () => {
-          // Store the user so verify() can call sendCustomChallengeAnswer on it
-          pendingCognitoUser = cognitoUser;
-          resolve({
-            success: true,
-            data: { message: `Verification code sent to ${email}` },
-          });
-        },
-      },
-    );
-  });
-}
-
-export function verify(
-  email: string,
-  code: string,
-): Promise<ApiResponse<AuthResult>> {
-  return new Promise((resolve) => {
-    // If we have a pending user from signup, answer the existing challenge
-    if (pendingCognitoUser) {
-      const user = pendingCognitoUser;
-      user.sendCustomChallengeAnswer(code, {
-        onSuccess: async (session) => {
-          pendingCognitoUser = null;
-          await storeTokens(
-            session.getIdToken().getJwtToken(),
-            session.getRefreshToken().getToken(),
-          );
-          resolve({ success: true, data: extractAuthResult(session) });
-        },
-        onFailure: (err) => {
-          resolve({
-            success: false,
-            error: { code: 'INVALID_CODE', message: err.message },
-          });
-        },
-        customChallenge: () => {
-          // Cognito said wrong answer, is issuing another challenge (same session)
-          // The user can retry — pendingCognitoUser stays set
-          resolve({
-            success: false,
-            error: { code: 'INVALID_CODE', message: 'Incorrect code. Please try again.' },
-          });
-        },
-      });
-      return;
+    if (!idToken) {
+      return {
+        success: false,
+        error: { code: 'AUTH_ERROR', message: 'Failed to get Google ID token' },
+      };
     }
 
-    // No pending user (e.g. app restarted) — start fresh auth flow
-    const cognitoUser = new CognitoUser({
-      Username: email,
-      Pool: userPool,
+    // Sign in to Firebase with the Google credential
+    const googleCredential = GoogleAuthProvider.credential(idToken);
+    const firebaseAuth = getAuth();
+    await signInWithCredential(firebaseAuth, googleCredential);
+
+    // Get the Firebase ID token
+    const firebaseUser = firebaseAuth.currentUser;
+    if (!firebaseUser) {
+      return {
+        success: false,
+        error: { code: 'AUTH_ERROR', message: 'Firebase sign-in failed' },
+      };
+    }
+
+    const firebaseIdToken = await firebaseUser.getIdToken();
+
+    // Send Firebase ID token to backend
+    const response = await fetch(`${BASE_URL}${ENDPOINTS.AUTH_GOOGLE_LOGIN}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ idToken: firebaseIdToken }),
     });
 
-    cognitoUser.initiateAuth(
-      new AuthenticationDetails({ Username: email }),
-      {
-        onSuccess: async (session) => {
-          await storeTokens(
-            session.getIdToken().getJwtToken(),
-            session.getRefreshToken().getToken(),
-          );
-          resolve({ success: true, data: extractAuthResult(session) });
-        },
-        onFailure: (err) => {
-          resolve({
-            success: false,
-            error: { code: 'INVALID_CODE', message: err.message },
-          });
-        },
-        customChallenge: () => {
-          // Fresh flow — need to answer the challenge
-          pendingCognitoUser = cognitoUser;
-          cognitoUser.sendCustomChallengeAnswer(code, {
-            onSuccess: async (session) => {
-              pendingCognitoUser = null;
-              await storeTokens(
-                session.getIdToken().getJwtToken(),
-                session.getRefreshToken().getToken(),
-              );
-              resolve({ success: true, data: extractAuthResult(session) });
-            },
-            onFailure: (err) => {
-              resolve({
-                success: false,
-                error: { code: 'INVALID_CODE', message: err.message },
-              });
-            },
-            customChallenge: () => {
-              resolve({
-                success: false,
-                error: { code: 'INVALID_CODE', message: 'Incorrect code. Please try again.' },
-              });
-            },
-          });
-        },
+    const result: ApiResponse<AuthResult> = await response.json();
+    return result;
+  } catch (err) {
+    const error = err as { code?: string; message?: string };
+
+    if (error.code === 'SIGN_IN_CANCELLED') {
+      return {
+        success: false,
+        error: { code: 'CANCELLED', message: 'Sign-in was cancelled' },
+      };
+    }
+
+    return {
+      success: false,
+      error: {
+        code: 'AUTH_ERROR',
+        message: error.message || 'Google sign-in failed',
       },
-    );
-  });
+    };
+  }
 }
 
-export function login(
-  email: string,
-  code: string,
-): Promise<ApiResponse<AuthResult>> {
-  return verify(email, code);
+export async function signOut(): Promise<void> {
+  try {
+    await GoogleSignin.signOut();
+  } catch {
+    // Google sign out may fail if not signed in
+  }
+  try {
+    await firebaseSignOut(getAuth());
+  } catch {
+    // Firebase sign out may fail if not signed in
+  }
+}
+
+export async function refreshFirebaseToken(): Promise<string | null> {
+  try {
+    const user = getAuth().currentUser;
+    if (!user) return null;
+    return await user.getIdToken(true);
+  } catch {
+    return null;
+  }
 }

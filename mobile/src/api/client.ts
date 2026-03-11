@@ -1,12 +1,7 @@
 import Keychain from 'react-native-keychain';
-import { CognitoUserPool, CognitoUser, CognitoRefreshToken } from 'amazon-cognito-identity-js';
-import { BASE_URL, USER_POOL_ID, USER_POOL_CLIENT_ID } from '@/constants/api';
+import { BASE_URL } from '@/constants/api';
 import { ApiResponse } from '@/types';
-
-const userPool = new CognitoUserPool({
-  UserPoolId: USER_POOL_ID,
-  ClientId: USER_POOL_CLIENT_ID,
-});
+import { refreshFirebaseToken } from './auth';
 
 const TOKEN_SERVICE = 'grovewars-auth';
 
@@ -20,7 +15,7 @@ export async function getStoredTokens(): Promise<{
     });
     if (credentials) {
       const parsed = JSON.parse(credentials.password);
-      return { token: parsed.token, refreshToken: parsed.refreshToken };
+      return { token: parsed.token, refreshToken: parsed.refreshToken || '' };
     }
     return null;
   } catch {
@@ -41,44 +36,6 @@ export async function storeTokens(
 
 export async function clearTokens(): Promise<void> {
   await Keychain.resetGenericPassword({ service: TOKEN_SERVICE });
-}
-
-async function refreshAccessToken(): Promise<string | null> {
-  const stored = await getStoredTokens();
-  if (!stored?.refreshToken || !stored?.token) {
-    return null;
-  }
-
-  try {
-    // Decode the JWT to get the username for Cognito
-    const payload = JSON.parse(atob(stored.token.split('.')[1]));
-    const username = payload.email || payload.sub;
-    if (!username) return null;
-
-    const cognitoUser = new CognitoUser({
-      Username: username,
-      Pool: userPool,
-    });
-
-    const refreshToken = new CognitoRefreshToken({
-      RefreshToken: stored.refreshToken,
-    });
-
-    return new Promise((resolve) => {
-      cognitoUser.refreshSession(refreshToken, async (err, session) => {
-        if (err || !session) {
-          resolve(null);
-          return;
-        }
-        const newToken = session.getIdToken().getJwtToken();
-        const newRefreshToken = session.getRefreshToken().getToken();
-        await storeTokens(newToken, newRefreshToken);
-        resolve(newToken);
-      });
-    });
-  } catch {
-    return null;
-  }
 }
 
 export async function apiRequest<T>(
@@ -112,9 +69,13 @@ export async function apiRequest<T>(
     });
 
     if (response.status === 401 && token) {
-      const newToken = await refreshAccessToken();
+      // Try refreshing the Firebase ID token
+      const newToken = await refreshFirebaseToken();
       if (newToken) {
         headers.Authorization = newToken;
+        // Update stored token
+        await storeTokens(newToken, '');
+        useAuthStore.setState({ token: newToken });
         response = await fetch(`${BASE_URL}${endpoint}`, {
           ...options,
           headers,

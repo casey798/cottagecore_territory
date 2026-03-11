@@ -1,94 +1,66 @@
-import jwt from 'jsonwebtoken';
-import jwksClient from 'jwks-rsa';
 import { APIGatewayProxyEvent } from 'aws-lambda';
-import { JwtPayload } from './types';
+import { ensureFirebaseInitialized, getFirebaseAdmin } from './firebase';
 
-const REGION = process.env.AWS_REGION || 'ap-south-1';
-const USER_POOL_ID = process.env.USER_POOL_ID || '';
-
-let client: jwksClient.JwksClient | null = null;
-
-function getJwksClient(): jwksClient.JwksClient {
-  if (!client) {
-    client = jwksClient({
-      jwksUri: `https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}/.well-known/jwks.json`,
-      cache: true,
-      cacheMaxEntries: 5,
-      cacheMaxAge: 600000,
-    });
-  }
-  return client;
+export interface FirebaseTokenPayload {
+  uid: string;
+  email?: string;
 }
 
-function getSigningKey(header: jwt.JwtHeader): Promise<string> {
-  return new Promise((resolve, reject) => {
-    getJwksClient().getSigningKey(header.kid, (err, key) => {
-      if (err) {
-        reject(err);
-        return;
-      }
-      if (!key) {
-        reject(new Error('Signing key not found'));
-        return;
-      }
-      resolve(key.getPublicKey());
-    });
-  });
-}
-
-export async function verifyToken(token: string): Promise<JwtPayload> {
-  const decoded = jwt.decode(token, { complete: true });
-  if (!decoded || typeof decoded === 'string') {
-    throw new Error('Invalid token format');
+export async function verifyToken(token: string): Promise<FirebaseTokenPayload> {
+  const firebaseReady = await ensureFirebaseInitialized();
+  if (!firebaseReady) {
+    throw new Error('Firebase not initialized');
   }
 
-  const signingKey = await getSigningKey(decoded.header);
+  const admin = getFirebaseAdmin();
+  const decoded = await admin.auth().verifyIdToken(token);
 
-  return new Promise((resolve, reject) => {
-    jwt.verify(
-      token,
-      signingKey,
-      {
-        issuer: `https://cognito-idp.${REGION}.amazonaws.com/${USER_POOL_ID}`,
-        algorithms: ['RS256'],
-      },
-      (err, payload) => {
-        if (err) {
-          reject(err);
-          return;
-        }
-        resolve(payload as unknown as JwtPayload);
-      }
-    );
-  });
-}
-
-export function requireAdmin(claims: JwtPayload): void {
-  const groups = claims['cognito:groups'] || [];
-  if (!groups.some((g) => g.toLowerCase() === 'admin')) {
-    throw new Error('Forbidden: admin group required');
-  }
-}
-
-export function isAdmin(event: APIGatewayProxyEvent): boolean {
-  const claims = event.requestContext.authorizer?.claims;
-  if (!claims) return false;
-  const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-  return groups.some((g) => g.toLowerCase() === 'admin');
+  return {
+    uid: decoded.uid,
+    email: decoded.email,
+  };
 }
 
 export function extractUserId(event: APIGatewayProxyEvent): string {
-  const claims = event.requestContext.authorizer?.claims;
-  if (!claims) {
-    throw new Error('No authorization claims found');
+  // Lambda authorizer puts context directly under event.requestContext.authorizer
+  const authorizer = event.requestContext.authorizer;
+  if (!authorizer) {
+    throw new Error('No authorization context found');
   }
-  return claims.sub as string;
+
+  // Lambda authorizer context
+  const sub = authorizer.sub as string | undefined;
+  if (sub) return sub;
+
+  // Fallback: Cognito authorizer format (claims.sub)
+  const claims = authorizer.claims;
+  if (claims?.sub) return claims.sub as string;
+
+  throw new Error('No user ID found in authorization context');
 }
 
-export function extractClaims(event: APIGatewayProxyEvent): JwtPayload {
-  const claims = event.requestContext.authorizer?.claims;
-  if (!claims) {
-    throw new Error('No authorization claims found');
+export function isAdmin(event: APIGatewayProxyEvent): boolean {
+  const authorizer = event.requestContext.authorizer;
+  if (!authorizer) return false;
+
+  // Check Lambda authorizer context
+  if (authorizer.isAdmin === 'true') return true;
+
+  // Fallback: Cognito format
+  const claims = authorizer.claims;
+  if (!claims) return false;
+  const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
+  return groups.some((g: string) => g.toLowerCase() === 'admin');
+}
+
+export function extractClaims(event: APIGatewayProxyEvent): FirebaseTokenPayload {
+  const authorizer = event.requestContext.authorizer;
+  if (!authorizer) {
+    throw new Error('No authorization context found');
   }
-  return claims as unknown as JwtPayload;
+
+  return {
+    uid: (authorizer.sub || authorizer.claims?.sub) as string,
+    email: (authorizer.email || authorizer.claims?.email) as string | undefined,
+  };
 }

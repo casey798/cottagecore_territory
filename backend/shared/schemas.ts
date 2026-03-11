@@ -5,18 +5,12 @@ const difficultySchema = z.enum(['easy', 'medium', 'hard']);
 const notificationTypeSchema = z.enum(['event', 'alert', 'hype', 'info']);
 const gameResultSchema = z.enum(['win', 'lose', 'timeout', 'abandoned']);
 
-export const signupSchema = z.object({
-  email: z.string().email(),
+export const googleLoginSchema = z.object({
+  idToken: z.string().min(1),
 });
 
-export const verifySchema = z.object({
-  email: z.string().email(),
-  code: z.string().min(6).max(6),
-});
-
-export const loginSchema = z.object({
-  email: z.string().email(),
-  code: z.string().min(6).max(6),
+export const setClanSchema = z.object({
+  clan: clanIdSchema,
 });
 
 export const avatarConfigSchema = z.object({

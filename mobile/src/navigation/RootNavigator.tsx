@@ -6,13 +6,11 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import LoginScreen from '@/screens/LoginScreen';
-import VerifyScreen from '@/screens/VerifyScreen';
 import TutorialScreen from '@/screens/TutorialScreen';
 import { MainStack } from './MainStack';
 
 export type RootStackParamList = {
   Login: undefined;
-  Verify: { email: string };
   Tutorial: undefined;
   Main: undefined;
 };
@@ -68,10 +66,7 @@ export function RootNavigator() {
     <NavigationContainer>
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!isAuthenticated ? (
-          <>
-            <Stack.Screen name="Login" component={LoginScreen} />
-            <Stack.Screen name="Verify" component={VerifyScreen} />
-          </>
+          <Stack.Screen name="Login" component={LoginScreen} />
         ) : !tutorialDone ? (
           <Stack.Screen name="Tutorial" component={TutorialScreen} />
         ) : (

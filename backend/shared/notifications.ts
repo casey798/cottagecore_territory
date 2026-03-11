@@ -1,45 +1,7 @@
-import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm';
 import admin from 'firebase-admin';
 import { scan, query } from './db';
 import { User } from './types';
-
-const STAGE = process.env.STAGE || 'dev';
-const SSM_PARAM_PATH = `/grovewars/${STAGE}/fcm-service-account`;
-
-const ssmClient = new SSMClient({ region: process.env.AWS_REGION || 'ap-south-1' });
-
-let firebaseInitialized = false;
-
-async function initFirebase(): Promise<boolean> {
-  if (firebaseInitialized) return true;
-
-  try {
-    const result = await ssmClient.send(
-      new GetParameterCommand({
-        Name: SSM_PARAM_PATH,
-        WithDecryption: true,
-      })
-    );
-
-    const credentialsJson = result.Parameter?.Value;
-    if (!credentialsJson) {
-      console.warn('FCM service account not found in SSM, skipping Firebase init');
-      return false;
-    }
-
-    const serviceAccount = JSON.parse(credentialsJson) as admin.ServiceAccount;
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      projectId: 'grovewars-b37da',
-    });
-
-    firebaseInitialized = true;
-    return true;
-  } catch (err) {
-    console.warn('Failed to initialize Firebase:', err);
-    return false;
-  }
-}
+import { ensureFirebaseInitialized } from './firebase';
 
 export interface FCMNotification {
   title: string;
@@ -53,7 +15,7 @@ export async function sendToDevices(
 ): Promise<void> {
   if (tokens.length === 0) return;
 
-  const initialized = await initFirebase();
+  const initialized = await ensureFirebaseInitialized();
   if (!initialized) return;
 
   const messaging = admin.messaging();

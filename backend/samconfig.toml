@@ -6,7 +6,7 @@ resolve_s3 = true
 s3_prefix = "grovewars-dev"
 region = "ap-south-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
-parameter_overrides = "Stage=dev AllowedEmailDomain=student.tce.edu FcmServerKey=placeholder-replace-before-phase3 HmacSecret=b7e7b0b67cb5316f3bb2807a1690cbd6135ee521f4d039c7545353a82d8a9b5e SesFromEmail=karthikrajak@student.tce.edu"
+parameter_overrides = "Stage=dev AllowedEmailDomain=student.tce.edu,tce.edu HmacSecret=b7e7b0b67cb5316f3bb2807a1690cbd6135ee521f4d039c7545353a82d8a9b5e"
 
 [prod.deploy.parameters]
 stack_name = "grovewars-prod"
@@ -15,4 +15,4 @@ s3_prefix = "grovewars-prod"
 region = "ap-south-1"
 capabilities = "CAPABILITY_IAM CAPABILITY_NAMED_IAM"
 confirm_changeset = true
-parameter_overrides = "Stage=prod AllowedEmailDomain=student.tce.edu FcmServerKey=REPLACE_ME HmacSecret=REPLACE_ME"
+parameter_overrides = "Stage=prod AllowedEmailDomain=student.tce.edu,tce.edu HmacSecret=REPLACE_ME"

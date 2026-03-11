@@ -9,22 +9,14 @@ Parameters:
   Stage:
     Type: String
     Default: dev
-    AllowedValues: [dev, prod]
+    AllowedValues: [dev, staging, prod]
   AllowedEmailDomain:
     Type: String
     Description: Allowed email domain for signup (e.g. college.edu)
-  FcmServerKey:
-    Type: String
-    Description: Firebase Cloud Messaging server key
-    NoEcho: true
   HmacSecret:
     Type: String
     Description: HMAC secret for QR code signing
     NoEcho: true
-  SesFromEmail:
-    Type: String
-    Description: SES sender email address
-    Default: noreply@grovewars.com
 
 # ---------------------------------------------------------------------------
 # Globals
@@ -38,9 +30,7 @@ Globals:
       Variables:
         STAGE: !Ref Stage
         ALLOWED_EMAIL_DOMAIN: !Ref AllowedEmailDomain
-        FCM_SERVER_KEY: !Ref FcmServerKey
         HMAC_SECRET: !Ref HmacSecret
-        SES_FROM_EMAIL: !Ref SesFromEmail
         AWS_REGION_NAME: ap-south-1
         USERS_TABLE: !Ref UsersTable
         CLANS_TABLE: !Ref ClansTable
@@ -64,157 +54,6 @@ Globals:
 Resources:
 
   # =========================================================================
-  # Cognito Trigger Functions (defined BEFORE UserPool to break circular dep)
-  # =========================================================================
-  DefineAuthChallengeFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub grovewars-${Stage}-defineAuth
-      CodeUri: functions/auth/
-      Handler: defineAuthChallenge.handler
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref UsersTable
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-          - defineAuthChallenge.ts
-        External:
-          - '@aws-sdk/*'
-
-  CreateAuthChallengeFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub grovewars-${Stage}-createAuth
-      CodeUri: functions/auth/
-      Handler: createAuthChallenge.handler
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref UsersTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - ses:SendEmail
-              Resource: "*"
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-          - createAuthChallenge.ts
-        External:
-          - '@aws-sdk/*'
-
-  VerifyAuthChallengeFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub grovewars-${Stage}-verifyAuth
-      CodeUri: functions/auth/
-      Handler: verifyAuthChallenge.handler
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref UsersTable
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-          - verifyAuthChallenge.ts
-        External:
-          - '@aws-sdk/*'
-
-  # =========================================================================
-  # Cognito (UserPool references trigger Lambdas above — no back-reference)
-  # =========================================================================
-  CognitoUserPool:
-    Type: AWS::Cognito::UserPool
-    Properties:
-      UserPoolName: !Sub grovewars-${Stage}-users
-      UsernameAttributes:
-        - email
-      AutoVerifiedAttributes:
-        - email
-      Schema:
-        - Name: email
-          AttributeDataType: String
-          Mutable: true
-          Required: true
-        - Name: clan
-          AttributeDataType: String
-          Mutable: true
-          Required: false
-        - Name: displayName
-          AttributeDataType: String
-          Mutable: true
-          Required: false
-      LambdaConfig:
-        DefineAuthChallenge: !GetAtt DefineAuthChallengeFunction.Arn
-        CreateAuthChallenge: !GetAtt CreateAuthChallengeFunction.Arn
-        VerifyAuthChallengeResponse: !GetAtt VerifyAuthChallengeFunction.Arn
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireUppercase: false
-          RequireLowercase: false
-          RequireNumbers: false
-          RequireSymbols: false
-
-  CognitoUserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      ClientName: !Sub grovewars-${Stage}-client
-      UserPoolId: !Ref CognitoUserPool
-      ExplicitAuthFlows:
-        - ALLOW_CUSTOM_AUTH
-        - ALLOW_REFRESH_TOKEN_AUTH
-      AccessTokenValidity: 1
-      TokenValidityUnits:
-        AccessToken: hours
-        RefreshToken: days
-      RefreshTokenValidity: 30
-      GenerateSecret: false
-
-  CognitoAdminGroup:
-    Type: AWS::Cognito::UserPoolGroup
-    Properties:
-      GroupName: Admin
-      UserPoolId: !Ref CognitoUserPool
-      Description: Admin users for GroveWars dashboard
-
-  # Cognito Lambda trigger permissions
-  DefineAuthChallengeInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt DefineAuthChallengeFunction.Arn
-      Principal: cognito-idp.amazonaws.com
-      SourceArn: !GetAtt CognitoUserPool.Arn
-
-  CreateAuthChallengeInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt CreateAuthChallengeFunction.Arn
-      Principal: cognito-idp.amazonaws.com
-      SourceArn: !GetAtt CognitoUserPool.Arn
-
-  VerifyAuthChallengeInvokePermission:
-    Type: AWS::Lambda::Permission
-    Properties:
-      Action: lambda:InvokeFunction
-      FunctionName: !GetAtt VerifyAuthChallengeFunction.Arn
-      Principal: cognito-idp.amazonaws.com
-      SourceArn: !GetAtt CognitoUserPool.Arn
-
-  # =========================================================================
   # REST API Gateway
   # =========================================================================
   RestApi:
@@ -223,11 +62,15 @@ Resources:
       Name: !Sub grovewars-${Stage}-api
       StageName: !Ref Stage
       Auth:
-        DefaultAuthorizer: CognitoAuthorizer
+        DefaultAuthorizer: FirebaseAuthorizer
         AddDefaultAuthorizerToCorsPreflight: false
         Authorizers:
-          CognitoAuthorizer:
-            UserPoolArn: !GetAtt CognitoUserPool.Arn
+          FirebaseAuthorizer:
+            FunctionArn: !GetAtt LambdaAuthorizerFunction.Arn
+            FunctionPayloadType: TOKEN
+            Identity:
+              Header: Authorization
+              ReauthorizeEvery: 300
       Cors:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
@@ -610,42 +453,56 @@ Resources:
         Enabled: true
 
   # =========================================================================
+  # Lambda Authorizer
+  # =========================================================================
+  LambdaAuthorizerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-lambdaAuthorizer
+      CodeUri: functions/auth/
+      Handler: lambdaAuthorizer.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - lambdaAuthorizer.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
   # Auth Functions (NO authorizer)
   # =========================================================================
-  SignupFunction:
+  GoogleLoginFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub grovewars-${Stage}-signup
+      FunctionName: !Sub grovewars-${Stage}-googleLogin
       CodeUri: functions/auth/
-      Handler: signup.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
+      Handler: googleLogin.handler
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref ClansTable
         - Statement:
             - Effect: Allow
               Action:
-                - cognito-idp:AdminCreateUser
-                - cognito-idp:AdminSetUserPassword
-                - cognito-idp:AdminUpdateUserAttributes
-                - cognito-idp:AdminGetUser
-              Resource: !GetAtt CognitoUserPool.Arn
-        - Statement:
-            - Effect: Allow
-              Action:
-                - ses:SendEmail
-              Resource: "*"
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
       Events:
         Api:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
-            Path: /auth/signup
+            Path: /auth/google-login
             Method: POST
             Auth:
               Authorizer: NONE
@@ -656,91 +513,12 @@ Resources:
         Target: es2020
         Sourcemap: true
         EntryPoints:
-          - signup.ts
-        External:
-          - '@aws-sdk/*'
-
-  VerifyFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub grovewars-${Stage}-verify
-      CodeUri: functions/auth/
-      Handler: verify.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref UsersTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - cognito-idp:AdminUpdateUserAttributes
-                - cognito-idp:AdminGetUser
-              Resource: !GetAtt CognitoUserPool.Arn
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RestApi
-            Path: /auth/verify
-            Method: POST
-            Auth:
-              Authorizer: NONE
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-          - verify.ts
-        External:
-          - '@aws-sdk/*'
-
-  LoginFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub grovewars-${Stage}-login
-      CodeUri: functions/auth/
-      Handler: login.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref UsersTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - cognito-idp:AdminInitiateAuth
-                - cognito-idp:AdminRespondToAuthChallenge
-                - cognito-idp:AdminGetUser
-              Resource: !GetAtt CognitoUserPool.Arn
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RestApi
-            Path: /auth/login
-            Method: POST
-            Auth:
-              Authorizer: NONE
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-          - login.ts
+          - googleLogin.ts
         External:
           - '@aws-sdk/*'
 
   # =========================================================================
-  # Player Functions (Cognito authorizer)
+  # Player Functions
   # =========================================================================
   GetProfileFunction:
     Type: AWS::Serverless::Function
@@ -748,10 +526,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getProfile
       CodeUri: functions/player/
       Handler: getProfile.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -784,8 +558,6 @@ Resources:
       Environment:
         Variables:
           STAGE: !Ref Stage
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -817,10 +589,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-updateAvatar
       CodeUri: functions/player/
       Handler: updateAvatar.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -850,10 +618,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getAssets
       CodeUri: functions/player/
       Handler: getAssets.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref PlayerAssetsTable
@@ -883,10 +647,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getStats
       CodeUri: functions/player/
       Handler: getStats.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -912,6 +672,33 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  SetClanFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-setClan
+      CodeUri: functions/player/
+      Handler: setClan.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/clan
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - setClan.ts
+        External:
+          - '@aws-sdk/*'
+
   # =========================================================================
   # Map / Locations / Daily Info Functions
   # =========================================================================
@@ -921,10 +708,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getMapConfig
       CodeUri: functions/
       Handler: getMapConfig.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - S3ReadPolicy:
             BucketName: !Ref AssetsBucket
@@ -954,10 +737,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getTodayLocations
       CodeUri: functions/
       Handler: getTodayLocations.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationsTable
@@ -991,10 +770,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getDailyInfo
       CodeUri: functions/
       Handler: getDailyInfo.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DailyConfigTable
@@ -1029,10 +804,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-scanQr
       CodeUri: functions/game/
       Handler: scanQR.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -1072,10 +843,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-startMinigame
       CodeUri: functions/game/
       Handler: startMinigame.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref GameSessionsTable
@@ -1113,8 +880,6 @@ Resources:
       Handler: completeMinigame.handler
       Environment:
         Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
           WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
       Policies:
         - DynamoDBCrudPolicy:
@@ -1167,10 +932,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getClanScores
       CodeUri: functions/scores/
       Handler: getClanScores.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref ClansTable
@@ -1200,10 +961,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getCaptureHistory
       CodeUri: functions/scores/
       Handler: getCaptureHistory.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref CapturedSpacesTable
@@ -1236,10 +993,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getCapturedSpaces
       CodeUri: functions/spaces/
       Handler: getCapturedSpaces.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref CapturedSpacesTable
@@ -1269,10 +1022,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getDecoration
       CodeUri: functions/spaces/
       Handler: getDecoration.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref SpaceDecorationsTable
@@ -1302,10 +1051,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-saveDecoration
       CodeUri: functions/spaces/
       Handler: saveDecoration.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref SpaceDecorationsTable
@@ -1334,7 +1079,7 @@ Resources:
           - '@aws-sdk/*'
 
   # =========================================================================
-  # Admin Functions (Cognito authorizer - group check in handler)
+  # Admin Functions (group check in handler)
   # =========================================================================
   LocationsCrudFunction:
     Type: AWS::Serverless::Function
@@ -1342,10 +1087,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-locationsCrud
       CodeUri: functions/admin/
       Handler: locationsCrud.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationsTable
@@ -1391,10 +1132,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-mapUploadUrl
       CodeUri: functions/admin/
       Handler: mapUploadUrl.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - S3CrudPolicy:
             BucketName: !Ref AssetsBucket
@@ -1422,10 +1159,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-saveMapCalibration
       CodeUri: functions/admin/
       Handler: saveMapCalibration.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref MapCalibrationTable
@@ -1453,10 +1186,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-setDailyConfig
       CodeUri: functions/admin/
       Handler: setDailyConfig.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DailyConfigTable
@@ -1486,10 +1215,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-generateQr
       CodeUri: functions/admin/
       Handler: generateQR.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationsTable
@@ -1521,10 +1246,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-sendNotification
       CodeUri: functions/admin/
       Handler: sendNotification.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref AdminNotificationsTable
@@ -1534,7 +1255,8 @@ Resources:
             - Effect: Allow
               Action:
                 - ssm:GetParameter
-              Resource: !Sub arn:aws:ssm:ap-south-1:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
       Events:
         Api:
           Type: Api
@@ -1559,10 +1281,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-getNotificationHistory
       CodeUri: functions/admin/
       Handler: getNotificationHistory.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref AdminNotificationsTable
@@ -1591,23 +1309,11 @@ Resources:
       CodeUri: functions/admin/
       Handler: importRoster.handler
       Timeout: 120
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref ClansTable
-        - Statement:
-            - Effect: Allow
-              Action:
-                - cognito-idp:AdminCreateUser
-                - cognito-idp:AdminSetUserPassword
-                - cognito-idp:AdminUpdateUserAttributes
-                - cognito-idp:AdminGetUser
-              Resource: !GetAtt CognitoUserPool.Arn
       Events:
         Api:
           Type: Api
@@ -1633,10 +1339,6 @@ Resources:
       CodeUri: functions/admin/
       Handler: seasonReset.handler
       Timeout: 120
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -1678,10 +1380,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-analytics
       CodeUri: functions/admin/
       Handler: analytics.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -1720,10 +1418,6 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-wsConnect
       CodeUri: functions/
       Handler: wsConnect.handler
-      Environment:
-        Variables:
-          USER_POOL_ID: !Ref CognitoUserPool
-          USER_POOL_CLIENT_ID: !Ref CognitoUserPoolClient
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref WsConnectionsTable
@@ -1811,6 +1505,12 @@ Resources:
             TableName: !Ref DailyConfigTable
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -1850,6 +1550,12 @@ Resources:
               Action:
                 - execute-api:ManageConnections
               Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -1905,6 +1611,12 @@ Resources:
               Action:
                 - execute-api:ManageConnections
               Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -2011,14 +1723,6 @@ Outputs:
   WebSocketApiUrl:
     Description: WebSocket API Gateway URL
     Value: !Sub wss://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}
-
-  UserPoolId:
-    Description: Cognito User Pool ID
-    Value: !Ref CognitoUserPool
-
-  UserPoolClientId:
-    Description: Cognito User Pool Client ID
-    Value: !Ref CognitoUserPoolClient
 
   AssetsBucketName:
     Description: S3 Assets Bucket Name
