@@ -32,3 +32,7 @@ coverage/
 # Backend secrets and debug files
 backend/params.yaml
 backend/item.json
+
+# Firebase / Google Services
+**/google-services.json
+**/GoogleService-Info.plist
