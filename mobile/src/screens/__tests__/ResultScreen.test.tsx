@@ -20,7 +20,6 @@ jest.mock('@/store/useClanStore', () => ({
 jest.mock('@/store/useGameStore', () => ({
   useGameStore: (selector: (s: unknown) => unknown) =>
     selector({
-      markMinigameCompleted: jest.fn(),
       markXpEarnedAtLocation: jest.fn(),
     }),
 }));

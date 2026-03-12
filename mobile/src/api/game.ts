@@ -8,10 +8,10 @@ import {
   GameResult,
 } from '@/types';
 
-export function scanQR(qrData: QrData) {
+export function scanQR(qrData: QrData, gpsLat: number, gpsLng: number) {
   return apiRequest<ScanQRResponse>(ENDPOINTS.GAME_SCAN, {
     method: 'POST',
-    body: JSON.stringify({ qrData }),
+    body: JSON.stringify({ qrData, gpsLat, gpsLng }),
   });
 }
 

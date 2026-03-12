@@ -75,6 +75,37 @@ Resources:
         AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
         AllowOrigin: "'*'"
+      GatewayResponses:
+        UNAUTHORIZED:
+          StatusCode: 401
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          ResponseTemplates:
+            application/json: '{"success":false,"error":{"code":"UNAUTHORIZED","message":"Unauthorized"}}'
+        ACCESS_DENIED:
+          StatusCode: 403
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+          ResponseTemplates:
+            application/json: '{"success":false,"error":{"code":"FORBIDDEN","message":"Access denied"}}'
+        DEFAULT_4XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        DEFAULT_5XX:
+          ResponseParameters:
+            Headers:
+              Access-Control-Allow-Origin: "'*'"
+              Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
 
   # =========================================================================
   # WebSocket API Gateway
@@ -452,6 +483,19 @@ Resources:
         AttributeName: ttl
         Enabled: true
 
+  # 15. Roster
+  RosterTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-roster
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: email
+          AttributeType: S
+      KeySchema:
+        - AttributeName: email
+          KeyType: HASH
+
   # =========================================================================
   # Lambda Authorizer
   # =========================================================================
@@ -491,6 +535,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RosterTable
         - Statement:
             - Effect: Allow
               Action:
@@ -514,6 +560,42 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - googleLogin.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Admin Auth (NO authorizer — public endpoint)
+  # =========================================================================
+  AdminGoogleLoginFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminGoogleLogin
+      CodeUri: functions/auth/
+      Handler: adminGoogleLogin.handler
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/auth/google-login
+            Method: POST
+            Auth:
+              Authorizer: NONE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminGoogleLogin.ts
         External:
           - '@aws-sdk/*'
 
@@ -1209,6 +1291,38 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  ApplyDailyConfigFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-applyDailyConfig
+      CodeUri: functions/admin/
+      Handler: applyDailyConfig.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/daily/apply
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - applyDailyConfig.ts
+        External:
+          - '@aws-sdk/*'
+
   GenerateQrFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1329,6 +1443,37 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - importRoster.ts
+        External:
+          - '@aws-sdk/*'
+
+  SeedRosterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-seedRoster
+      CodeUri: functions/admin/
+      Handler: seedRoster.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RosterTable
+      Environment:
+        Variables:
+          ROSTER_TABLE: !Ref RosterTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/roster/seed
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - seedRoster.ts
         External:
           - '@aws-sdk/*'
 

@@ -2,29 +2,47 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { CLAN_COLORS, PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { ClanScore } from '@/types';
+import { ClanScore, ClanId } from '@/types';
+import { useAuthStore } from '@/store/useAuthStore';
 
 interface Props {
   scores: ClanScore[];
 }
 
 export function ClanScoreBar({ scores }: Props) {
+  const playerClan = useAuthStore((s) => s.clan);
+
   return (
     <View style={styles.container}>
-      {scores.map((clan) => (
-        <View key={clan.clanId} style={styles.clanChip}>
+      {scores.map((clan) => {
+        const isPlayerClan = playerClan === clan.clanId;
+        return (
           <View
+            key={clan.clanId}
             style={[
-              styles.accentBar,
-              { backgroundColor: CLAN_COLORS[clan.clanId] },
+              styles.clanChip,
+              isPlayerClan && {
+                borderWidth: 1.5,
+                borderColor: CLAN_COLORS[clan.clanId],
+                backgroundColor: CLAN_COLORS[clan.clanId] + '20',
+              },
             ]}
-          />
-          <Text style={styles.clanName}>
-            {clan.clanId.charAt(0).toUpperCase() + clan.clanId.slice(1)}
-          </Text>
-          <Text style={styles.clanXp}>{clan.todayXp}</Text>
-        </View>
-      ))}
+          >
+            <View
+              style={[
+                styles.accentBar,
+                { backgroundColor: CLAN_COLORS[clan.clanId] },
+              ]}
+            />
+            <Text style={[styles.clanName, isPlayerClan && { color: CLAN_COLORS[clan.clanId] }]}>
+              {clan.clanId.charAt(0).toUpperCase() + clan.clanId.slice(1)}
+            </Text>
+            <Text style={[styles.clanXp, isPlayerClan && { color: PALETTE.darkBrown }]}>
+              {clan.todayXp}
+            </Text>
+          </View>
+        );
+      })}
     </View>
   );
 }

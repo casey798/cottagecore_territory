@@ -6,7 +6,7 @@ import {
 import { getItem, scan, deleteItem } from '../../shared/db';
 import { Clan, ClanId, WsConnection } from '../../shared/types';
 
-const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale];
+const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
 
 async function postToAllConnections(
   endpoint: string,

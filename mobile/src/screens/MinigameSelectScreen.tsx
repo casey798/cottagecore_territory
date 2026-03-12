@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -48,21 +48,12 @@ export default function MinigameSelectScreen() {
   const xpAvailable = lastScanResult?.xpAvailable !== false && !xpEarnedAtLocations[locationId];
   const setSessionId = useGameStore((s) => s.setSessionId);
   const todayXp = useGameStore((s) => s.todayXp);
-  const completedMap = useGameStore((s) => s.completedMinigamesAtLocation);
-  const completedAtLocation = useMemo(
-    () => completedMap[locationId] || [],
-    [completedMap, locationId],
-  );
   const [coopEnabled, setCoopEnabled] = useState(false);
   const [partnerId, setPartnerId] = useState('');
   const [loading, setLoading] = useState(false);
 
   const minigames = lastScanResult?.availableMinigames || [];
-  const isCompleted = useCallback(
-    (m: MinigameInfo) => m.completed === true || completedAtLocation.includes(m.minigameId),
-    [completedAtLocation],
-  );
-  const allExhausted = minigames.length > 0 && minigames.every(isCompleted);
+  const allExhausted = minigames.length > 0 && minigames.every((m) => m.completed);
 
   const handleSelect = async (minigame: MinigameInfo) => {
     if (loading) return;
@@ -121,40 +112,37 @@ export default function MinigameSelectScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {minigames.map((item) => {
-          const isDone = isCompleted(item);
-          return (
+        {minigames.map((item) => (
             <TouchableOpacity
               key={item.minigameId}
-              style={[styles.card, isDone && styles.cardDone, !xpAvailable && !isDone && styles.cardNoXp]}
+              style={[styles.card, item.completed && styles.cardDone, !xpAvailable && !item.completed && styles.cardNoXp]}
               onPress={() => handleSelect(item)}
-              disabled={loading || isDone}
-              activeOpacity={isDone ? 1 : 0.7}
+              disabled={loading || item.completed}
+              activeOpacity={item.completed ? 1 : 0.7}
             >
-              <Text style={[styles.cardEmoji, !xpAvailable && !isDone && styles.cardEmojiMuted]}>
+              <Text style={[styles.cardEmoji, !xpAvailable && !item.completed && styles.cardEmojiMuted]}>
                 {MINIGAME_ICONS[item.minigameId] || '🎮'}
               </Text>
               <View style={styles.cardBody}>
-                <Text style={[styles.cardName, isDone && styles.cardTextDone, !xpAvailable && !isDone && styles.cardTextMuted]}>
+                <Text style={[styles.cardName, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}>
                   {item.name}
                 </Text>
                 <Text
-                  style={[styles.cardDesc, isDone && styles.cardTextDone, !xpAvailable && !isDone && styles.cardTextMuted]}
+                  style={[styles.cardDesc, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}
                   numberOfLines={2}
                 >
                   {item.description}
                 </Text>
               </View>
-              {isDone ? (
-                <Text style={styles.cardCompleted}>🍃 Done</Text>
+              {item.completed ? (
+                <Text style={styles.cardCompleted}>✓ Done</Text>
               ) : !xpAvailable ? (
                 <Text style={styles.cardNoXpBadge}>0 XP</Text>
               ) : (
                 <Text style={styles.cardTime}>⏱ {item.timeLimit}s</Text>
               )}
             </TouchableOpacity>
-          );
-        })}
+          ))}
         {allExhausted && (
           <View style={styles.exhaustedBanner}>
             <Text style={styles.exhaustedText}>

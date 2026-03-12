@@ -23,6 +23,7 @@ const CLAN_LABELS: Record<ClanId, string> = {
   tide: 'Tide',
   bloom: 'Bloom',
   gale: 'Gale',
+  hearth: 'Hearth',
 };
 
 function getScoringTarget(): Date {

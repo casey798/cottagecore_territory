@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const clanIdSchema = z.enum(['ember', 'tide', 'bloom', 'gale']);
+const clanIdSchema = z.enum(['ember', 'tide', 'bloom', 'gale', 'hearth']);
 const difficultySchema = z.enum(['easy', 'medium', 'hard']);
 const notificationTypeSchema = z.enum(['event', 'alert', 'hype', 'info']);
 const gameResultSchema = z.enum(['win', 'lose', 'timeout', 'abandoned']);
@@ -39,6 +39,8 @@ export const qrPayloadSchema = z.object({
 
 export const scanQrSchema = z.object({
   qrData: qrPayloadSchema,
+  gpsLat: z.number().min(-90).max(90),
+  gpsLng: z.number().min(-180).max(180),
 });
 
 export const startMinigameSchema = z.object({

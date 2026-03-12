@@ -44,7 +44,7 @@ export function RosterPage() {
         <p className="mb-4 text-sm text-[#3D2B1F]/70">
           Upload a CSV file with student roster. Format: <code>email,house</code>
           <br />
-          Valid houses: ember, tide, bloom, gale
+          Valid houses: ember, tide, bloom, gale, hearth (staff)
         </p>
 
         <div className="mb-4">

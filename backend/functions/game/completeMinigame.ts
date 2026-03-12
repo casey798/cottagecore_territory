@@ -278,20 +278,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         { '#r': 'result' }
       );
 
-      // Append minigameId to completedMinigameIds in player-assignments (non-fatal)
-      try {
-        const dateUserId = `${today}#${userId}`;
-        await updateItem(
-          'player-assignments',
-          { dateUserId },
-          'SET #lm.#locId.#cIds = list_append(#lm.#locId.#cIds, :newIds)',
-          { ':newIds': [session.minigameId] },
-          { '#lm': 'locationMinigames', '#locId': session.locationId, '#cIds': 'completedMinigameIds' },
-        );
-      } catch (err) {
-        console.warn('[completeMinigame] Failed to update completedMinigameIds:', err);
-      }
-
       // WebSocket broadcast (non-fatal)
       if (xpToAward > 0) {
         const stage = process.env.STAGE || 'dev';

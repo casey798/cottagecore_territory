@@ -31,6 +31,8 @@ export default function LoginScreen() {
       const errorMsg =
         result.errorCode === 'INVALID_DOMAIN'
           ? 'Only @student.tce.edu or @tce.edu accounts are allowed'
+          : result.errorCode === 'NOT_IN_ROSTER'
+          ? 'Your email is not on the approved roster. Contact your administrator.'
           : result.errorMessage || 'Something went wrong.';
       Alert.alert('Error', errorMsg);
     }
@@ -49,7 +51,7 @@ export default function LoginScreen() {
             <View style={styles.logoUnderline} />
           </View>
           <Text style={styles.tagline}>
-            Four clans. One campus.{'\n'}Who will claim it?
+            Five clans. One campus.{'\n'}Who will claim it?
           </Text>
         </View>
 

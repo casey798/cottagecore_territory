@@ -1,10 +1,10 @@
 import { Component, type ReactNode } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { GoogleOAuthProvider } from '@react-oauth/google';
 import { Layout } from '@/components/Layout';
 import { ProtectedRoute } from '@/components/ProtectedRoute';
 import { LoginPage } from '@/pages/LoginPage';
-import { VerifyPage } from '@/pages/VerifyPage';
 import { DashboardPage } from '@/pages/DashboardPage';
 import { LocationsPage } from '@/pages/LocationsPage';
 import { RosterPage } from '@/pages/RosterPage';
@@ -15,6 +15,9 @@ import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { NotificationsPage } from '@/pages/NotificationsPage';
 import { UsersPage } from '@/pages/UsersPage';
 import { SeasonPage } from '@/pages/SeasonPage';
+
+const GOOGLE_CLIENT_ID =
+  '425457815141-c7qp4l9sjkn5fgcv9t3odnu83j4nd3nh.apps.googleusercontent.com';
 
 class ErrorBoundary extends Component<
   { children: ReactNode },
@@ -88,95 +91,96 @@ function ProtectedLayout({ children }: { children: React.ReactNode }) {
 export function App() {
   return (
     <ErrorBoundary>
-      <QueryClientProvider client={queryClient}>
-        <BrowserRouter>
-          <Routes>
-          <Route path="/login" element={<LoginPage />} />
-          <Route path="/verify" element={<VerifyPage />} />
-          <Route
-            path="/dashboard"
-            element={
-              <ProtectedLayout>
-                <DashboardPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/locations"
-            element={
-              <ProtectedLayout>
-                <LocationsPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/roster"
-            element={
-              <ProtectedLayout>
-                <RosterPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/map-calibration"
-            element={
-              <ProtectedLayout>
-                <MapCalibrationPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/daily-config"
-            element={
-              <ProtectedLayout>
-                <DailyConfigPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/qr-generator"
-            element={
-              <ProtectedLayout>
-                <QRGeneratorPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/notifications"
-            element={
-              <ProtectedLayout>
-                <NotificationsPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/analytics"
-            element={
-              <ProtectedLayout>
-                <AnalyticsPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/users"
-            element={
-              <ProtectedLayout>
-                <UsersPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route
-            path="/season"
-            element={
-              <ProtectedLayout>
-                <SeasonPage />
-              </ProtectedLayout>
-            }
-          />
-          <Route path="*" element={<Navigate to="/dashboard" replace />} />
-        </Routes>
-        </BrowserRouter>
-      </QueryClientProvider>
+      <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
+        <QueryClientProvider client={queryClient}>
+          <BrowserRouter>
+            <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/dashboard"
+              element={
+                <ProtectedLayout>
+                  <DashboardPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/locations"
+              element={
+                <ProtectedLayout>
+                  <LocationsPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/roster"
+              element={
+                <ProtectedLayout>
+                  <RosterPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/map-calibration"
+              element={
+                <ProtectedLayout>
+                  <MapCalibrationPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/daily-config"
+              element={
+                <ProtectedLayout>
+                  <DailyConfigPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/qr-generator"
+              element={
+                <ProtectedLayout>
+                  <QRGeneratorPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/notifications"
+              element={
+                <ProtectedLayout>
+                  <NotificationsPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/analytics"
+              element={
+                <ProtectedLayout>
+                  <AnalyticsPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/users"
+              element={
+                <ProtectedLayout>
+                  <UsersPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/season"
+              element={
+                <ProtectedLayout>
+                  <SeasonPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route path="*" element={<Navigate to="/dashboard" replace />} />
+          </Routes>
+          </BrowserRouter>
+        </QueryClientProvider>
+      </GoogleOAuthProvider>
     </ErrorBoundary>
   );
 }

@@ -5,6 +5,7 @@ const CLAN_COLORS: Record<ClanId, { bg: string; text: string }> = {
   tide: { bg: 'bg-[#2980B9]', text: 'text-white' },
   bloom: { bg: 'bg-[#F1C40F]', text: 'text-[#3D2B1F]' },
   gale: { bg: 'bg-[#27AE60]', text: 'text-white' },
+  hearth: { bg: 'bg-[#7D3C98]', text: 'text-white' },
 };
 
 interface BadgeProps {

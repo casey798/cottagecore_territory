@@ -1,8 +1,8 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { googleLoginSchema } from '../../shared/schemas';
-import { query, putItem, deleteItem } from '../../shared/db';
+import { query, putItem, deleteItem, getItem } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
-import { User } from '../../shared/types';
+import { User, ClanId } from '../../shared/types';
 import { ensureFirebaseInitialized, getFirebaseAdmin } from '../../shared/firebase';
 
 const ALLOWED_EMAIL_DOMAINS = (process.env.ALLOWED_EMAIL_DOMAIN || '')
@@ -66,14 +66,28 @@ export const handler = async (
     const firebaseUid = decodedToken.uid;
 
     if (!user) {
+      // Look up roster to auto-assign clan
+      const rosterEntry = await getItem<{ email: string; clan: string }>('roster', {
+        email: email.toLowerCase(),
+      });
+
+      if (!rosterEntry) {
+        return error(
+          ErrorCode.NOT_IN_ROSTER,
+          'Your email is not on the approved roster. Contact your administrator.',
+          400,
+        );
+      }
+
+      const clan = rosterEntry.clan as ClanId;
+
       // Create new user using Firebase UID as userId
-      // Omit clan entirely — DynamoDB ClanIndex GSI rejects null for a string key
       const now = new Date().toISOString();
       const newUser: Record<string, unknown> = {
         userId: firebaseUid,
         email,
         displayName: email.split('@')[0],
-        clan: 'ember',
+        clan,
         todayXp: 0,
         seasonXp: 0,
         totalWins: 0,

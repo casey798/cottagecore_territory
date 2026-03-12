@@ -34,7 +34,6 @@ vi.mock('@/store/useAuthStore', () => ({
         token: 'test',
         email: 'admin@test.com',
         logout: vi.fn(),
-        refreshSession: vi.fn(),
       }),
     },
   ),

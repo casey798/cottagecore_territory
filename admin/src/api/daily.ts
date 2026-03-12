@@ -11,6 +11,19 @@ export async function setDailyConfig(
   return res.data;
 }
 
+export async function applyDailyConfig(): Promise<{
+  date: string;
+  assignedPlayerCount: number;
+  activeLocationCount: number;
+}> {
+  const res = await apiClient.post<{
+    date: string;
+    assignedPlayerCount: number;
+    activeLocationCount: number;
+  }>('/admin/daily/apply');
+  return res.data;
+}
+
 export async function generateQR(
   date: string,
 ): Promise<{

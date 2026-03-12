@@ -1,4 +1,4 @@
-export type ClanId = 'ember' | 'tide' | 'bloom' | 'gale';
+export type ClanId = 'ember' | 'tide' | 'bloom' | 'gale' | 'hearth';
 
 export type LocationCategory = 'courtyard' | 'corridor' | 'garden' | 'classroom' | 'other';
 
@@ -86,7 +86,7 @@ export interface MinigameInfo {
   name: string;
   timeLimit: number;
   description: string;
-  completed?: boolean;
+  completed: boolean;
 }
 
 export interface QrData {
@@ -290,4 +290,5 @@ export enum ErrorCode {
   Forbidden = 'FORBIDDEN',
   GameInactive = 'GAME_INACTIVE',
   SeasonEnded = 'SEASON_ENDED',
+  AllMinigamesPlayed = 'ALL_MINIGAMES_PLAYED',
 }

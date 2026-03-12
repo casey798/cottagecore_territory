@@ -3,6 +3,7 @@ export enum ClanId {
   Tide = 'tide',
   Bloom = 'bloom',
   Gale = 'gale',
+  Hearth = 'hearth',
 }
 
 export enum GameResult {
@@ -124,7 +125,6 @@ export interface DailyConfig {
 
 export interface LocationMinigameSet {
   minigameIds: string[];
-  completedMinigameIds: string[];
 }
 
 export interface PlayerAssignment {

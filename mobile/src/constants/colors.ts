@@ -5,6 +5,7 @@ export const CLAN_COLORS: Record<ClanId, string> = {
   tide: '#2980B9',
   bloom: '#F1C40F',
   gale: '#27AE60',
+  hearth: '#7D3C98',
 };
 
 export const PALETTE = {

@@ -31,13 +31,14 @@ describe('getClanScores', () => {
     jest.clearAllMocks();
   });
 
-  it('returns all 4 clans sorted by todayXp descending', async () => {
+  it('returns all 5 clans sorted by todayXp descending', async () => {
     mockGetItem.mockImplementation(async (_table, key) => {
       const data: Record<string, unknown> = {
         ember: { clanId: 'ember', todayXp: 500, seasonXp: 2000, spacesCaptured: 3 },
         tide: { clanId: 'tide', todayXp: 750, seasonXp: 1800, spacesCaptured: 2 },
         bloom: { clanId: 'bloom', todayXp: 300, seasonXp: 2500, spacesCaptured: 5 },
         gale: { clanId: 'gale', todayXp: 600, seasonXp: 1500, spacesCaptured: 1 },
+        hearth: { clanId: 'hearth', todayXp: 200, seasonXp: 800, spacesCaptured: 0 },
       };
       const id = (key as Record<string, string>).clanId;
       return data[id] as undefined;
@@ -48,7 +49,7 @@ describe('getClanScores', () => {
 
     expect(result.statusCode).toBe(200);
     expect(body.success).toBe(true);
-    expect(body.data.clans).toHaveLength(4);
+    expect(body.data.clans).toHaveLength(5);
 
     // Sorted by todayXp descending
     expect(body.data.clans[0].clanId).toBe('tide');
@@ -59,6 +60,8 @@ describe('getClanScores', () => {
     expect(body.data.clans[2].todayXp).toBe(500);
     expect(body.data.clans[3].clanId).toBe('bloom');
     expect(body.data.clans[3].todayXp).toBe(300);
+    expect(body.data.clans[4].clanId).toBe('hearth');
+    expect(body.data.clans[4].todayXp).toBe(200);
   });
 
   it('returns 0 for missing clan records', async () => {
@@ -68,7 +71,7 @@ describe('getClanScores', () => {
     const body = JSON.parse(result.body);
 
     expect(result.statusCode).toBe(200);
-    expect(body.data.clans).toHaveLength(4);
+    expect(body.data.clans).toHaveLength(5);
     for (const clan of body.data.clans) {
       expect(clan.todayXp).toBe(0);
       expect(clan.seasonXp).toBe(0);

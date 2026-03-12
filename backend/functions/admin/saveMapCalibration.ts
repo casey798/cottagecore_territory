@@ -6,10 +6,9 @@ import { computeAffineTransform } from '../../shared/affineTransform';
 import type { CalibrationPoint, MapCalibration } from '../../shared/types';
 
 function adminCheck(event: APIGatewayProxyEvent): APIGatewayProxyResult | null {
-  const claims = event.requestContext.authorizer?.claims;
-  if (!claims) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
-  const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-  if (!groups.some((g) => g.toLowerCase() === 'admin')) {
+  const authorizer = event.requestContext.authorizer;
+  if (!authorizer) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
+  if (authorizer.isAdmin !== 'true') {
     return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
   }
   return null;

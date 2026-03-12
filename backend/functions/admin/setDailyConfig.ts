@@ -13,11 +13,8 @@ export async function handler(
     console.log('[setDailyConfig] Incoming event body:', event.body);
 
     // Admin check
-    const claims = event.requestContext.authorizer?.claims;
-    if (!claims) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
-    const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-    console.log('[setDailyConfig] User groups:', groups);
-    if (!groups.some((g) => g.toLowerCase() === 'admin')) return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
+    const authorizer = event.requestContext.authorizer;
+    if (!authorizer || authorizer.isAdmin !== 'true') return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
 
     // Validate input
     const body = JSON.parse(event.body || '{}') as Record<string, unknown>;

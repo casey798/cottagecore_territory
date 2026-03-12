@@ -253,7 +253,7 @@ describe('completeMinigame handler', () => {
       expect(clanCalls.length).toBe(2);
     });
 
-    it('appends minigameId to completedMinigameIds in player-assignments on win', async () => {
+    it('does not write completedMinigameIds to player-assignments', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'game-sessions') return makeSession();
         if (table === 'users') return makeUser();
@@ -267,14 +267,11 @@ describe('completeMinigame handler', () => {
       const event = makeEvent(makeValidBody());
       await handler(event);
 
-      // Verify completedMinigameIds was updated via list_append
-      expect(mockUpdateItem).toHaveBeenCalledWith(
-        'player-assignments',
-        { dateUserId: `${TODAY}#${USER_ID}` },
-        'SET #lm.#locId.#cIds = list_append(#lm.#locId.#cIds, :newIds)',
-        { ':newIds': ['grove-words'] },
-        { '#lm': 'locationMinigames', '#locId': LOCATION_ID, '#cIds': 'completedMinigameIds' },
+      // Verify NO updateItem call targets player-assignments
+      const assignmentCalls = (mockUpdateItem as jest.Mock).mock.calls.filter(
+        (call: unknown[]) => call[0] === 'player-assignments'
       );
+      expect(assignmentCalls.length).toBe(0);
     });
 
     it('stores solutionData on the session for analytics', async () => {

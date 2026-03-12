@@ -46,16 +46,12 @@ export default function ResultScreen() {
 
   const clans = useClanStore((s) => s.clans);
   const lockLocation = useMapStore((s) => s.lockLocation);
-  const markMinigameCompleted = useGameStore((s) => s.markMinigameCompleted);
   const markXpEarnedAtLocation = useGameStore((s) => s.markXpEarnedAtLocation);
   const isWin = result === 'win';
   const didEarnXp = xpAwarded !== false;
 
-  // Mark minigame as completed on win, or lock location on lose
+  // Mark XP earned or lock location on lose
   useEffect(() => {
-    if (isWin && locationId && minigameId) {
-      markMinigameCompleted(locationId, minigameId);
-    }
     if (isWin && didEarnXp && locationId) {
       markXpEarnedAtLocation(locationId);
     }

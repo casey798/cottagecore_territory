@@ -12,10 +12,8 @@ export async function handler(
 ): Promise<APIGatewayProxyResult> {
   try {
     // Admin check
-    const claims = event.requestContext.authorizer?.claims;
-    if (!claims) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
-    const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-    if (!groups.some((g) => g.toLowerCase() === 'admin')) return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
+    const authorizer = event.requestContext.authorizer;
+    if (!authorizer || authorizer.isAdmin !== 'true') return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
 
     // Validate input
     const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
@@ -87,7 +85,7 @@ export async function handler(
       target,
       notificationType: notificationType as AdminNotification['notificationType'],
       sentAt: new Date().toISOString(),
-      sentBy: claims.sub as string,
+      sentBy: (event.requestContext.authorizer?.sub as string) || 'admin',
       deliveryCount: sent,
     };
 

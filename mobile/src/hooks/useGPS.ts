@@ -37,14 +37,17 @@ async function requestLocationPermission(): Promise<boolean> {
   return granted === PermissionsAndroid.RESULTS.GRANTED;
 }
 
+// Module-level cache so new hook instances start with the last known position
+let cachedPosition: { latitude: number; longitude: number; accuracy: number } | null = null;
+
 export function useGPS(): GPSState {
   const debugLocation = useDebugStore((s) => s.debugLocation);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
 
   const [state, setState] = useState<GPSState>({
-    latitude: null,
-    longitude: null,
-    accuracy: null,
+    latitude: cachedPosition?.latitude ?? null,
+    longitude: cachedPosition?.longitude ?? null,
+    accuracy: cachedPosition?.accuracy ?? null,
     isTracking: false,
     permissionDenied: false,
     error: null,
@@ -74,6 +77,12 @@ export function useGPS(): GPSState {
             `[GPS] Accuracy ${acc.toFixed(1)}m is between ${GPS_ACCURACY_OK}-${GPS_ACCURACY_WEAK}m — proceeding with warning`,
           );
         }
+
+        cachedPosition = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: acc,
+        };
 
         setState({
           latitude: position.coords.latitude,

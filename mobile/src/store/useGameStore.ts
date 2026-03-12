@@ -15,7 +15,6 @@ interface GameState {
   selectedLocationId: string | null;
   todayLocations: Location[];
   dailyInfo: DailyInfo | null;
-  completedMinigamesAtLocation: Record<string, string[]>;
   xpEarnedAtLocations: Record<string, boolean>;
   recordWin: () => void;
   recordLoss: () => void;
@@ -27,7 +26,6 @@ interface GameState {
   setSelectedLocation: (locationId: string | null) => void;
   setTodayLocations: (locations: Location[]) => void;
   setDailyInfo: (info: DailyInfo) => void;
-  markMinigameCompleted: (locationId: string, minigameId: string) => void;
   markXpEarnedAtLocation: (locationId: string) => void;
 }
 
@@ -39,7 +37,6 @@ export const useGameStore = create<GameState>((set) => ({
   selectedLocationId: null,
   todayLocations: [],
   dailyInfo: null,
-  completedMinigamesAtLocation: {},
   xpEarnedAtLocations: {},
 
   recordWin: () =>
@@ -58,8 +55,6 @@ export const useGameStore = create<GameState>((set) => ({
   setTodayXp: (xp: number) =>
     set((state) => ({
       todayXp: xp,
-      // Reset completed minigames and xp tracking on daily reset
-      completedMinigamesAtLocation: xp === 0 ? {} : state.completedMinigamesAtLocation,
       xpEarnedAtLocations: xp === 0 ? {} : state.xpEarnedAtLocations,
     })),
 
@@ -74,18 +69,6 @@ export const useGameStore = create<GameState>((set) => ({
 
   setDailyInfo: (info: DailyInfo) =>
     set({ dailyInfo: info }),
-
-  markMinigameCompleted: (locationId: string, minigameId: string) =>
-    set((state) => {
-      const existing = state.completedMinigamesAtLocation[locationId] || [];
-      if (existing.includes(minigameId)) return state;
-      return {
-        completedMinigamesAtLocation: {
-          ...state.completedMinigamesAtLocation,
-          [locationId]: [...existing, minigameId],
-        },
-      };
-    }),
 
   markXpEarnedAtLocation: (locationId: string) =>
     set((state) => ({

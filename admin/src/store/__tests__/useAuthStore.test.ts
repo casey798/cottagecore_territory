@@ -12,7 +12,6 @@ describe('useAuthStore', () => {
     expect(state.isAuthenticated).toBe(false);
     expect(state.token).toBeNull();
     expect(state.email).toBeNull();
-    expect(state.isAdmin).toBe(false);
   });
 
   it('should clear state on logout', () => {
@@ -20,7 +19,6 @@ describe('useAuthStore', () => {
       token: 'test-token',
       email: 'admin@test.com',
       isAuthenticated: true,
-      isAdmin: true,
     });
 
     useAuthStore.getState().logout();
@@ -29,7 +27,6 @@ describe('useAuthStore', () => {
     expect(state.isAuthenticated).toBe(false);
     expect(state.token).toBeNull();
     expect(state.email).toBeNull();
-    expect(state.isAdmin).toBe(false);
   });
 
   it('should clear error', () => {

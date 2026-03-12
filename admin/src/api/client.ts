@@ -7,10 +7,6 @@ class ApiClient {
     return useAuthStore.getState().token;
   }
 
-  private async handleUnauthorized(): Promise<string | null> {
-    return useAuthStore.getState().refreshSession();
-  }
-
   async request<T>(
     path: string,
     options: RequestInit = {},
@@ -37,20 +33,8 @@ class ApiClient {
     });
 
     if (response.status === 401) {
-      const newToken = await this.handleUnauthorized();
-      if (newToken) {
-        headers['Authorization'] = `Bearer ${newToken}`;
-        const retryResponse = await fetch(`${BASE_URL}${path}`, {
-          ...options,
-          headers,
-        });
-        if (!retryResponse.ok) {
-          const errorData = await retryResponse.json();
-          throw new Error(errorData.error?.message || 'Request failed');
-        }
-        return retryResponse.json();
-      }
       useAuthStore.getState().logout();
+      window.location.href = '/login';
       throw new Error('Session expired. Please log in again.');
     }
 

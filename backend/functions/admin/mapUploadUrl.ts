@@ -7,10 +7,9 @@ const s3 = new S3Client({ region: process.env.AWS_REGION || 'ap-south-1' });
 const ASSETS_BUCKET = process.env.ASSETS_BUCKET || '';
 
 function adminCheck(event: APIGatewayProxyEvent): APIGatewayProxyResult | null {
-  const claims = event.requestContext.authorizer?.claims;
-  if (!claims) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
-  const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-  if (!groups.some((g) => g.toLowerCase() === 'admin')) {
+  const authorizer = event.requestContext.authorizer;
+  if (!authorizer) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
+  if (authorizer.isAdmin !== 'true') {
     return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
   }
   return null;

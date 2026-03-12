@@ -6,10 +6,9 @@ import type { Location } from '../../shared/types';
 import { LocationCategory } from '../../shared/types';
 
 function adminCheck(event: APIGatewayProxyEvent): APIGatewayProxyResult | null {
-  const claims = event.requestContext.authorizer?.claims;
-  if (!claims) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
-  const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-  if (!groups.some((g) => g.toLowerCase() === 'admin')) {
+  const authorizer = event.requestContext.authorizer;
+  if (!authorizer) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
+  if (authorizer.isAdmin !== 'true') {
     return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
   }
   return null;
@@ -43,7 +42,7 @@ async function createLocation(event: APIGatewayProxyEvent): Promise<APIGatewayPr
     name: (name as string).trim(),
     gpsLat: body.gpsLat as number,
     gpsLng: body.gpsLng as number,
-    geofenceRadius: typeof body.geofenceRadius === 'number' ? body.geofenceRadius : 50,
+    geofenceRadius: typeof body.geofenceRadius === 'number' ? body.geofenceRadius : 15,
     category: Object.values(LocationCategory).includes(body.category as LocationCategory)
       ? (body.category as LocationCategory)
       : LocationCategory.Other,

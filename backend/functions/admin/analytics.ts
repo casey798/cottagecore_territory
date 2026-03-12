@@ -38,10 +38,8 @@ export async function handler(
 ): Promise<APIGatewayProxyResult> {
   try {
     // Admin check
-    const claims = event.requestContext.authorizer?.claims;
-    if (!claims) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
-    const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-    if (!groups.some((g) => g.toLowerCase() === 'admin')) return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
+    const authorizer = event.requestContext.authorizer;
+    if (!authorizer || authorizer.isAdmin !== 'true') return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
 
     // Clan stats
     const clanStats: ClanStats[] = [];

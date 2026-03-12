@@ -21,6 +21,7 @@ import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useGameStore } from '@/store/useGameStore';
 import { useMapStore } from '@/store/useMapStore';
+import { useGPS } from '@/hooks/useGPS';
 import { parseQrPayload } from '@/utils/qrValidation';
 import { getTodayISTString } from '@/utils/time';
 import * as gameApi from '@/api/game';
@@ -34,6 +35,8 @@ const ERROR_MESSAGES: Record<string, string> = {
     "This QR code is from a previous day. Ask admin for today's code.",
   [ErrorCode.QrInvalid]:
     "Invalid QR code. Make sure you're scanning the official GroveWars code.",
+  [ErrorCode.GpsOutOfRange]:
+    "You must be at the location to scan. Move closer and try again.",
   [ErrorCode.NotAssigned]:
     "This location isn't in your assignment today. Check your map for your locations.",
   [ErrorCode.LocationLocked]:
@@ -42,6 +45,8 @@ const ERROR_MESSAGES: Record<string, string> = {
     "You've earned all 100 XP for today! Come back tomorrow.",
   [ErrorCode.LocationExhausted]:
     "You've mastered all challenges here today — try another location!",
+  [ErrorCode.AllMinigamesPlayed]:
+    "You've played all available challenges for today. Come back tomorrow!",
 };
 
 const ERROR_RESUME_MS = 3000;
@@ -53,6 +58,7 @@ export default function QRScannerScreen() {
   const prefilledLocationId = route.params?.locationId;
   const setScanResult = useGameStore((s) => s.setScanResult);
   const todayLocations = useMapStore((s) => s.todayLocations);
+  const gps = useGPS();
   const [processing, setProcessing] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cameraPermission, setCameraPermission] = useState<string | null>(null);
@@ -110,8 +116,13 @@ export default function QRScannerScreen() {
         return;
       }
 
+      if (gps.latitude === null || gps.longitude === null) {
+        showErrorAndResume('Waiting for GPS signal. Please try again in a moment.');
+        return;
+      }
+
       try {
-        const result = await gameApi.scanQR(qrData);
+        const result = await gameApi.scanQR(qrData, gps.latitude, gps.longitude);
         if (result.success && result.data) {
           setScanResult(result.data);
           navigation.replace('MinigameSelect', {
@@ -130,7 +141,7 @@ export default function QRScannerScreen() {
         showErrorAndResume('Something went wrong. Please try again.');
       }
     },
-    [setScanResult, navigation, showErrorAndResume, todayLocations],
+    [setScanResult, navigation, showErrorAndResume, todayLocations, gps.latitude, gps.longitude],
   );
 
   const handleQRDetected = useCallback(

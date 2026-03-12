@@ -6,7 +6,7 @@ import { ErrorAlert } from '@/components/ErrorAlert';
 import { Link } from 'react-router-dom';
 import type { ClanId } from '@/types';
 
-const CLAN_ORDER: ClanId[] = ['ember', 'tide', 'bloom', 'gale'];
+const CLAN_ORDER: ClanId[] = ['ember', 'tide', 'bloom', 'gale', 'hearth'];
 
 export function DashboardPage() {
   const {
@@ -33,7 +33,7 @@ export function DashboardPage() {
       )}
 
       {clans && clans.length > 0 && (
-        <div className="mb-8 grid grid-cols-4 gap-4">
+        <div className="mb-8 grid grid-cols-5 gap-4">
           {CLAN_ORDER.map((clanId) => {
             const clan = clans.find((c) => c.clanId === clanId);
             if (!clan) return null;

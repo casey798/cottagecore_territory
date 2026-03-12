@@ -1,21 +1,45 @@
-import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
+import { GoogleLogin, type CredentialResponse } from '@react-oauth/google';
 import { useAuthStore } from '@/store/useAuthStore';
 import { ErrorAlert } from '@/components/ErrorAlert';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
+import { BASE_URL } from '@/constants/api';
 
 export function LoginPage() {
-  const [email, setEmail] = useState('');
-  const { initiateAuth, isLoading, error, clearError } = useAuthStore();
+  const { isLoading, error, clearError, login, setError, setLoading } =
+    useAuthStore();
   const navigate = useNavigate();
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleGoogleSuccess(response: CredentialResponse) {
+    const credential = response.credential;
+    if (!credential) {
+      setError('No credential received from Google');
+      return;
+    }
+
+    setLoading(true);
     try {
-      await initiateAuth(email);
-      navigate('/verify', { state: { email } });
+      const res = await fetch(`${BASE_URL}/admin/auth/google-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: credential }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.error?.code === 'NOT_ADMIN') {
+          setError('You are not authorized to access the admin dashboard');
+        } else {
+          setError(data.error?.message || 'Login failed');
+        }
+        return;
+      }
+
+      login(data.data.token, data.data.email);
+      navigate('/dashboard', { replace: true });
     } catch {
-      // error is set in store
+      setError('Login failed. Please try again.');
     }
   }
 
@@ -26,7 +50,7 @@ export function LoginPage() {
           GroveWars Admin
         </h1>
         <p className="mb-6 text-center text-sm text-[#3D2B1F]/60">
-          Sign in with your admin email
+          Sign in with your admin Google account
         </p>
 
         {error && (
@@ -35,26 +59,19 @@ export function LoginPage() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
-          <label className="mb-1 block text-sm font-medium text-[#3D2B1F]">
-            Email
-          </label>
-          <input
-            type="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            placeholder="admin@college.edu"
-            required
-            className="mb-4 w-full rounded border border-[#8B6914]/30 px-3 py-2 text-sm focus:border-[#D4A843] focus:outline-none"
-          />
-          <button
-            type="submit"
-            disabled={isLoading || !email}
-            className="w-full rounded bg-[#8B6914] py-2 text-sm font-semibold text-white hover:bg-[#6B5210] disabled:opacity-50"
-          >
-            {isLoading ? <LoadingSpinner className="py-0" /> : 'Send Code'}
-          </button>
-        </form>
+        {isLoading ? (
+          <LoadingSpinner />
+        ) : (
+          <div className="flex justify-center">
+            <GoogleLogin
+              onSuccess={handleGoogleSuccess}
+              onError={() => setError('Google Sign-In failed')}
+              size="large"
+              width="320"
+              text="signin_with"
+            />
+          </div>
+        )}
       </div>
     </div>
   );

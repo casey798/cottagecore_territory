@@ -1,7 +1,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { getLocations } from '@/api/locations';
-import { setDailyConfig } from '@/api/daily';
+import { setDailyConfig, applyDailyConfig } from '@/api/daily';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ErrorAlert } from '@/components/ErrorAlert';
 import type { Location } from '@/types';
@@ -64,6 +64,41 @@ export function DailyConfigPage() {
       const msg = err instanceof Error ? err.message : 'Unknown error';
       console.error('[DailyConfig] Save failed:', msg);
       setNotification({ type: 'error', message: `Failed to save: ${msg}` });
+      setTimeout(() => setNotification(null), 8000);
+    },
+  });
+
+  const applyMut = useMutation({
+    mutationFn: async () => {
+      if (selectedIds.size === 0) throw new Error('Select at least one location');
+      if (!targetName.trim()) throw new Error('Target space name is required');
+      if (!targetDesc.trim()) throw new Error('Target space description is required');
+
+      // Save config first
+      await setDailyConfig({
+        date: today,
+        activeLocationIds: Array.from(selectedIds),
+        targetSpace: {
+          name: targetName.trim(),
+          description: targetDesc.trim(),
+          mapOverlayId: targetOverlay.trim() || 'default',
+        },
+        difficulty,
+      });
+
+      // Then apply immediately
+      return applyDailyConfig();
+    },
+    onSuccess: (data) => {
+      setNotification({
+        type: 'success',
+        message: `Locations applied — ${data.assignedPlayerCount} players will see updated pins immediately`,
+      });
+      setTimeout(() => setNotification(null), 5000);
+    },
+    onError: (err) => {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setNotification({ type: 'error', message: `Failed to apply locations: ${msg}` });
       setTimeout(() => setNotification(null), 8000);
     },
   });
@@ -228,13 +263,22 @@ export function DailyConfigPage() {
               </div>
             </div>
 
-            <button
-              onClick={() => saveMut.mutate()}
-              disabled={saveMut.isPending}
-              className="w-full rounded bg-[#8B6914] px-4 py-3 text-sm font-semibold text-white hover:bg-[#6B5210] disabled:opacity-50"
-            >
-              {saveMut.isPending ? 'Saving...' : `Save Daily Config for ${today}`}
-            </button>
+            <div className="flex gap-3">
+              <button
+                onClick={() => saveMut.mutate()}
+                disabled={saveMut.isPending || applyMut.isPending}
+                className="flex-1 rounded bg-[#8B6914] px-4 py-3 text-sm font-semibold text-white hover:bg-[#6B5210] disabled:opacity-50"
+              >
+                {saveMut.isPending ? 'Saving...' : 'Save Config'}
+              </button>
+              <button
+                onClick={() => applyMut.mutate()}
+                disabled={saveMut.isPending || applyMut.isPending}
+                className="flex-1 rounded bg-[#27AE60] px-4 py-3 text-sm font-semibold text-white hover:bg-[#219A52] disabled:opacity-50"
+              >
+                {applyMut.isPending ? 'Applying...' : 'Save & Apply Now'}
+              </button>
+            </div>
           </div>
         </div>
       )}

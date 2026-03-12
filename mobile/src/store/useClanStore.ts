@@ -7,6 +7,7 @@ const DEV_SEED_CLANS: ClanScore[] = __DEV__
       { clanId: 'tide', todayXp: 1100, seasonXp: 9200, spacesCaptured: 6 },
       { clanId: 'bloom', todayXp: 650, seasonXp: 7800, spacesCaptured: 2 },
       { clanId: 'gale', todayXp: 950, seasonXp: 8100, spacesCaptured: 4 },
+      { clanId: 'hearth', todayXp: 400, seasonXp: 3200, spacesCaptured: 1 },
     ]
   : [];
 

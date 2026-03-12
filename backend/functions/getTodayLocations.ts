@@ -20,15 +20,22 @@ export const handler = async (
     });
     console.log(`[getTodayLocations] assignment:`, assignment ? `found ${assignment.assignedLocationIds.length} locations` : 'NOT FOUND');
 
+    // Get today's active location pool for cross-checking
+    const dailyConfig = await getItem<DailyConfig>('daily-config', { date: today });
+    const activePool = dailyConfig?.activeLocationIds
+      ? new Set(dailyConfig.activeLocationIds)
+      : null;
+
     let locationIds: string[];
 
     if (assignment) {
-      locationIds = assignment.assignedLocationIds;
+      // Filter out locations that admin removed from today's active pool
+      locationIds = activePool
+        ? assignment.assignedLocationIds.filter((id) => activePool.has(id))
+        : assignment.assignedLocationIds;
     } else if (STAGE === 'dev') {
       // Dev fallback: if no assignment yet, use daily config locations directly
-      console.log('[getTodayLocations] Dev fallback: checking daily-config for today');
-      const dailyConfig = await getItem<DailyConfig>('daily-config', { date: today });
-      console.log(`[getTodayLocations] daily-config:`, dailyConfig ? `found ${dailyConfig.activeLocationIds.length} locations` : 'NOT FOUND');
+      console.log('[getTodayLocations] Dev fallback: using daily-config locations');
 
       if (dailyConfig && dailyConfig.activeLocationIds.length > 0) {
         locationIds = dailyConfig.activeLocationIds;

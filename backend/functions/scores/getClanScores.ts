@@ -3,7 +3,7 @@ import { getItem } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
 import { Clan, ClanId, ClanScore } from '../../shared/types';
 
-const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale];
+const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
 
 export const handler = async (
   _event: APIGatewayProxyEvent

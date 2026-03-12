@@ -40,7 +40,7 @@ export interface ClanScore {
   spacesCaptured: number;
 }
 
-export type ClanId = 'ember' | 'tide' | 'bloom' | 'gale';
+export type ClanId = 'ember' | 'tide' | 'bloom' | 'gale' | 'hearth';
 
 export interface DailyConfig {
   date: string;
