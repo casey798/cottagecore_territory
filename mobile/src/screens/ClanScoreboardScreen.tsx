@@ -8,7 +8,7 @@ import {
   RefreshControl,
 } from 'react-native';
 import { useClanScores } from '@/hooks/useClanScores';
-import { useLockLandscape } from '@/hooks/useScreenOrientation';
+
 import { useCountdown } from '@/hooks/useCountdown';
 import { useAuthStore } from '@/store/useAuthStore';
 import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
@@ -102,7 +102,7 @@ function ClanRow({ item, rank, isOwnClan, previousXp }: ClanRowProps) {
 }
 
 export default function ClanScoreboardScreen() {
-  useLockLandscape();
+
   const { clans, isConnected, lastUpdated } = useClanScores();
   const myClan = useAuthStore((s) => s.clan);
   const setClans = useClanStore((s) => s.setClans);

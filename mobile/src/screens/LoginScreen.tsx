@@ -11,11 +11,10 @@ import {
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
 import { configureGoogleSignIn } from '@/api/auth';
+import { requestNotificationPermission } from '@/utils/notifications';
 
 export default function LoginScreen() {
-  useLockPortrait();
   const googleSignIn = useAuthStore((s) => s.googleSignIn);
   const isLoading = useAuthStore((s) => s.isLoading);
 
@@ -25,7 +24,9 @@ export default function LoginScreen() {
 
   const handleGoogleSignIn = async () => {
     const result = await googleSignIn();
-    if (!result.success) {
+    if (result.success) {
+      requestNotificationPermission();
+    } else {
       if (result.errorCode === 'CANCELLED') return;
 
       const errorMsg =

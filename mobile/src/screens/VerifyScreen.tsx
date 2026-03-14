@@ -13,24 +13,23 @@ import {
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { RootStackParamList } from '@/navigation/RootNavigator';
+import { AuthStackParamList } from '@/navigation/AuthStack';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { AppTextInput } from '@/components/common/AppTextInput';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
 
-type Nav = NativeStackNavigationProp<RootStackParamList, 'Verify'>;
-type Route = RouteProp<RootStackParamList, 'Verify'>;
+type Nav = NativeStackNavigationProp<AuthStackParamList, 'Verify'>;
+type Route = RouteProp<AuthStackParamList, 'Verify'>;
 
 const CODE_LENGTH = 6;
 
 export default function VerifyScreen() {
-  useLockPortrait();
   const navigation = useNavigation<Nav>();
   const route = useRoute<Route>();
   const { email } = route.params;
-  const login = useAuthStore((s) => s.login);
+  // Legacy Cognito verify — kept for type safety; Google Sign-In bypasses this screen
+  const login = async (_email: string, _code: string): Promise<boolean> => false;
   const [code, setCode] = useState<string[]>(new Array(CODE_LENGTH).fill(''));
   const [loading, setLoading] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);

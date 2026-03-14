@@ -19,22 +19,37 @@ export interface GPSState {
   weakSignal: boolean;
 }
 
-async function requestLocationPermission(): Promise<boolean> {
-  if (Platform.OS !== 'android') return false;
+async function requestLocationPermission(): Promise<{
+  granted: boolean;
+  freshGrant: boolean;
+}> {
+  if (Platform.OS !== 'android') return { granted: false, freshGrant: false };
 
-  const granted = await PermissionsAndroid.request(
-    PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-    {
-      title: 'GroveWars Location Permission',
-      message:
-        'GroveWars needs your location to show you ' +
-        'nearby challenges on the campus map.',
-      buttonNeutral: 'Ask Me Later',
-      buttonNegative: 'Cancel',
-      buttonPositive: 'OK',
-    },
-  );
-  return granted === PermissionsAndroid.RESULTS.GRANTED;
+  try {
+    const alreadyGranted = await PermissionsAndroid.check(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+    );
+
+    if (alreadyGranted) return { granted: true, freshGrant: false };
+
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+      {
+        title: 'GroveWars Location Permission',
+        message:
+          'GroveWars needs your location to show you ' +
+          'nearby challenges on the campus map.',
+        buttonNeutral: 'Ask Me Later',
+        buttonNegative: 'Cancel',
+        buttonPositive: 'OK',
+      },
+    );
+
+    const granted = result === PermissionsAndroid.RESULTS.GRANTED;
+    return { granted, freshGrant: granted };
+  } catch {
+    return { granted: false, freshGrant: false };
+  }
 }
 
 // Module-level cache so new hook instances start with the last known position
@@ -113,6 +128,40 @@ export function useGPS(): GPSState {
     watchIdRef.current = watchId;
   }, []);
 
+  // Get a one-shot position to seed state immediately after a fresh grant.
+  // watchPosition alone can silently fail when the location provider hasn't
+  // fully initialised yet on first-install.
+  const getInitialFix = useCallback(() => {
+    Geolocation.getCurrentPosition(
+      (position: GeoPosition) => {
+        const acc = position.coords.accuracy;
+        cachedPosition = {
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: acc,
+        };
+        setState({
+          latitude: position.coords.latitude,
+          longitude: position.coords.longitude,
+          accuracy: acc,
+          isTracking: true,
+          permissionDenied: false,
+          error: null,
+          weakSignal: acc > GPS_ACCURACY_WEAK,
+        });
+      },
+      () => {
+        // Non-fatal — the watcher started right after will pick up eventually
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0,
+        forceRequestLocation: true,
+      },
+    );
+  }, []);
+
   useEffect(() => {
     let mounted = true;
 
@@ -120,11 +169,11 @@ export function useGPS(): GPSState {
       if (permissionCheckedRef.current) return;
       permissionCheckedRef.current = true;
 
-      const hasPermission = await requestLocationPermission();
+      const { granted, freshGrant } = await requestLocationPermission();
 
       if (!mounted) return;
 
-      if (!hasPermission) {
+      if (!granted) {
         setState((prev) => ({
           ...prev,
           permissionDenied: true,
@@ -135,6 +184,9 @@ export function useGPS(): GPSState {
       }
 
       if (isWithinGameHours()) {
+        if (freshGrant) {
+          getInitialFix();
+        }
         startTracking();
       } else {
         setState((prev) => ({
@@ -151,7 +203,7 @@ export function useGPS(): GPSState {
       mounted = false;
       stopTracking();
     };
-  }, [startTracking, stopTracking]);
+  }, [startTracking, stopTracking, getInitialFix]);
 
   // Re-check game hours periodically
   useEffect(() => {

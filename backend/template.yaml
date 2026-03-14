@@ -19,6 +19,12 @@ Parameters:
     NoEcho: true
 
 # ---------------------------------------------------------------------------
+# Conditions
+# ---------------------------------------------------------------------------
+Conditions:
+  IsNotProd: !Not [!Equals [!Ref Stage, prod]]
+
+# ---------------------------------------------------------------------------
 # Globals
 # ---------------------------------------------------------------------------
 Globals:
@@ -537,6 +543,10 @@ Resources:
             TableName: !Ref UsersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref RosterTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref DailyConfigTable
         - Statement:
             - Effect: Allow
               Action:
@@ -631,12 +641,12 @@ Resources:
         External:
           - '@aws-sdk/*'
 
-  DevResetFunction:
+  ResetPlayerStateFunction:
     Type: AWS::Serverless::Function
     Properties:
-      FunctionName: !Sub grovewars-${Stage}-devReset
-      CodeUri: functions/player/
-      Handler: devReset.handler
+      FunctionName: !Sub grovewars-${Stage}-resetPlayerState
+      CodeUri: functions/debug/
+      Handler: resetPlayerState.handler
       Environment:
         Variables:
           STAGE: !Ref Stage
@@ -647,12 +657,14 @@ Resources:
             TableName: !Ref GameSessionsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
       Events:
         Api:
           Type: Api
           Properties:
             RestApiId: !Ref RestApi
-            Path: /dev/reset
+            Path: /debug/reset-player-state
             Method: POST
     Metadata:
       BuildMethod: esbuild
@@ -661,7 +673,7 @@ Resources:
         Target: es2020
         Sourcemap: true
         EntryPoints:
-          - devReset.ts
+          - resetPlayerState.ts
         External:
           - '@aws-sdk/*'
 
@@ -691,6 +703,33 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - updateAvatar.ts
+        External:
+          - '@aws-sdk/*'
+
+  UpdateFcmTokenFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-updateFcmToken
+      CodeUri: functions/player/
+      Handler: updateFcmToken.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/fcm-token
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - updateFcmToken.ts
         External:
           - '@aws-sdk/*'
 
@@ -1019,6 +1058,8 @@ Resources:
             TableName: !Ref ClansTable
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
       Events:
         Api:
           Type: Api
@@ -1208,6 +1249,33 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  GetUsersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getUsers
+      CodeUri: functions/admin/
+      Handler: getUsers.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/users
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getUsers.ts
+        External:
+          - '@aws-sdk/*'
+
   MapUploadUrlFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1259,6 +1327,33 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - saveMapCalibration.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetDailyConfigFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getDailyConfig
+      CodeUri: functions/admin/
+      Handler: getDailyConfig.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/daily/config
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getDailyConfig.ts
         External:
           - '@aws-sdk/*'
 
@@ -1354,6 +1449,70 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  ResetQrFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-resetQr
+      CodeUri: functions/admin/
+      Handler: resetQR.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/qr/reset
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - resetQR.ts
+        External:
+          - '@aws-sdk/*'
+
+  DeleteOverlaysFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-deleteOverlays
+      CodeUri: functions/admin/
+      Handler: deleteOverlays.handler
+      Environment:
+        Variables:
+          WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - execute-api:ManageConnections
+              Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/overlays/delete
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - deleteOverlays.ts
+        External:
+          - '@aws-sdk/*'
+
   SendNotificationFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1386,6 +1545,107 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - sendNotification.ts
+        External:
+          - '@aws-sdk/*'
+
+  TestNotificationFunction:
+    Type: AWS::Serverless::Function
+    Condition: IsNotProd
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-testNotification
+      CodeUri: functions/admin/
+      Handler: testNotification.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/test-notification
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - testNotification.ts
+        External:
+          - '@aws-sdk/*'
+
+  TriggerScheduledFunction:
+    Type: AWS::Serverless::Function
+    Condition: IsNotProd
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-triggerScheduled
+      CodeUri: functions/admin/
+      Handler: triggerScheduled.handler
+      Timeout: 120
+      Environment:
+        Variables:
+          WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+        - Statement:
+            - Effect: Allow
+              Action:
+                - execute-api:ManageConnections
+              Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/debug/trigger-scheduled
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - triggerScheduled.ts
         External:
           - '@aws-sdk/*'
 
@@ -1637,6 +1897,9 @@ Resources:
       CodeUri: functions/scheduled/
       Handler: dailyReset.handler
       Timeout: 120
+      Environment:
+        Variables:
+          WEBSOCKET_API_ENDPOINT: !Sub "https://${WebSocketApi}.execute-api.ap-south-1.amazonaws.com/${Stage}"
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -1650,12 +1913,19 @@ Resources:
             TableName: !Ref DailyConfigTable
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref WsConnectionsTable
         - Statement:
             - Effect: Allow
               Action:
                 - ssm:GetParameter
                 - kms:Decrypt
               Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+        - Statement:
+            - Effect: Allow
+              Action:
+                - execute-api:ManageConnections
+              Resource: !Sub arn:aws:execute-api:ap-south-1:${AWS::AccountId}:${WebSocketApi}/${Stage}/POST/@connections/*
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -1773,6 +2043,101 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  # -------------------------------------------------------------------------
+  # Event Window Notifications (morning, lunch, final push)
+  # -------------------------------------------------------------------------
+  EventWindowMorningFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-eventWindowMorning
+      CodeUri: functions/scheduled/
+      Handler: eventWindowNotifications.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          WINDOW: morning
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - eventWindowNotifications.ts
+        External:
+          - '@aws-sdk/*'
+
+  EventWindowLunchFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-eventWindowLunch
+      CodeUri: functions/scheduled/
+      Handler: eventWindowNotifications.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          WINDOW: lunch
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - eventWindowNotifications.ts
+        External:
+          - '@aws-sdk/*'
+
+  EventWindowFinalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-eventWindowFinal
+      CodeUri: functions/scheduled/
+      Handler: eventWindowNotifications.handler
+      Timeout: 60
+      Environment:
+        Variables:
+          WINDOW: final
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - eventWindowNotifications.ts
+        External:
+          - '@aws-sdk/*'
+
   # =========================================================================
   # EventBridge Rules (separate resources — Lambda first, then rule, then permission)
   # =========================================================================
@@ -1856,6 +2221,66 @@ Resources:
       FunctionName: !Ref AssetExpiryWarningFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt AssetExpiryWarningRule.Arn
+
+  # Morning Break — 10:40 AM IST (5:10 UTC)
+  MorningBreakRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-morning-break
+      Description: Morning break notification at 10:40 AM IST (5:10 UTC)
+      ScheduleExpression: cron(10 5 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt EventWindowMorningFunction.Arn
+          Id: MorningBreakTarget
+
+  MorningBreakPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EventWindowMorningFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt MorningBreakRule.Arn
+
+  # Lunch Break — 12:40 PM IST (7:10 UTC)
+  LunchBreakRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-lunch-break
+      Description: Lunch break notification at 12:40 PM IST (7:10 UTC)
+      ScheduleExpression: cron(10 7 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt EventWindowLunchFunction.Arn
+          Id: LunchBreakTarget
+
+  LunchBreakPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EventWindowLunchFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt LunchBreakRule.Arn
+
+  # Final Push — 5:00 PM IST (11:30 UTC)
+  FinalPushRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-final-push
+      Description: Final push notification at 5:00 PM IST (11:30 UTC)
+      ScheduleExpression: cron(30 11 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt EventWindowFinalFunction.Arn
+          Id: FinalPushTarget
+
+  FinalPushPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref EventWindowFinalFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt FinalPushRule.Arn
 
 # ---------------------------------------------------------------------------
 # Outputs

@@ -2,10 +2,8 @@ import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
 
 export default function SeasonSummaryScreen() {
-  useLockPortrait();
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Season Summary</Text>

@@ -12,7 +12,7 @@ import { generateCompletionHash, generateClientCompletionHash } from '@/utils/hm
 import * as gameApi from '@/api/game';
 import { GameResult } from '@/types';
 import { MinigameResult, MinigamePlayProps } from '@/types/minigame';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
+import { lockLandscape, lockPortrait } from '@/hooks/useScreenOrientation';
 import GroveWordsGame from '@/minigames/grove-words/GroveWordsGame';
 import KindredGame from '@/minigames/kindred/KindredGame';
 import StonePairsGame from '@/minigames/stone-pairs/StonePairsGame';
@@ -48,6 +48,8 @@ interface MinigameCompleteData {
   solutionData: Record<string, unknown>;
 }
 
+const LANDSCAPE_MINIGAMES = new Set(['vine-trail', 'crossvine', 'leaf-sort']);
+
 function MinigamePlaceholder({
   minigameId,
   onComplete,
@@ -55,7 +57,6 @@ function MinigamePlaceholder({
   minigameId: string;
   onComplete: (data: MinigameCompleteData) => void;
 }) {
-  useLockPortrait();
   return (
     <View style={placeholderStyles.container}>
       <Text style={placeholderStyles.name}>
@@ -124,6 +125,14 @@ export default function MinigamePlayScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<PlayRoute>();
   const { sessionId, minigameId, timeLimit, salt, locationId, locationName, xpAvailable } = route.params;
+
+  // Lock landscape for the 4 landscape minigames, restore portrait on unmount
+  useEffect(() => {
+    if (LANDSCAPE_MINIGAMES.has(minigameId)) {
+      lockLandscape();
+      return () => { lockPortrait(); };
+    }
+  }, [minigameId]);
   const userId = useAuthStore((s) => s.userId) || '';
   const todayXp = useGameStore((s) => s.todayXp);
   const recordWin = useGameStore((s) => s.recordWin);

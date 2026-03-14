@@ -66,7 +66,7 @@ describe('MapPin', () => {
     expect(onPress).toHaveBeenCalledTimes(1);
   });
 
-  it('shows glow ring when event boosted and not locked', () => {
+  it('shows glow ring when in range and not locked', () => {
     const onPress = jest.fn();
     const { UNSAFE_root } = render(
       <MapPin
@@ -74,17 +74,16 @@ describe('MapPin', () => {
         pixelX={100}
         pixelY={200}
         onPress={onPress}
-        eventBoosted
+        inRange
       />,
     );
 
-    // The component renders a glowRing View when eventBoosted && !locked
-    // Verify the Pressable has 3 children: Animated.View (pin) + View (glowRing)
+    // The component renders a glowRing View when inRange && !locked
     const pressable = UNSAFE_root.children[0];
     expect(pressable).toBeTruthy();
   });
 
-  it('does not show glow ring when locked even if event boosted', () => {
+  it('does not show glow ring when locked even if in range', () => {
     const onPress = jest.fn();
     const { queryByText } = render(
       <MapPin
@@ -92,7 +91,7 @@ describe('MapPin', () => {
         pixelX={100}
         pixelY={200}
         onPress={onPress}
-        eventBoosted
+        inRange
       />,
     );
 

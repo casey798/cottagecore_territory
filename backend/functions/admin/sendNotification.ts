@@ -70,12 +70,10 @@ export async function handler(
     }
 
     // Send notifications
-    const { sent } = await sendToTokens(
-      tokens,
-      'GroveWars',
-      message,
-      { type: notificationType, target }
-    );
+    const sent = await sendToTokens(tokens, {
+      notification: { title: 'GroveWars', body: message },
+      data: { type: 'ADMIN_CUSTOM', notificationType, target },
+    });
 
     // Create admin notification record
     const notificationId = randomUUID();

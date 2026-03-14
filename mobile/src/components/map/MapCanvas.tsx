@@ -1,12 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, StyleSheet, ActivityIndicator, Text, LayoutChangeEvent } from 'react-native';
+import FastImage from 'react-native-fast-image';
 import {
   Canvas,
-  Image as SkiaImage,
   Circle,
   Group,
   Path as SkiaPath,
-  useImage,
 } from '@shopify/react-native-skia';
 import {
   GestureDetector,
@@ -25,10 +24,11 @@ import { FONTS } from '@/constants/fonts';
 import { CLAN_COLORS } from '@/constants/colors';
 import { useMapStore } from '@/store/useMapStore';
 import { useDebugStore } from '@/store/useDebugStore';
-import { ClanId, Location } from '@/types';
+import { ClanId, Location, CapturedSpace } from '@/types';
 import { isWithinMapBounds, getEdgeIndicator } from '@/utils/mapBounds';
 import { pixelToGps } from '@/utils/affineTransform';
 import { MapPinsLayer } from './MapPinsLayer';
+import { MapOverlay } from './MapOverlay';
 
 const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 4;
@@ -51,16 +51,31 @@ interface Props {
   xpExhaustedIds?: Set<string>;
   onViewportChange?: (viewport: ViewportRect) => void;
   registerNavigate?: (fn: (mapX: number, mapY: number) => void) => void;
+  capturedSpaces?: CapturedSpace[];
+  followPlayer?: boolean;
+  onFollowChange?: (following: boolean) => void;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate }: Props) {
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
-  const image = useImage(mapConfig?.mapImageUrl ?? null);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
   const tapToSetMode = useDebugStore((s) => s.tapToSetMode);
 
   // Brief toast after tap-to-set
   const [tapToast, setTapToast] = useState(false);
+
+  // Map image loading state + fade-in
+  const [mapImageLoaded, setMapImageLoaded] = useState(false);
+  const fadeOpacity = useSharedValue(0);
+
+  const fadeStyle = useAnimatedStyle(() => ({
+    opacity: fadeOpacity.value,
+  }));
+
+  const handleMapImageLoad = useCallback(() => {
+    setMapImageLoaded(true);
+    fadeOpacity.value = withTiming(1, { duration: 300 });
+  }, [fadeOpacity]);
 
   // View dimensions
   const viewW = useSharedValue(0);
@@ -182,6 +197,35 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     setTimeout(reportViewport, 0);
   }, [onLayout, mapConfig, playerX, playerY, centerOn, hasCentered, reportViewport]);
 
+  // Auto-follow player when followPlayer is true
+  useEffect(() => {
+    if (!followPlayer || playerX == null || playerY == null || !mapConfig) return;
+    if (viewW.value === 0 || viewH.value === 0) return;
+
+    const z = scale.value;
+    let tx = viewW.value / 2 - playerX * z;
+    let ty = viewH.value / 2 - playerY * z;
+
+    const scaledW = mapConfig.mapWidth * z;
+    const scaledH = mapConfig.mapHeight * z;
+    if (scaledW <= viewW.value) {
+      tx = (viewW.value - scaledW) / 2;
+    } else {
+      tx = Math.min(0, Math.max(viewW.value - scaledW, tx));
+    }
+    if (scaledH <= viewH.value) {
+      ty = (viewH.value - scaledH) / 2;
+    } else {
+      ty = Math.min(0, Math.max(viewH.value - scaledH, ty));
+    }
+
+    translateX.value = withTiming(tx, { duration: 300 });
+    translateY.value = withTiming(ty, { duration: 300 });
+    savedTranslateX.value = tx;
+    savedTranslateY.value = ty;
+    setTimeout(reportViewport, 350);
+  }, [followPlayer, playerX, playerY, mapConfig, viewW, viewH, scale, translateX, translateY, savedTranslateX, savedTranslateY, reportViewport]);
+
   // Saved focal point for pinch gesture (track two-finger drag during pinch)
   const savedFocalX = useSharedValue(0);
   const savedFocalY = useSharedValue(0);
@@ -257,6 +301,11 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       runOnJS(reportViewport)();
     });
 
+  // Callback for disabling follow mode from worklet
+  const disableFollow = useCallback(() => {
+    onFollowChange?.(false);
+  }, [onFollowChange]);
+
   // --- Pan gesture: single-finger drag only ---
   const panGesture = Gesture.Pan()
     .minPointers(1)
@@ -265,6 +314,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       'worklet';
       savedTranslateX.value = translateX.value;
       savedTranslateY.value = translateY.value;
+      runOnJS(disableFollow)();
     })
     .onUpdate((e) => {
       'worklet';
@@ -427,15 +477,6 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     );
   }
 
-  if (!image) {
-    return (
-      <View style={styles.placeholder}>
-        <ActivityIndicator size="large" color={PALETTE.softGreen} />
-        <Text style={styles.loadingText}>Loading map image...</Text>
-      </View>
-    );
-  }
-
   const DEBUG_COLOR = '#FFD700';
   const dotColor = (__DEV__ && isDebugMode) ? DEBUG_COLOR : (clan ? CLAN_COLORS[clan] : null);
 
@@ -447,6 +488,13 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
             <Text style={styles.debugBadgeText}>DEBUG GPS</Text>
           </View>
         )}
+        {/* Loading indicator while map image downloads */}
+        {!mapImageLoaded && (
+          <View style={styles.mapLoading}>
+            <ActivityIndicator size="large" color={PALETTE.honeyGold} />
+            <Text style={styles.mapLoadingText}>Preparing the grove...</Text>
+          </View>
+        )}
         <Animated.View
             style={[
               {
@@ -455,17 +503,28 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                 transformOrigin: 'left top',
               },
               animatedStyle,
+              fadeStyle,
             ]}
           >
-            <Canvas style={{ width: mapConfig.mapWidth, height: mapConfig.mapHeight }}>
-              <SkiaImage
-                image={image}
-                x={0}
-                y={0}
-                width={mapConfig.mapWidth}
-                height={mapConfig.mapHeight}
-                fit="fill"
-              />
+            <FastImage
+              source={{
+                uri: mapConfig.mapImageUrl,
+                priority: FastImage.priority.high,
+                cache: FastImage.cacheControl.immutable,
+              }}
+              style={{ width: mapConfig.mapWidth, height: mapConfig.mapHeight }}
+              resizeMode={FastImage.resizeMode.contain}
+              onLoad={handleMapImageLoad}
+            />
+            <Canvas style={styles.overlayCanvas}>
+              {capturedSpaces && capturedSpaces.length > 0 && (
+                <MapOverlay
+                  capturedSpaces={capturedSpaces}
+                  scale={1}
+                  translateX={0}
+                  translateY={0}
+                />
+              )}
               {playerX != null && playerY != null && dotColor && inBounds && (
                 <Group>
                   {/* Accuracy ring */}
@@ -599,6 +658,30 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: FONTS.bodyRegular,
     marginTop: 12,
+  },
+  overlayCanvas: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+  },
+  mapLoading: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 5,
+  },
+  mapLoadingText: {
+    color: PALETTE.cream,
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    marginTop: 10,
+    letterSpacing: 0.5,
   },
   debugBadge: {
     position: 'absolute',

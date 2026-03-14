@@ -15,7 +15,6 @@ import { useClanStore } from '@/store/useClanStore';
 import { useGameStore } from '@/store/useGameStore';
 import { useMapStore } from '@/store/useMapStore';
 import { AssetRarity } from '@/types';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type ResultRoute = RouteProp<MainModalParamList, 'Result'>;
@@ -28,7 +27,6 @@ const RARITY_COLORS: Record<AssetRarity, string> = {
 };
 
 export default function ResultScreen() {
-  useLockPortrait();
   const navigation = useNavigation<Nav>();
   const route = useRoute<ResultRoute>();
   const {
@@ -46,17 +44,37 @@ export default function ResultScreen() {
 
   const clans = useClanStore((s) => s.clans);
   const lockLocation = useMapStore((s) => s.lockLocation);
+  const loadTodayLocations = useMapStore((s) => s.loadTodayLocations);
   const markXpEarnedAtLocation = useGameStore((s) => s.markXpEarnedAtLocation);
+  const patchLastScanResult = useGameStore((s) => s.patchLastScanResult);
+  const lastScanResult = useGameStore((s) => s.lastScanResult);
   const isWin = result === 'win';
   const didEarnXp = xpAwarded !== false;
 
-  // Mark XP earned or lock location on lose
+  // Mark XP earned or lock location on lose, then refresh map locations
   useEffect(() => {
     if (isWin && didEarnXp && locationId) {
       markXpEarnedAtLocation(locationId);
+      loadTodayLocations();
+
+      // Patch lastScanResult so MinigameSelectScreen shows practice mode on return
+      const capReached = (newTodayXp ?? 0) >= 100;
+      if (capReached) {
+        patchLastScanResult({ xpAvailable: false });
+      }
+
+      // Mark the just-won minigame as completed in lastScanResult
+      if (minigameId && lastScanResult?.availableMinigames) {
+        const patched = lastScanResult.availableMinigames.map((m) =>
+          m.minigameId === minigameId ? { ...m, completed: true } : m,
+        );
+        patchLastScanResult({ availableMinigames: patched, xpAvailable: false });
+      }
     }
     if (!isWin && locationLocked && locationId) {
       lockLocation(locationId);
+      loadTodayLocations();
+      patchLastScanResult({ xpAvailable: false });
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

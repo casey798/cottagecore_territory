@@ -1,3 +1,3 @@
-export const MAP_WIDTH = 2000;
-export const MAP_HEIGHT = 1125;
-export const TILE_SIZE = 32;
+export const MAP_WIDTH = 1920;
+export const MAP_HEIGHT = 1080;
+export const TILE_SIZE = 16;

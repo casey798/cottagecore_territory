@@ -79,6 +79,8 @@ export interface DailyInfo {
   status: DailyStatus;
   difficulty: Difficulty;
   eventWindows: EventWindow[];
+  resetSeq?: number;
+  winnerClan?: string | null;
 }
 
 export interface MinigameInfo {
@@ -168,6 +170,8 @@ export interface CapturedSpace {
   clan: ClanId;
   dateCaptured: string;
   mapOverlayId: string;
+  polygonPoints?: Array<{ x: number; y: number }>;
+  gridCells?: Array<{ x: number; y: number }>;
 }
 
 export interface PlacedAsset {
@@ -230,6 +234,7 @@ export interface MapConfig {
 
 export interface PlayerProfile {
   userId: string;
+  email?: string;
   displayName: string;
   clan: ClanId;
   avatarConfig: AvatarConfig;
@@ -267,7 +272,24 @@ export interface WsCaptureMessage {
   };
 }
 
-export type WsMessage = WsScoreUpdate | WsCaptureMessage;
+export interface WsDailyReset {
+  type: 'DAILY_RESET';
+  data: {
+    date: string;
+    resetSeq: number;
+  };
+}
+
+export interface WsScoringComplete {
+  type: 'SCORING_COMPLETE';
+  data: {
+    winnerClan: ClanId;
+    spaceName: string;
+    mapOverlayId: string;
+  };
+}
+
+export type WsMessage = WsScoreUpdate | WsCaptureMessage | WsDailyReset | WsScoringComplete;
 
 export enum ErrorCode {
   InvalidDomain = 'INVALID_DOMAIN',

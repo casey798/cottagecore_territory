@@ -14,14 +14,17 @@ const DEV_SEED_CLANS: ClanScore[] = __DEV__
 interface ClanState {
   clans: ClanScore[];
   lastUpdated: string | null;
+  wsConnected: boolean;
   setClans: (clans: ClanScore[]) => void;
   updateClanXp: (clanId: string, newXp: number) => void;
   setCaptureResult: (winnerClan: string, spaceName: string) => void;
+  setWsConnected: (connected: boolean) => void;
 }
 
 export const useClanStore = create<ClanState>((set) => ({
   clans: DEV_SEED_CLANS,
   lastUpdated: DEV_SEED_CLANS.length > 0 ? new Date().toISOString() : null,
+  wsConnected: false,
 
   setClans: (clans: ClanScore[]) =>
     set({ clans, lastUpdated: new Date().toISOString() }),
@@ -43,4 +46,7 @@ export const useClanStore = create<ClanState>((set) => ({
       ),
       lastUpdated: new Date().toISOString(),
     })),
+
+  setWsConnected: (connected: boolean) =>
+    set({ wsConnected: connected }),
 }));

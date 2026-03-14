@@ -288,7 +288,7 @@ Follow the phased plan in the GDD (Section 15). In summary:
 ## Common Pitfalls to Avoid
 
 - **Don't use Redux.** Use Zustand. It's simpler and sufficient for this app's state needs.
-- **Don't ignore the 32px tile grid.** The campus map is built on a 32×32 tile grid (2000×1125 px total). All elements rendered ON the map (pins, markers, banners, overlays) must be 32px-aligned. Character sprites at 48×48 are for off-map screens only (profile, creation, scoreboard) — never render them on the map.
+- **Don't ignore the 16px tile grid.** The campus map is built on a 16×16 tile grid (1920×1080 px total). All elements rendered ON the map (pins, markers, banners, overlays) must be 16px-aligned. Character sprites at 48×48 are for off-map screens only (profile, creation, scoreboard) — never render them on the map.
 - **Don't use WidthType.PERCENTAGE** in any docx generation — it breaks in some viewers.
 - **Don't store GPS data outside active gameplay.** Privacy requirement.
 - **Don't hardcode IST offsets.** Use a timezone library (date-fns-tz or luxon) for all IST conversions.

@@ -23,9 +23,18 @@ export async function assignLocationsForAllPlayers(
 
   if (allUsers.length === 0) return 0;
 
+  // Skip users whose userId looks like a UUID (not yet migrated to Firebase UID).
+  // Firebase UIDs are 28-char alphanumeric; UUIDs are 36-char with dashes (8-4-4-4-12).
+  const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const eligibleUsers = allUsers.filter((u) => !UUID_PATTERN.test(u.userId));
+  const skipped = allUsers.length - eligibleUsers.length;
+  if (skipped > 0) {
+    console.log(`Skipped ${skipped} users with non-Firebase userId (not yet migrated)`);
+  }
+
   const assignments: Record<string, unknown>[] = [];
 
-  for (const user of allUsers) {
+  for (const user of eligibleUsers) {
     const count = Math.floor(Math.random() * 3) + 3; // 3-5 locations
     const shuffled = [...activeLocationIds].sort(() => Math.random() - 0.5);
     const assigned = shuffled.slice(0, Math.min(count, shuffled.length));

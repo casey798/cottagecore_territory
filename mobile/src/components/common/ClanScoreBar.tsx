@@ -50,7 +50,7 @@ export function ClanScoreBar({ scores }: Props) {
 const styles = StyleSheet.create({
   container: {
     flexDirection: 'row',
-    gap: 8,
+    gap: 4,
   },
   clanChip: {
     flexDirection: 'row',
@@ -58,7 +58,12 @@ const styles = StyleSheet.create({
     backgroundColor: PALETTE.cream,
     borderRadius: 6,
     overflow: 'hidden',
-    paddingRight: 8,
+    paddingRight: 6,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
   },
   accentBar: {
     width: 4,
@@ -66,13 +71,13 @@ const styles = StyleSheet.create({
     marginRight: 6,
   },
   clanName: {
-    fontSize: 12,
+    fontSize: 10,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.darkBrown,
-    marginRight: 4,
+    marginRight: 2,
   },
   clanXp: {
-    fontSize: 12,
+    fontSize: 10,
     fontFamily: FONTS.bodyBold,
     color: PALETTE.stoneGrey,
   },

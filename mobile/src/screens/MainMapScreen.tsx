@@ -8,7 +8,7 @@ import {
   Animated,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { useLockLandscape } from '@/hooks/useScreenOrientation';
+
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { PALETTE } from '@/constants/colors';
@@ -31,7 +31,7 @@ import { MapMinimap } from '@/components/map/MapMinimap';
 import { DebugPanel } from '@/components/common/DebugPanel';
 import { useImage } from '@shopify/react-native-skia';
 import * as mapApi from '@/api/map';
-import { Location } from '@/types';
+import { ClanId, Location } from '@/types';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 
@@ -42,7 +42,7 @@ interface LocationProximity {
 }
 
 export default function MainMapScreen() {
-  useLockLandscape();
+
   const navigation = useNavigation<Nav>();
   const { clans: scores } = useClanScores();
   const gps = useGPS();
@@ -59,15 +59,35 @@ export default function MainMapScreen() {
   const setSelectedLocation = useGameStore((s) => s.setSelectedLocation);
   const xpEarnedAtLocations = useGameStore((s) => s.xpEarnedAtLocations);
   const todayXp = useGameStore((s) => s.todayXp);
+  const captureResult = useGameStore((s) => s.captureResult);
 
   const [selectedPin, setSelectedPin] = useState<Location | null>(null);
   const sheetAnim = useRef(new Animated.Value(0)).current;
   const capturedSpaces = useMapStore((s) => s.capturedSpaces);
 
+  // Follow-player (re-centre) mode
+  const [followPlayer, setFollowPlayer] = useState(true);
+
+  const handleFollowChange = useCallback((following: boolean) => {
+    setFollowPlayer(following);
+  }, []);
+
+  const handleReCenter = useCallback(() => {
+    setFollowPlayer(true);
+  }, []);
+
   // Minimap state
-  const [viewport, setViewport] = useState<ViewportRect>({ x: 0, y: 0, width: 2000, height: 1125 });
+  const [viewport, setViewport] = useState<ViewportRect>({ x: 0, y: 0, width: 1920, height: 1080 });
   const navigateFnRef = useRef<((mapX: number, mapY: number) => void) | null>(null);
   const minimapImage = useImage(mapConfig?.mapImageUrl ?? null);
+  const setSkiaMapImage = useMapStore((s) => s.setSkiaMapImage);
+
+  // Cache the resolved Skia image in useMapStore so the minimap can reuse it
+  useEffect(() => {
+    if (minimapImage) {
+      setSkiaMapImage(minimapImage);
+    }
+  }, [minimapImage, setSkiaMapImage]);
 
   const handleViewportChange = useCallback((vp: ViewportRect) => {
     setViewport(vp);
@@ -91,6 +111,16 @@ export default function MainMapScreen() {
     loadTodayLocations();
     loadCapturedSpaces();
   }, [loadMapConfig, loadTodayLocations, loadCapturedSpaces]);
+
+  // Navigate to capture celebration when WebSocket CAPTURE event arrives
+  useEffect(() => {
+    if (captureResult) {
+      navigation.navigate('CaptureCelebration', {
+        clan: captureResult.winnerClan as ClanId,
+        spaceName: captureResult.spaceName,
+      });
+    }
+  }, [captureResult, navigation]);
 
   // Load daily info and sync today locations to game store
   useEffect(() => {
@@ -235,53 +265,47 @@ export default function MainMapScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.topBar}>
-        <ClanScoreBar scores={scores} />
-        {!gameActive ? (
-          <View style={styles.inactiveBadge}>
-            <Text style={styles.inactiveBadgeText}>
-              Starts at {GAME_START_HOUR}:00 AM
+      <View style={styles.mapContainer}>
+        {/* Floating HUD overlays */}
+        <View style={styles.hudTop}>
+          <ClanScoreBar scores={scores} />
+        </View>
+        <View style={styles.hudSecondRow}>
+          {!gameActive ? (
+            <View style={styles.inactiveBadge}>
+              <Text style={styles.inactiveBadgeText}>
+                Starts at {GAME_START_HOUR}:00 AM
+              </Text>
+            </View>
+          ) : (
+            <CountdownTimer
+              label="Scoring at"
+              formatted={countdown.formatted}
+              isExpired={countdown.isExpired}
+            />
+          )}
+          <View style={styles.xpBadge}>
+            <Text style={styles.xpBadgeText}>
+              {todayXp}/{DAILY_XP_CAP} XP
             </Text>
           </View>
-        ) : (
-          <CountdownTimer
-            label="Scoring at"
-            formatted={countdown.formatted}
-            isExpired={countdown.isExpired}
-          />
-        )}
-        <View style={styles.xpBadge}>
-          <Text style={styles.xpBadgeText}>
-            {todayXp}/{DAILY_XP_CAP} XP
-          </Text>
         </View>
-        {__DEV__ && (
-          <Pressable
-            style={({ pressed }) => [
-              styles.signOutButton,
-              pressed && { opacity: 0.8 },
-            ]}
-            onPress={() => useAuthStore.getState().logout()}
-          >
-            <Text style={styles.signOutButtonText}>Sign Out</Text>
-          </Pressable>
-        )}
-      </View>
-      <View style={styles.mapContainer}>
         <MapCanvas
           playerX={showPlayer && playerPixel ? playerPixel.x : null}
           playerY={showPlayer && playerPixel ? playerPixel.y : null}
           clan={clan}
           locations={todayLocations}
+          capturedSpaces={capturedSpaces}
           onPinPress={handlePinPress}
           inRangeIds={inRangeIds}
           xpExhaustedIds={xpExhaustedIds}
           onViewportChange={handleViewportChange}
           registerNavigate={handleRegisterNavigate}
+          followPlayer={followPlayer}
+          onFollowChange={handleFollowChange}
         />
         {mapConfig && (
           <MapMinimap
-            mapImage={minimapImage}
             viewport={viewport}
             playerX={showPlayer && playerPixel ? playerPixel.x : null}
             playerY={showPlayer && playerPixel ? playerPixel.y : null}
@@ -293,6 +317,25 @@ export default function MainMapScreen() {
             isDebugMode={isDebugMode}
           />
         )}
+        {/* Re-centre button — visible when follow mode is off */}
+        {!followPlayer && showPlayer && (
+          <Pressable
+            style={({ pressed }) => [
+              styles.reCenterBtn,
+              pressed && styles.reCenterBtnPressed,
+            ]}
+            onPress={handleReCenter}
+          >
+            <View style={styles.reCenterIcon}>
+              <View style={styles.reCenterDot} />
+              <View style={[styles.reCenterArm, styles.reCenterArmTop]} />
+              <View style={[styles.reCenterArm, styles.reCenterArmBottom]} />
+              <View style={[styles.reCenterArm, styles.reCenterArmLeft]} />
+              <View style={[styles.reCenterArm, styles.reCenterArmRight]} />
+            </View>
+          </Pressable>
+        )}
+
         {gps.permissionDenied && (
           <Pressable
             style={styles.permissionBanner}
@@ -419,21 +462,34 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: PALETTE.parchmentBg,
   },
-  topBar: {
+  hudTop: {
+    position: 'absolute',
+    top: 8,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
+    zIndex: 16,
+  },
+  hudSecondRow: {
+    position: 'absolute',
+    top: 38,
+    left: 12,
+    right: 12,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    backgroundColor: PALETTE.parchmentBg,
-    borderBottomWidth: 1,
-    borderBottomColor: PALETTE.warmBrown,
+    zIndex: 16,
   },
   xpBadge: {
     backgroundColor: PALETTE.cream,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.2,
+    shadowRadius: 2,
   },
   xpBadgeText: {
     fontSize: 11,
@@ -443,6 +499,67 @@ const styles = StyleSheet.create({
   mapContainer: {
     flex: 1,
     backgroundColor: PALETTE.deepGreen,
+  },
+  // Re-centre button (Google Maps style)
+  reCenterBtn: {
+    position: 'absolute',
+    bottom: 20,
+    right: 16,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: PALETTE.parchmentBg,
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 18,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: PALETTE.stoneGrey + '40',
+  },
+  reCenterBtnPressed: {
+    backgroundColor: PALETTE.cream,
+    transform: [{ scale: 0.95 }],
+  },
+  reCenterIcon: {
+    width: 22,
+    height: 22,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  reCenterDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: PALETTE.warmBrown,
+    position: 'absolute',
+  },
+  reCenterArm: {
+    position: 'absolute',
+    backgroundColor: PALETTE.warmBrown,
+  },
+  reCenterArmTop: {
+    width: 2,
+    height: 6,
+    top: 0,
+  },
+  reCenterArmBottom: {
+    width: 2,
+    height: 6,
+    bottom: 0,
+  },
+  reCenterArmLeft: {
+    width: 6,
+    height: 2,
+    left: 0,
+  },
+  reCenterArmRight: {
+    width: 6,
+    height: 2,
+    right: 0,
   },
   permissionBanner: {
     position: 'absolute',
@@ -632,18 +749,6 @@ const styles = StyleSheet.create({
     color: PALETTE.stoneGrey,
     textAlign: 'center',
     marginTop: 6,
-  },
-  // DEV sign out in top bar
-  signOutButton: {
-    backgroundColor: '#8B3A1A',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 6,
-  },
-  signOutButtonText: {
-    color: PALETTE.cream,
-    fontSize: 10,
-    fontFamily: FONTS.bodySemiBold,
   },
   devBadge: {
     position: 'absolute',

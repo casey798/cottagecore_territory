@@ -111,6 +111,8 @@ export interface TargetSpace {
   name: string;
   description: string;
   mapOverlayId: string;
+  polygonPoints?: Array<{ x: number; y: number }>;
+  gridCells?: Array<{ x: number; y: number }>;
 }
 
 export interface DailyConfig {
@@ -121,6 +123,7 @@ export interface DailyConfig {
   winnerClan: ClanId | null;
   status: DailyConfigStatus;
   difficulty: Difficulty;
+  resetSeq?: number;
 }
 
 export interface LocationMinigameSet {
@@ -165,6 +168,8 @@ export interface CapturedSpace {
   spaceName: string;
   season: string;
   mapOverlayId: string;
+  polygonPoints?: Array<{ x: number; y: number }>;
+  gridCells?: Array<{ x: number; y: number }>;
 }
 
 export interface AssetCatalog {

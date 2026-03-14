@@ -1,10 +1,16 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
+import { useNavigation } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { Text, StyleSheet } from 'react-native';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { ClanId, ChestDrop } from '@/types';
+import { useWebSocket } from '@/hooks/useWebSocket';
+import { useGameStore } from '@/store/useGameStore';
+import { getTodayISTString } from '@/utils/time';
+import * as mapApi from '@/api/map';
 import MainMapScreen from '@/screens/MainMapScreen';
 import ClanScoreboardScreen from '@/screens/ClanScoreboardScreen';
 import PlayerProfileScreen from '@/screens/PlayerProfileScreen';
@@ -117,6 +123,50 @@ function TabNavigator() {
 }
 
 export function MainStack() {
+  // Connect WebSocket at the stack level so it persists across all screens
+  useWebSocket();
+
+  const navigation = useNavigation<NativeStackNavigationProp<MainModalParamList>>();
+  const checkedRef = useRef(false);
+
+  // On mount: check daily info for missed celebration, then check pending flag
+  useEffect(() => {
+    if (checkedRef.current) return;
+    checkedRef.current = true;
+
+    (async () => {
+      // FIX 3: Daily info safety net — catch missed FCM + WS entirely
+      try {
+        const result = await mapApi.getDailyInfo();
+        if (result.success && result.data) {
+          const { status, winnerClan, targetSpace } = result.data;
+          if (status === 'complete' && winnerClan) {
+            const today = getTodayISTString();
+            const { lastSeenCelebrationDate } = useGameStore.getState();
+            if (lastSeenCelebrationDate !== today) {
+              useGameStore.getState().setCelebrationPending(
+                winnerClan,
+                targetSpace.name,
+              );
+            }
+          }
+        }
+      } catch {
+        // Non-fatal — celebration will be missed if all channels fail
+      }
+
+      // FIX 4: Navigate to celebration if pending
+      const { celebrationPending, pendingCelebrationClan, pendingCelebrationSpace } =
+        useGameStore.getState();
+      if (celebrationPending && pendingCelebrationClan && pendingCelebrationSpace) {
+        navigation.navigate('CaptureCelebration', {
+          clan: pendingCelebrationClan as ClanId,
+          spaceName: pendingCelebrationSpace,
+        });
+      }
+    })();
+  }, [navigation]);
+
   return (
     <ModalStack.Navigator screenOptions={{ headerShown: false }}>
       <ModalStack.Screen name="Tabs" component={TabNavigator} />

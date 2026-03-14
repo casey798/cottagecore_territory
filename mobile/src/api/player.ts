@@ -24,3 +24,10 @@ export function getAssets() {
 export function getStats() {
   return apiRequest<PlayerProfile>(ENDPOINTS.PLAYER_STATS);
 }
+
+export function updateFcmToken(fcmToken: string) {
+  return apiRequest<{ updated: boolean }>(ENDPOINTS.PLAYER_FCM_TOKEN, {
+    method: 'PUT',
+    body: JSON.stringify({ fcmToken }),
+  });
+}

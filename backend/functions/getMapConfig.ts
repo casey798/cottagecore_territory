@@ -21,13 +21,13 @@ export const handler = async (
 
     const calibration = items[0];
 
-    const mapImageUrl = `https://${ASSETS_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${calibration.mapImageKey}`;
+    const mapImageUrl = `https://${ASSETS_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${calibration.mapImageKey}?v=2`;
 
     return success({
       mapImageUrl,
-      mapWidth: calibration.mapWidth,
-      mapHeight: calibration.mapHeight,
-      tileSize: calibration.tileSize,
+      mapWidth: 1920,
+      mapHeight: 1080,
+      tileSize: 16,
       transformMatrix: calibration.transformMatrix,
     });
   } catch (err) {

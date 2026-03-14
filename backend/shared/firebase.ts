@@ -24,8 +24,11 @@ export async function ensureFirebaseInitialized(): Promise<boolean> {
 
     const credentialsJson = result.Parameter?.Value;
     if (!credentialsJson) {
-      console.warn('FCM service account not found in SSM, skipping Firebase init');
-      return false;
+      // No service account — init with just projectId (enough for verifyIdToken)
+      console.warn('FCM service account not found in SSM, initializing Firebase with projectId only');
+      admin.initializeApp({ projectId: 'grovewars-b37da' });
+      initialized = true;
+      return true;
     }
 
     const serviceAccount = JSON.parse(credentialsJson) as admin.ServiceAccount;
@@ -37,8 +40,18 @@ export async function ensureFirebaseInitialized(): Promise<boolean> {
     initialized = true;
     return true;
   } catch (err) {
+    // SSM call failed — still init with just projectId for token verification
+    if (!admin.apps.length) {
+      try {
+        admin.initializeApp({ projectId: 'grovewars-b37da' });
+        initialized = true;
+        return true;
+      } catch {
+        // Already initialized by another path
+      }
+    }
     console.warn('Failed to initialize Firebase:', err);
-    return false;
+    return initialized;
   }
 }
 

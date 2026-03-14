@@ -8,7 +8,6 @@ import {
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { useLockLandscape } from '@/hooks/useScreenOrientation';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps } from '@/types/minigame';
 import { generatePuzzle, checkGroup, KindredPuzzle } from './KindredLogic';
@@ -30,8 +29,6 @@ interface SolvedGroup {
 
 export default function KindredGame(props: MinigamePlayProps) {
   const { sessionId, timeLimit, onComplete } = props;
-
-  useLockLandscape();
 
   // Generate puzzle client-side on mount
   const puzzleRef = useRef<KindredPuzzle | null>(null);
@@ -156,46 +153,31 @@ export default function KindredGame(props: MinigamePlayProps) {
     setSelected([]);
   }, []);
 
-  // --- Layout ---
-  const { width: screenW, height: screenH } = Dimensions.get('window');
-  const gridMaxW = screenW * 0.7;
-  const gridMaxH = screenH * 0.55;
-  const cellW = gridMaxW / 4 - 8;
-  const cellH = gridMaxH / 4 - 8;
+  // --- Portrait layout ---
+  const { width: screenW } = Dimensions.get('window');
+  const gridPadH = 16;
+  const gap = 6;
+  const availableW = screenW - gridPadH * 2;
+  const cellW = (availableW - gap * 3) / 4;
+  const cellH = cellW * 0.7;
 
   const timerFraction = timeLeft / timeLimit;
 
   return (
     <View style={styles.root}>
-      {/* Top bar: timer + mistakes */}
-      <View style={styles.topBar}>
-        <View style={styles.timerContainer}>
-          <View
-            style={[
-              styles.timerFill,
-              {
-                width: `${timerFraction * 100}%`,
-                backgroundColor:
-                  timerFraction > 0.25 ? PALETTE.softGreen : PALETTE.mutedRose,
-              },
-            ]}
-          />
-          <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
-        </View>
-
-        <View style={styles.mistakeRow}>
-          {Array.from({ length: MAX_MISTAKES }).map((_, i) => (
-            <View
-              key={i}
-              style={[
-                styles.mistakeDot,
-                i < mistakes
-                  ? { backgroundColor: PALETTE.mutedRose }
-                  : { backgroundColor: PALETTE.stoneGrey, opacity: 0.3 },
-              ]}
-            />
-          ))}
-        </View>
+      {/* Timer bar at top */}
+      <View style={styles.timerContainer}>
+        <View
+          style={[
+            styles.timerFill,
+            {
+              width: `${timerFraction * 100}%`,
+              backgroundColor:
+                timerFraction > 0.25 ? PALETTE.softGreen : PALETTE.mutedRose,
+            },
+          ]}
+        />
+        <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
       </View>
 
       {/* Solved group banners */}
@@ -217,7 +199,7 @@ export default function KindredGame(props: MinigamePlayProps) {
       )}
 
       {/* 4x4 grid */}
-      <View style={[styles.grid, { maxWidth: gridMaxW }]}>
+      <View style={[styles.grid, { paddingHorizontal: gridPadH, gap }]}>
         {remainingWords.map((word) => {
           const isSelected = selected.includes(word);
           return (
@@ -245,7 +227,25 @@ export default function KindredGame(props: MinigamePlayProps) {
         })}
       </View>
 
-      {/* Bottom buttons */}
+      {/* Mistake markers */}
+      <View style={styles.mistakeRow}>
+        {Array.from({ length: MAX_MISTAKES }).map((_, i) => (
+          <View
+            key={i}
+            style={[
+              styles.mistakeDot,
+              i < mistakes
+                ? { backgroundColor: PALETTE.mutedRose }
+                : { backgroundColor: PALETTE.stoneGrey, opacity: 0.3 },
+            ]}
+          />
+        ))}
+        <Text style={styles.mistakeLabel}>
+          {MAX_MISTAKES - mistakes} remaining
+        </Text>
+      </View>
+
+      {/* Submit / Deselect buttons */}
       <View style={styles.bottomBar}>
         <Pressable
           onPress={handleDeselect}
@@ -276,35 +276,24 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: UI.background,
     alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
+    paddingTop: 8,
+    paddingBottom: 12,
   },
 
-  // --- Top ---
-  topBar: {
-    width: '100%',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: 6,
-    paddingHorizontal: 12,
-  },
+  // --- Timer (full-width bar at top) ---
   timerContainer: {
-    flex: 1,
-    height: 18,
-    borderRadius: 9,
+    width: '100%',
+    height: 22,
     backgroundColor: UI.border,
     overflow: 'hidden',
-    marginRight: 16,
     justifyContent: 'center',
+    marginBottom: 10,
   },
   timerFill: {
     position: 'absolute',
     left: 0,
     top: 0,
     bottom: 0,
-    borderRadius: 9,
   },
   timerText: {
     fontFamily: FONTS.bodySemiBold,
@@ -312,30 +301,19 @@ const styles = StyleSheet.create({
     color: PALETTE.cream,
     textAlign: 'center',
   },
-  mistakeRow: {
-    flexDirection: 'row',
-    gap: 6,
-  },
-  mistakeDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-  },
 
-  // --- Solved banners ---
+  // --- Solved banners (stack vertically below timer) ---
   solvedContainer: {
     width: '100%',
-    paddingHorizontal: 12,
-    marginBottom: 4,
+    paddingHorizontal: 16,
+    marginBottom: 8,
     gap: 4,
   },
   solvedBanner: {
     borderRadius: 8,
-    paddingVertical: 4,
+    paddingVertical: 6,
     paddingHorizontal: 12,
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
   },
   solvedCategory: {
     fontFamily: FONTS.bodyBold,
@@ -344,8 +322,9 @@ const styles = StyleSheet.create({
   },
   solvedWords: {
     fontFamily: FONTS.bodyRegular,
-    fontSize: 12,
+    fontSize: 11,
     color: PALETTE.darkBrown,
+    textAlign: 'center',
   },
 
   // --- Grid ---
@@ -353,13 +332,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
-    gap: 6,
   },
   cell: {
     borderRadius: 8,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
+    paddingHorizontal: 2,
   },
   cellDefault: {
     backgroundColor: PALETTE.cream,
@@ -371,7 +350,7 @@ const styles = StyleSheet.create({
   },
   cellText: {
     fontFamily: FONTS.bodySemiBold,
-    fontSize: 14,
+    fontSize: 12,
     color: UI.text,
     textTransform: 'uppercase',
   },
@@ -379,11 +358,31 @@ const styles = StyleSheet.create({
     color: PALETTE.cream,
   },
 
-  // --- Bottom ---
+  // --- Mistakes (below grid) ---
+  mistakeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 12,
+    marginBottom: 4,
+  },
+  mistakeDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+  },
+  mistakeLabel: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 12,
+    color: PALETTE.stoneGrey,
+    marginLeft: 4,
+  },
+
+  // --- Bottom buttons ---
   bottomBar: {
     flexDirection: 'row',
     gap: 16,
-    marginTop: 8,
+    marginTop: 12,
   },
   btn: {
     paddingHorizontal: 24,

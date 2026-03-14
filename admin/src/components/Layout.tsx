@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { to: '/map-calibration', label: 'Map Calibration' },
   { to: '/daily-config', label: 'Daily Config' },
   { to: '/qr-generator', label: 'QR Generator' },
+  { to: '/capture-history', label: 'History' },
   { to: '/notifications', label: 'Notifications' },
   { to: '/analytics', label: 'Analytics' },
   { to: '/users', label: 'Users' },

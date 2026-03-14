@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
+
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps } from '@/types/minigame';
 import {
@@ -52,8 +52,6 @@ function bestKeyState(current: KeyState, incoming: LetterResult): KeyState {
 
 export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Element {
   const { sessionId, timeLimit, onComplete } = props;
-
-  useLockPortrait();
 
   // Generate puzzle client-side on mount
   const puzzleRef = useRef(generatePuzzle());

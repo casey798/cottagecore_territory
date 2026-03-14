@@ -2,13 +2,34 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { googleLoginSchema } from '../../shared/schemas';
 import { query, putItem, deleteItem, getItem } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
-import { User, ClanId } from '../../shared/types';
+import { getTodayISTString } from '../../shared/time';
+import { User, ClanId, DailyConfig, PlayerAssignment } from '../../shared/types';
 import { ensureFirebaseInitialized, getFirebaseAdmin } from '../../shared/firebase';
 
 const ALLOWED_EMAIL_DOMAINS = (process.env.ALLOWED_EMAIL_DOMAIN || '')
   .split(',')
   .map((d) => d.trim())
   .filter(Boolean);
+
+async function ensureTodayAssignment(userId: string): Promise<void> {
+  const today = getTodayISTString();
+  const dateUserId = `${today}#${userId}`;
+  const existing = await getItem<PlayerAssignment>('player-assignments', { dateUserId });
+  if (existing) return;
+
+  const config = await getItem<DailyConfig>('daily-config', { date: today });
+  if (!config || config.activeLocationIds.length === 0) return;
+
+  const count = Math.floor(Math.random() * 3) + 3; // 3-5 locations
+  const shuffled = [...config.activeLocationIds].sort(() => Math.random() - 0.5);
+  const assigned = shuffled.slice(0, Math.min(count, shuffled.length));
+
+  await putItem('player-assignments', {
+    dateUserId,
+    assignedLocationIds: assigned,
+  } as unknown as Record<string, unknown>);
+  console.log(`Created missing player assignment for ${userId} on login`);
+}
 
 export const handler = async (
   event: APIGatewayProxyEvent
@@ -111,7 +132,23 @@ export const handler = async (
       await putItem('users', migratedRecord);
       await deleteItem('users', { userId: oldUserId });
       user = { ...user, userId: firebaseUid };
+
+      // Fix 1: Migrate today's player-assignment from old userId to new Firebase UID
+      const today = getTodayISTString();
+      const oldKey = `${today}#${oldUserId}`;
+      const oldAssignment = await getItem<PlayerAssignment>('player-assignments', { dateUserId: oldKey });
+      if (oldAssignment) {
+        await putItem('player-assignments', {
+          ...oldAssignment,
+          dateUserId: `${today}#${firebaseUid}`,
+        } as unknown as Record<string, unknown>);
+        await deleteItem('player-assignments', { dateUserId: oldKey });
+        console.log(`Migrated player assignment from ${oldUserId} to ${firebaseUid}`);
+      }
     }
+
+    // Fix 3: Ensure a player-assignment exists for today (covers first login + missed resets)
+    await ensureTodayAssignment(user.userId);
 
     return success({
       userId: user.userId,

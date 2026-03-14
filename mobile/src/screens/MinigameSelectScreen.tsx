@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -18,7 +18,7 @@ import { DAILY_XP_CAP } from '@/constants/config';
 import { useGameStore } from '@/store/useGameStore';
 import * as gameApi from '@/api/game';
 import { MinigameInfo } from '@/types';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
+
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type SelectRoute = RouteProp<MainModalParamList, 'MinigameSelect'>;
@@ -39,19 +39,25 @@ const MINIGAME_ICONS: Record<string, string> = {
 };
 
 export default function MinigameSelectScreen() {
-  useLockPortrait();
   const navigation = useNavigation<Nav>();
   const route = useRoute<SelectRoute>();
   const { locationId, locationName } = route.params;
   const lastScanResult = useGameStore((s) => s.lastScanResult);
-  const xpEarnedAtLocations = useGameStore((s) => s.xpEarnedAtLocations);
-  const xpAvailable = lastScanResult?.xpAvailable !== false && !xpEarnedAtLocations[locationId];
   const setSessionId = useGameStore((s) => s.setSessionId);
   const todayXp = useGameStore((s) => s.todayXp);
   const [coopEnabled, setCoopEnabled] = useState(false);
   const [partnerId, setPartnerId] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // If no scan result (e.g. cleared by daily reset), go back to map
+  useEffect(() => {
+    if (!lastScanResult) {
+      navigation.popToTop();
+    }
+  }, [lastScanResult, navigation]);
+
+  // Server is sole source of truth for XP availability
+  const xpAvailable = lastScanResult?.xpAvailable ?? true;
   const minigames = lastScanResult?.availableMinigames || [];
   const allExhausted = minigames.length > 0 && minigames.every((m) => m.completed);
 
@@ -112,7 +118,8 @@ export default function MinigameSelectScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {minigames.map((item) => (
+        <View style={styles.grid}>
+          {minigames.map((item) => (
             <TouchableOpacity
               key={item.minigameId}
               style={[styles.card, item.completed && styles.cardDone, !xpAvailable && !item.completed && styles.cardNoXp]}
@@ -123,17 +130,15 @@ export default function MinigameSelectScreen() {
               <Text style={[styles.cardEmoji, !xpAvailable && !item.completed && styles.cardEmojiMuted]}>
                 {MINIGAME_ICONS[item.minigameId] || '🎮'}
               </Text>
-              <View style={styles.cardBody}>
-                <Text style={[styles.cardName, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}>
-                  {item.name}
-                </Text>
-                <Text
-                  style={[styles.cardDesc, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}
-                  numberOfLines={2}
-                >
-                  {item.description}
-                </Text>
-              </View>
+              <Text style={[styles.cardName, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]} numberOfLines={1}>
+                {item.name}
+              </Text>
+              <Text
+                style={[styles.cardDesc, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}
+                numberOfLines={2}
+              >
+                {item.description}
+              </Text>
               {item.completed ? (
                 <Text style={styles.cardCompleted}>✓ Done</Text>
               ) : !xpAvailable ? (
@@ -143,6 +148,7 @@ export default function MinigameSelectScreen() {
               )}
             </TouchableOpacity>
           ))}
+        </View>
         {allExhausted && (
           <View style={styles.exhaustedBanner}>
             <Text style={styles.exhaustedText}>
@@ -253,35 +259,40 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    gap: 12,
     paddingBottom: 8,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    gap: 10,
   },
   card: {
     backgroundColor: PALETTE.cream,
     borderWidth: 2,
     borderColor: PALETTE.warmBrown,
     borderRadius: 12,
-    padding: 14,
-    flexDirection: 'row',
+    padding: 12,
     alignItems: 'center',
+    width: '48%',
   },
   cardEmoji: {
-    fontSize: 28,
-    marginRight: 14,
-  },
-  cardBody: {
-    flex: 1,
+    fontSize: 32,
+    marginBottom: 6,
   },
   cardName: {
-    fontSize: 15,
+    fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.darkBrown,
     marginBottom: 2,
+    textAlign: 'center',
   },
   cardDesc: {
-    fontSize: 12,
+    fontSize: 11,
     fontFamily: FONTS.bodyRegular,
     color: PALETTE.stoneGrey,
+    textAlign: 'center',
+    marginBottom: 4,
   },
   cardDone: {
     opacity: 0.4,
@@ -302,7 +313,6 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: PALETTE.stoneGrey,
     fontFamily: FONTS.bodyBold,
-    marginLeft: 10,
   },
   cardTextDone: {
     color: PALETTE.stoneGrey,
@@ -311,13 +321,11 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: PALETTE.softGreen,
     fontFamily: FONTS.bodyBold,
-    marginLeft: 10,
   },
   cardTime: {
     fontSize: 12,
     color: PALETTE.warmBrown,
     fontFamily: FONTS.bodyBold,
-    marginLeft: 10,
   },
   exhaustedBanner: {
     backgroundColor: PALETTE.cream,

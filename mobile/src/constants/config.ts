@@ -5,9 +5,9 @@ export const GAME_START_HOUR = 8;
 export const GAME_END_HOUR = 18;
 export const CHEST_DROP_RATE = 0.15;
 export const COMPLETION_SALT = 'grovewars-v1-completion-salt';
-export const MAP_TILE_SIZE = 32;
-export const MAP_WIDTH = 2000;
-export const MAP_HEIGHT = 1125;
+export const MAP_TILE_SIZE = 16;
+export const MAP_WIDTH = 1920;
+export const MAP_HEIGHT = 1080;
 export const MIN_ASSIGNED_LOCATIONS = 3;
 export const MAX_ASSIGNED_LOCATIONS = 5;
 

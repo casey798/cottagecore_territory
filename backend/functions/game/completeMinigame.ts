@@ -20,6 +20,7 @@ import {
 } from '../../shared/types';
 
 const XP_PER_WIN = 25;
+const DAILY_XP_CAP = 100;
 const BASE_CHEST_DROP_RATE = 0.15;
 const TIME_GRACE_SECONDS = 5;
 const MIN_COMPLETION_SECONDS = 5;
@@ -42,16 +43,33 @@ async function selectWeightedRandomAsset(): Promise<AssetCatalog | null> {
 async function awardXpAndStreak(
   userId: string,
   today: string
-): Promise<{ newTodayXp: number; clan: string }> {
-  // Award 25 XP using ADD expression for atomic increment
-  const updatedUser = await updateItem(
-    'users',
-    { userId },
-    'ADD todayXp :xp, seasonXp :xp, totalWins :one',
-    { ':xp': XP_PER_WIN, ':one': 1 }
-  );
+): Promise<{ newTodayXp: number; clan: string; xpActuallyAwarded: boolean }> {
+  // Award 25 XP using ADD expression with condition to prevent exceeding daily cap
+  let xpActuallyAwarded = false;
+  let newTodayXp = 0;
 
-  const newTodayXp = (updatedUser?.todayXp as number) ?? 0;
+  try {
+    const updatedUser = await updateItem(
+      'users',
+      { userId },
+      'ADD todayXp :xp, seasonXp :xp, totalWins :one',
+      { ':xp': XP_PER_WIN, ':one': 1, ':maxXp': DAILY_XP_CAP - XP_PER_WIN },
+      undefined,
+      'todayXp <= :maxXp'
+    );
+    newTodayXp = (updatedUser?.todayXp as number) ?? 0;
+    xpActuallyAwarded = true;
+  } catch (err: unknown) {
+    // ConditionalCheckFailedException means todayXp + 25 > 100 — cap reached
+    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+      const user = await getItem<User>('users', { userId });
+      newTodayXp = user?.todayXp ?? 0;
+      // Still count the win
+      await updateItem('users', { userId }, 'ADD totalWins :one', { ':one': 1 });
+    } else {
+      throw err;
+    }
+  }
 
   // Get full user for streak check
   const user = await getItem<User>('users', { userId });
@@ -66,7 +84,7 @@ async function awardXpAndStreak(
     );
   }
 
-  return { newTodayXp, clan: user?.clan ?? '' };
+  return { newTodayXp, clan: user?.clan ?? '', xpActuallyAwarded };
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -178,22 +196,26 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           s.completedAt !== null,
       );
 
-      const xpToAward = alreadyEarnedXpHere ? 0 : XP_PER_WIN;
+      const shouldAwardXp = !alreadyEarnedXpHere;
+      let xpToAward = 0;
       let newTodayXp = 0;
       let clanTodayXp = 0;
       let clanId = '';
+      let capReached = false;
       let chestDrop: ChestDrop = { dropped: false };
       let chestAssetId: string | null = null;
       let chestDropped = false;
 
-      if (xpToAward > 0) {
-        // First win at this location — full rewards
+      if (shouldAwardXp) {
+        // First win at this location — attempt full rewards (cap-safe)
         const xpResult = await awardXpAndStreak(userId, today);
         newTodayXp = xpResult.newTodayXp;
         clanId = xpResult.clan;
+        xpToAward = xpResult.xpActuallyAwarded ? XP_PER_WIN : 0;
+        capReached = !xpResult.xpActuallyAwarded;
 
-        // Atomic clan XP
-        if (clanId) {
+        // Atomic clan XP (only if XP was actually awarded)
+        if (clanId && xpToAward > 0) {
           const updatedClan = await updateItem(
             'clans',
             { clanId },
@@ -203,48 +225,50 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
         }
 
-        // Chest drop
-        const location = await getItem<Location>('locations', { locationId: session.locationId });
-        const chestDropModifier = location?.chestDropModifier ?? 1;
-        chestDropped = Math.random() < BASE_CHEST_DROP_RATE * chestDropModifier;
+        // Chest drop (only if XP was actually awarded)
+        if (xpToAward > 0) {
+          const location = await getItem<Location>('locations', { locationId: session.locationId });
+          const chestDropModifier = location?.chestDropModifier ?? 1;
+          chestDropped = Math.random() < BASE_CHEST_DROP_RATE * chestDropModifier;
 
-        if (chestDropped) {
-          const asset = await selectWeightedRandomAsset();
-          if (asset) {
-            const userAssetId = crypto.randomUUID();
-            chestAssetId = asset.assetId;
+          if (chestDropped) {
+            const asset = await selectWeightedRandomAsset();
+            if (asset) {
+              const userAssetId = crypto.randomUUID();
+              chestAssetId = asset.assetId;
 
-            const playerAsset: PlayerAsset = {
-              userAssetId,
-              userId,
-              assetId: asset.assetId,
-              obtainedAt: now,
-              obtainedFrom: AssetObtainedFrom.Chest,
-              locationId: session.locationId,
-              placed: false,
-              expiresAt: getMidnightISTAsISO(),
-              expired: false,
-            };
-
-            await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
-
-            chestDrop = {
-              dropped: true,
-              asset: {
+              const playerAsset: PlayerAsset = {
+                userAssetId,
+                userId,
                 assetId: asset.assetId,
-                name: asset.name,
-                category: asset.category,
-                rarity: asset.rarity,
-                imageKey: asset.imageKey,
-              },
-            };
+                obtainedAt: now,
+                obtainedFrom: AssetObtainedFrom.Chest,
+                locationId: session.locationId,
+                placed: false,
+                expiresAt: getMidnightISTAsISO(),
+                expired: false,
+              };
+
+              await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
+
+              chestDrop = {
+                dropped: true,
+                asset: {
+                  assetId: asset.assetId,
+                  name: asset.name,
+                  category: asset.category,
+                  rarity: asset.rarity,
+                  imageKey: asset.imageKey,
+                },
+              };
+            }
           }
         }
 
         // Co-op: repeat XP/streak for partner
         if (session.coopPartnerId) {
-          await awardXpAndStreak(session.coopPartnerId, today);
-          if (clanId) {
+          const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
+          if (clanId && coopResult.xpActuallyAwarded) {
             const updatedClan = await updateItem(
               'clans',
               { clanId },
@@ -259,6 +283,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         const user = await getItem<User>('users', { userId });
         newTodayXp = user?.todayXp ?? 0;
         clanId = user?.clan ?? '';
+        capReached = newTodayXp >= DAILY_XP_CAP;
       }
 
       // Update session (store solutionData for analytics)
@@ -291,6 +316,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         newTodayXp,
         clanTodayXp,
         chestDrop,
+        capReached,
       });
     } else {
       // --- LOSE PATH ---

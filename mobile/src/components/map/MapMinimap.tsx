@@ -5,13 +5,13 @@ import {
   Image as SkiaImage,
   Rect,
   Circle,
-  SkImage,
 } from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { PALETTE, CLAN_COLORS } from '@/constants/colors';
 import { MAP_WIDTH, MAP_HEIGHT, MAP_TILE_SIZE } from '@/constants/config';
 import { gpsToPixel } from '@/utils/affineTransform';
+import { useMapStore } from '@/store/useMapStore';
 import { AffineMatrix, ClanId, Location, CapturedSpace } from '@/types';
 
 // Minimap dimensions — 16:9 to match campus map ratio
@@ -31,7 +31,6 @@ interface ViewportRect {
 }
 
 interface Props {
-  mapImage: SkImage | null;
   viewport: ViewportRect;
   playerX: number | null;
   playerY: number | null;
@@ -44,7 +43,6 @@ interface Props {
 }
 
 export function MapMinimap({
-  mapImage,
   viewport,
   playerX,
   playerY,
@@ -55,6 +53,8 @@ export function MapMinimap({
   onNavigate,
   isDebugMode,
 }: Props) {
+  const mapImage = useMapStore((s) => s.skiaMapImage);
+
   // Convert minimap tap to full-map coordinates
   const handleTap = useCallback(
     (x: number, y: number) => {
@@ -192,7 +192,7 @@ export function MapMinimap({
 const styles = StyleSheet.create({
   frame: {
     position: 'absolute',
-    top: 8,
+    top: 68,
     left: 8,
     width: MINIMAP_W + FRAME_PAD * 2,
     height: MINIMAP_H + FRAME_PAD * 2,

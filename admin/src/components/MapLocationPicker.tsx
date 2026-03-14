@@ -4,8 +4,8 @@ import { getMapConfig } from '@/api/map';
 import { gpsToPixel, pixelToGps } from '@/utils/affineTransform';
 import type { AffineMatrix } from '@/types';
 
-const MAP_FULL_WIDTH = 2000;
-const MAP_FULL_HEIGHT = 1125;
+const MAP_FULL_WIDTH = 1920;
+const MAP_FULL_HEIGHT = 1080;
 const DISPLAY_WIDTH = 640;
 const SCALE = DISPLAY_WIDTH / MAP_FULL_WIDTH;
 const DISPLAY_HEIGHT = MAP_FULL_HEIGHT * SCALE;

@@ -18,19 +18,13 @@ import {
 } from '../../shared/types';
 
 const DAILY_XP_CAP = 100;
-
-const MIN_SET_SIZE = 3;
-const MAX_SET_SIZE = 5;
+const SET_SIZE = 6;
 
 function pickRandomMinigames(excludeIds: string[]): string[] {
   const allEntries = Object.keys(MINIGAME_POOL);
   const pool = allEntries.filter((id) => !excludeIds.includes(id));
   const shuffled = pool.sort(() => Math.random() - 0.5);
-  const count = Math.min(
-    MIN_SET_SIZE + Math.floor(Math.random() * (MAX_SET_SIZE - MIN_SET_SIZE + 1)),
-    shuffled.length,
-  );
-  return shuffled.slice(0, count);
+  return shuffled.slice(0, Math.min(SET_SIZE, shuffled.length));
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -93,15 +87,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.LOCATION_LOCKED, 'This location is locked for you until tomorrow', 403);
     }
 
-    // Step 6: Daily cap reached
+    // Step 6: Fetch user (needed for cap check in response)
     const user = await getItem<User>('users', { userId });
     if (!user) {
       return error(ErrorCode.NOT_FOUND, 'User not found', 400);
     }
 
-    if (user.todayXp >= DAILY_XP_CAP) {
-      return error(ErrorCode.DAILY_CAP_REACHED, 'You have reached the daily XP cap', 403);
-    }
+    const capReached = user.todayXp >= DAILY_XP_CAP;
 
     // Step 7: Query all sessions played today (needed for cross-location locking + XP check)
     const { items: todaySessions } = await query<GameSession>(
@@ -116,10 +108,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }
     );
 
-    // Flat set of all minigameIds played today across ALL locations
-    const playedToday = new Set(
+    // Flat set of all minigameIds WON today across ALL locations
+    const wonToday = new Set(
       todaySessions
-        .filter((s) => s.completedAt !== null)
+        .filter((s) => s.completedAt !== null && s.result === 'win')
         .map((s) => s.minigameId),
     );
 
@@ -130,8 +122,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (savedSet) {
       minigameIds = savedSet.minigameIds;
     } else {
-      // First scan at this location today — roll a new set excluding played minigames
-      minigameIds = pickRandomMinigames([...playedToday]);
+      // First scan at this location today — roll a new set excluding won minigames
+      minigameIds = pickRandomMinigames([...wonToday]);
 
       if (minigameIds.length === 0) {
         return error(
@@ -165,7 +157,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         name: meta.name,
         timeLimit: meta.timeLimit,
         description: meta.description,
-        completed: playedToday.has(id),
+        completed: wonToday.has(id),
       };
     });
 
@@ -179,6 +171,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       locationName: location.name,
       availableMinigames,
       xpAvailable,
+      capReached,
     });
   } catch (err) {
     console.error('scanQR error:', err);

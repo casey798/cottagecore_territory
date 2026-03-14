@@ -3,68 +3,52 @@ import { scan, query } from './db';
 import { User } from './types';
 import { ensureFirebaseInitialized } from './firebase';
 
-export interface FCMNotification {
-  title: string;
-  body: string;
-  data?: Record<string, string>;
+export interface FCMMessage {
+  notification: {
+    title: string;
+    body: string;
+  };
+  data: Record<string, string>;
 }
 
-export async function sendToDevices(
+const BATCH_SIZE = 500;
+
+export async function sendToTokens(
   tokens: string[],
-  notification: FCMNotification
-): Promise<void> {
-  if (tokens.length === 0) return;
+  message: FCMMessage
+): Promise<number> {
+  if (tokens.length === 0) return 0;
 
   const initialized = await ensureFirebaseInitialized();
-  if (!initialized) return;
+  if (!initialized) return 0;
 
   const messaging = admin.messaging();
-  const BATCH_SIZE = 500;
+  let delivered = 0;
 
   for (let i = 0; i < tokens.length; i += BATCH_SIZE) {
     const batch = tokens.slice(i, i + BATCH_SIZE);
     try {
-      await messaging.sendEachForMulticast({
+      const result = await messaging.sendEachForMulticast({
         tokens: batch,
-        notification: {
-          title: notification.title,
-          body: notification.body,
+        notification: message.notification,
+        data: message.data,
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: 'grovewars_alerts',
+          },
         },
-        data: notification.data,
       });
+      delivered += result.successCount;
     } catch (err) {
       console.error('FCM batch send error:', err);
     }
   }
+
+  return delivered;
 }
 
-export async function sendToClans(
-  clans: string[],
-  notification: FCMNotification
-): Promise<void> {
-  const tokens: string[] = [];
-
-  for (const clan of clans) {
-    const { items: users } = await query<User>(
-      'users',
-      'clan = :clan',
-      { ':clan': clan },
-      { indexName: 'ClanIndex' }
-    );
-
-    for (const user of users) {
-      if (user.fcmToken) {
-        tokens.push(user.fcmToken);
-      }
-    }
-  }
-
-  await sendToDevices(tokens, notification);
-}
-
-export async function sendToAll(
-  notification: FCMNotification
-): Promise<void> {
+export async function sendToAll(message: FCMMessage): Promise<number> {
   const tokens: string[] = [];
   let lastKey: Record<string, unknown> | undefined;
 
@@ -82,25 +66,23 @@ export async function sendToAll(
     lastKey = result.lastEvaluatedKey;
   } while (lastKey);
 
-  await sendToDevices(tokens, notification);
+  return sendToTokens(tokens, message);
 }
 
-// Legacy functions for backward compatibility
-export async function sendToDevice(
-  token: string,
-  title: string,
-  body: string,
-  data: Record<string, string>
-): Promise<void> {
-  await sendToDevices([token], { title, body, data });
-}
+export async function sendToClan(
+  clan: string,
+  message: FCMMessage
+): Promise<number> {
+  const { items: users } = await query<User>(
+    'users',
+    'clan = :clan',
+    { ':clan': clan },
+    { indexName: 'ClanIndex' }
+  );
 
-export async function sendToTokens(
-  tokens: string[],
-  title: string,
-  body: string,
-  data: Record<string, string>
-): Promise<{ sent: number }> {
-  await sendToDevices(tokens, { title, body, data });
-  return { sent: tokens.length };
+  const tokens = users
+    .map((u) => u.fcmToken)
+    .filter((t): t is string => !!t);
+
+  return sendToTokens(tokens, message);
 }

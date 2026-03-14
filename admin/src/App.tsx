@@ -15,6 +15,7 @@ import { AnalyticsPage } from '@/pages/AnalyticsPage';
 import { NotificationsPage } from '@/pages/NotificationsPage';
 import { UsersPage } from '@/pages/UsersPage';
 import { SeasonPage } from '@/pages/SeasonPage';
+import { CaptureHistoryPage } from '@/pages/CaptureHistoryPage';
 
 const GOOGLE_CLIENT_ID =
   '425457815141-c7qp4l9sjkn5fgcv9t3odnu83j4nd3nh.apps.googleusercontent.com';
@@ -173,6 +174,14 @@ export function App() {
               element={
                 <ProtectedLayout>
                   <SeasonPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/capture-history"
+              element={
+                <ProtectedLayout>
+                  <CaptureHistoryPage />
                 </ProtectedLayout>
               }
             />

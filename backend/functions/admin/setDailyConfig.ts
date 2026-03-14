@@ -34,8 +34,8 @@ export async function handler(
     const qrSecret = existing?.qrSecret ?? crypto.randomBytes(32).toString('hex');
     console.log('[setDailyConfig] qrSecret:', existing ? 'reused existing' : 'generated new');
 
-    // Create daily config record
-    const dailyConfig: DailyConfig = {
+    // Create daily config record, preserving existing qrCodes if present
+    const dailyConfig: Record<string, unknown> = {
       date,
       activeLocationIds,
       targetSpace,
@@ -45,8 +45,12 @@ export async function handler(
       difficulty,
     };
 
+    if (existing && (existing as Record<string, unknown>).qrCodes) {
+      dailyConfig.qrCodes = (existing as Record<string, unknown>).qrCodes;
+    }
+
     console.log('[setDailyConfig] Writing to DynamoDB:', JSON.stringify(dailyConfig));
-    await putItem<Record<string, unknown>>('daily-config', dailyConfig as unknown as Record<string, unknown>);
+    await putItem<Record<string, unknown>>('daily-config', dailyConfig);
     console.log('[setDailyConfig] Write successful for date:', date);
 
     return success({

@@ -1,7 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import crypto from 'crypto';
 import { extractUserId } from '../../shared/auth';
-import { getItem, putItem } from '../../shared/db';
+import { getItem, putItem, query } from '../../shared/db';
 import { MINIGAME_POOL } from '../../shared/minigames';
 import { success, error, ErrorCode } from '../../shared/response';
 import { startMinigameSchema } from '../../shared/schemas';
@@ -15,8 +15,6 @@ import {
   PlayerLock,
   User,
 } from '../../shared/types';
-
-const DAILY_XP_CAP = 100;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
@@ -40,14 +38,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.NOT_FOUND, 'Location not found', 404);
     }
 
-    // Verify player hasn't hit daily cap
+    // Verify user exists
     const user = await getItem<User>('users', { userId });
     if (!user) {
       return error(ErrorCode.NOT_FOUND, 'User not found', 404);
-    }
-
-    if (user.todayXp >= DAILY_XP_CAP) {
-      return error(ErrorCode.DAILY_CAP_REACHED, 'You have reached the daily XP cap', 403);
     }
 
     // Check location lock
@@ -58,6 +52,25 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.LOCATION_LOCKED, 'This location is locked for you until tomorrow', 403);
     }
 
+    // Check if player already won this minigame today (across any location)
+    const { items: todaySessions } = await query<GameSession>(
+      'game-sessions',
+      'userId = :uid AND #d = :date',
+      { ':uid': userId, ':date': today },
+      {
+        indexName: 'UserDateIndex',
+        expressionNames: { '#d': 'date' },
+        scanIndexForward: false,
+        limit: 50,
+      }
+    );
+    const alreadyWon = todaySessions.some(
+      (s) => s.minigameId === minigameId && s.result === GameResult.Win && s.completedAt !== null,
+    );
+    if (alreadyWon) {
+      return error(ErrorCode.MINIGAME_ALREADY_WON, 'You have already won this challenge today', 400);
+    }
+
     // Co-op validation
     if (coopPartnerId) {
       const partner = await getItem<User>('users', { userId: coopPartnerId });
@@ -66,9 +79,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }
       if (partner.clan !== user.clan) {
         return error(ErrorCode.VALIDATION_ERROR, 'Co-op partner must be in the same clan', 400);
-      }
-      if (partner.todayXp >= DAILY_XP_CAP) {
-        return error(ErrorCode.DAILY_CAP_REACHED, 'Co-op partner has reached the daily XP cap', 403);
       }
     }
 

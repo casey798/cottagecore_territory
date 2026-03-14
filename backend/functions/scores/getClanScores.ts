@@ -1,7 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { getItem } from '../../shared/db';
+import { getItem, scan } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
-import { Clan, ClanId, ClanScore } from '../../shared/types';
+import { Clan, ClanId, ClanScore, CapturedSpace } from '../../shared/types';
 
 const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
 
@@ -9,6 +9,19 @@ export const handler = async (
   _event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
   try {
+    // Count captured spaces per clan from the captured-spaces table (source of truth)
+    const spaceCounts: Record<string, number> = {};
+    let lastKey: Record<string, unknown> | undefined;
+    do {
+      const result = await scan<CapturedSpace>('captured-spaces', {
+        exclusiveStartKey: lastKey,
+      });
+      for (const space of result.items) {
+        spaceCounts[space.clan] = (spaceCounts[space.clan] || 0) + 1;
+      }
+      lastKey = result.lastEvaluatedKey;
+    } while (lastKey);
+
     const clans = await Promise.all(
       CLAN_IDS.map(async (clanId) => {
         const clan = await getItem<Clan>('clans', { clanId });
@@ -16,7 +29,7 @@ export const handler = async (
           clanId,
           todayXp: clan?.todayXp ?? 0,
           seasonXp: clan?.seasonXp ?? 0,
-          spacesCaptured: clan?.spacesCaptured ?? 0,
+          spacesCaptured: spaceCounts[clanId] ?? 0,
         } satisfies ClanScore;
       })
     );

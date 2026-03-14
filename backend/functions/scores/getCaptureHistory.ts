@@ -22,6 +22,7 @@ export const handler = async (
     );
 
     const history = captures.map((capture) => ({
+      spaceId: capture.spaceId,
       date: capture.dateCaptured,
       spaceName: capture.spaceName,
       clan: capture.clan,

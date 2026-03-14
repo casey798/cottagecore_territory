@@ -167,12 +167,14 @@ describe('completeMinigame handler', () => {
       expect(responseBody.data.result).toBe('win');
       expect(responseBody.data.xpEarned).toBe(25);
 
-      // Verify user XP was updated with ADD (atomic)
+      // Verify user XP was updated with ADD (atomic, with daily cap condition)
       expect(mockUpdateItem).toHaveBeenCalledWith(
         'users',
         { userId: USER_ID },
         expect.stringContaining('ADD todayXp'),
-        expect.objectContaining({ ':xp': 25 })
+        expect.objectContaining({ ':xp': 25 }),
+        undefined,
+        'todayXp <= :maxXp'
       );
 
       // Verify clan XP was updated with ADD (atomic)
@@ -238,12 +240,14 @@ describe('completeMinigame handler', () => {
       expect(result.statusCode).toBe(200);
       expect(responseBody.data.result).toBe('win');
 
-      // Verify partner XP was also updated
+      // Verify partner XP was also updated (with daily cap condition)
       expect(mockUpdateItem).toHaveBeenCalledWith(
         'users',
         { userId: PARTNER_ID },
         expect.stringContaining('ADD todayXp'),
-        expect.objectContaining({ ':xp': 25 })
+        expect.objectContaining({ ':xp': 25 }),
+        undefined,
+        'todayXp <= :maxXp'
       );
 
       // Verify clan XP was incremented twice (player + partner)

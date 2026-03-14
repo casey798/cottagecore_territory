@@ -16,14 +16,14 @@ jest.mock('@aws-sdk/client-apigatewaymanagementapi', () => ({
 
 import { getItem, scan, updateItem, putItem } from '../../../shared/db';
 import { getTodayISTString } from '../../../shared/time';
-import { sendToTokens } from '../../../shared/notifications';
+import { sendToAll } from '../../../shared/notifications';
 
 const mockGetItem = getItem as jest.MockedFunction<typeof getItem>;
 const mockScan = scan as jest.MockedFunction<typeof scan>;
 const mockUpdateItem = updateItem as jest.MockedFunction<typeof updateItem>;
 const mockPutItem = putItem as jest.MockedFunction<typeof putItem>;
 const mockGetTodayISTString = getTodayISTString as jest.MockedFunction<typeof getTodayISTString>;
-const mockSendToTokens = sendToTokens as jest.MockedFunction<typeof sendToTokens>;
+const mockSendToAll = sendToAll as jest.MockedFunction<typeof sendToAll>;
 
 const TODAY = '2026-03-07';
 
@@ -73,7 +73,7 @@ describe('dailyScoring handler', () => {
     mockGetTodayISTString.mockReturnValue(TODAY);
     mockUpdateItem.mockResolvedValue(undefined);
     mockPutItem.mockResolvedValue(undefined);
-    mockSendToTokens.mockResolvedValue({ sent: 0 });
+    mockSendToAll.mockResolvedValue(0);
 
     // Default: no WS connections
     mockScan.mockImplementation(async (table: string) => {
@@ -148,13 +148,6 @@ describe('dailyScoring handler', () => {
         })
       );
 
-      // Should increment ember's spacesCaptured
-      expect(mockUpdateItem).toHaveBeenCalledWith(
-        'clans',
-        { clanId: 'ember' },
-        expect.stringContaining('ADD spacesCaptured'),
-        expect.objectContaining({ ':one': 1 })
-      );
     });
 
     it('uses tiebreaker: two clans tied on XP, earlier timestamp wins', async () => {
@@ -292,12 +285,14 @@ describe('dailyScoring handler', () => {
 
       await handler(MOCK_EVENT);
 
-      // sendToTokens should be called with non-empty tokens
-      expect(mockSendToTokens).toHaveBeenCalledWith(
-        ['token-1', 'token-2'],
-        'Territory Captured!',
-        expect.stringContaining('Ember'),
-        expect.objectContaining({ type: 'CAPTURE', clan: 'ember' })
+      // sendToAll should be called with capture result message
+      expect(mockSendToAll).toHaveBeenCalledWith(
+        expect.objectContaining({
+          notification: expect.objectContaining({
+            title: 'Ember wins!',
+          }),
+          data: expect.objectContaining({ type: 'CAPTURE_RESULT', winnerClan: 'ember' }),
+        })
       );
     });
   });

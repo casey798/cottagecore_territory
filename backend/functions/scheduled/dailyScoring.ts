@@ -1,7 +1,7 @@
 import { ScheduledEvent } from 'aws-lambda';
 import { getItem, scan, updateItem, putItem } from '../../shared/db';
 import { getTodayISTString, toISTString } from '../../shared/time';
-import { sendToTokens } from '../../shared/notifications';
+import { sendToAll } from '../../shared/notifications';
 import { User, DailyConfig, Clan, ClanId, DailyConfigStatus, CapturedSpace, WsConnection } from '../../shared/types';
 import { v4 as uuidv4 } from 'uuid';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
@@ -80,20 +80,14 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     spaceName: todayConfig.targetSpace.name,
     season: '1', // Current season
     mapOverlayId: todayConfig.targetSpace.mapOverlayId,
+    polygonPoints: todayConfig.targetSpace.polygonPoints,
+    gridCells: todayConfig.targetSpace.gridCells,
   };
 
   await putItem('captured-spaces', capturedSpace as unknown as Record<string, unknown>);
   console.log(`Created captured space: ${capturedSpace.spaceId}`);
 
-  // Step 6: Increment winning clan's spacesCaptured
-  await updateItem(
-    'clans',
-    { clanId: winnerClan.clanId },
-    'ADD spacesCaptured :one',
-    { ':one': 1 }
-  );
-
-  // Step 7: Update daily-config with winner and status
+  // Step 6: Update daily-config with winner and status
   await updateItem(
     'daily-config',
     { date: today },
@@ -102,28 +96,20 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     { '#status': 'status' }
   );
 
-  // Step 8: Send push notification
-  const allUsers: User[] = [];
-  let lastKey: Record<string, unknown> | undefined;
-  do {
-    const result = await scan<User>('users', { exclusiveStartKey: lastKey });
-    allUsers.push(...result.items);
-    lastKey = result.lastEvaluatedKey;
-  } while (lastKey);
-
-  const tokens = allUsers
-    .map((u) => u.fcmToken)
-    .filter((t): t is string => !!t);
-
-  if (tokens.length > 0) {
-    const notifResult = await sendToTokens(
-      tokens,
-      'Territory Captured!',
-      `${winnerClan.clanId.charAt(0).toUpperCase() + winnerClan.clanId.slice(1)} has captured ${todayConfig.targetSpace.name}!`,
-      { type: 'CAPTURE', clan: winnerClan.clanId, spaceName: todayConfig.targetSpace.name }
-    );
-    console.log(`Sent capture notifications: ${notifResult.sent} delivered`);
-  }
+  // Step 8: Send capture result push notification
+  const clanName = winnerClan.clanId.charAt(0).toUpperCase() + winnerClan.clanId.slice(1);
+  const delivered = await sendToAll({
+    notification: {
+      title: `${clanName} wins!`,
+      body: `${clanName} has captured ${todayConfig.targetSpace.name}! See the updated map.`,
+    },
+    data: {
+      type: 'CAPTURE_RESULT',
+      winnerClan: winnerClan.clanId,
+      spaceName: todayConfig.targetSpace.name,
+    },
+  });
+  console.log(`Sent capture notifications: ${delivered} delivered`);
 
   // Step 9: Broadcast CAPTURE event via WebSocket
   try {
@@ -154,13 +140,43 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
           console.warn(`Failed to send to connection ${conn.connectionId}:`, wsErr);
         }
       }
-      console.log(`Broadcast CAPTURE to ${connections.length} connections`);
+      // Also broadcast SCORING_COMPLETE
+      const scoringPayload = JSON.stringify({
+        type: 'SCORING_COMPLETE',
+        data: {
+          winnerClan: winnerClan.clanId,
+          spaceName: todayConfig.targetSpace.name,
+          mapOverlayId: todayConfig.targetSpace.mapOverlayId,
+        },
+      });
+
+      for (const conn of connections) {
+        try {
+          await apiGw.send(
+            new PostToConnectionCommand({
+              ConnectionId: conn.connectionId,
+              Data: new TextEncoder().encode(scoringPayload),
+            })
+          );
+        } catch (wsErr) {
+          console.warn(`Failed to send SCORING_COMPLETE to ${conn.connectionId}:`, wsErr);
+        }
+      }
+      console.log(`Broadcast CAPTURE + SCORING_COMPLETE to ${connections.length} connections`);
     }
   } catch (broadcastErr) {
     console.error('WebSocket broadcast failed (non-fatal):', broadcastErr);
   }
 
   // Step 10: Update streaks for all users
+  const allUsers: User[] = [];
+  let lastKey: Record<string, unknown> | undefined;
+  do {
+    const result = await scan<User>('users', { exclusiveStartKey: lastKey });
+    allUsers.push(...result.items);
+    lastKey = result.lastEvaluatedKey;
+  } while (lastKey);
+
   const yesterdayDate = toISTString(addDays(toZonedTime(new Date(), 'Asia/Kolkata'), -1));
 
   for (const user of allUsers) {

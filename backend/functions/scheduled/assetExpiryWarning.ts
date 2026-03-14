@@ -39,12 +39,13 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     try {
       const user = await getItem<User>('users', { userId });
       if (user?.fcmToken) {
-        await sendToTokens(
-          [user.fcmToken],
-          'Items expiring soon!',
-          `You have ${count} unplaced item${count > 1 ? 's' : ''} - place them before midnight or they'll fade away!`,
-          { type: 'ASSET_EXPIRY_WARNING', count: String(count) }
-        );
+        await sendToTokens([user.fcmToken], {
+          notification: {
+            title: 'Items fading...',
+            body: `You have ${count} unplaced item${count > 1 ? 's' : ''} — place them before midnight!`,
+          },
+          data: { type: 'ASSET_EXPIRY_WARNING', count: String(count) },
+        });
       }
     } catch (err) {
       console.error(`Failed to send warning to user ${userId}:`, err);

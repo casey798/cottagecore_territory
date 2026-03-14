@@ -49,6 +49,8 @@ export interface DailyConfig {
     name: string;
     description: string;
     mapOverlayId: string;
+    polygonPoints?: Array<{ x: number; y: number }>;
+    gridCells?: Array<{ x: number; y: number }>;
   };
   difficulty: 'easy' | 'medium' | 'hard';
   status: 'active' | 'scoring' | 'complete';

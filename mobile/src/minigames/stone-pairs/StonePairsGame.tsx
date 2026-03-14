@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
+
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { generateClientCompletionHash } from '@/utils/hmac';
@@ -40,8 +40,6 @@ export default function StonePairsGame({
   timeLimit,
   onComplete,
 }: MinigamePlayProps) {
-  useLockPortrait();
-
   // ---- Puzzle generation (once, client-side) --------------------------------
   const puzzleRef = useRef<StonePairsPuzzle | null>(null);
   if (puzzleRef.current === null) {

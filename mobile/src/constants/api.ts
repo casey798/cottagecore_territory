@@ -21,4 +21,5 @@ export const ENDPOINTS = {
   SCORES_HISTORY: '/scores/history',
   SPACES_CAPTURED: '/spaces/captured',
   SPACES_DECORATION: '/spaces',
+  PLAYER_FCM_TOKEN: '/player/fcm-token',
 } as const;

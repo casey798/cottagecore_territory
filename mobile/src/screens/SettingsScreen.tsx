@@ -3,10 +3,8 @@ import { View, Text, StyleSheet, Pressable } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
 
 export default function SettingsScreen() {
-  useLockPortrait();
   const logout = useAuthStore((s) => s.logout);
 
   return (

@@ -16,7 +16,7 @@ import {
   useCodeScanner,
 } from 'react-native-vision-camera';
 import { MainModalParamList } from '@/navigation/MainStack';
-import { useLockPortrait } from '@/hooks/useScreenOrientation';
+
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useGameStore } from '@/store/useGameStore';
@@ -65,8 +65,6 @@ export default function QRScannerScreen() {
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const device = useCameraDevice('back');
-
-  useLockPortrait();
 
   // Check if location is locked — redirect back immediately
   useEffect(() => {

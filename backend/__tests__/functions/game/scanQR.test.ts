@@ -303,7 +303,7 @@ describe('scanQR handler', () => {
       expect(responseBody.error.code).toBe('LOCATION_LOCKED');
     });
 
-    it('returns DAILY_CAP_REACHED when user todayXp is 100', async () => {
+    it('returns capReached when user todayXp is 100', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'daily-config') {
           return {
@@ -347,13 +347,15 @@ describe('scanQR handler', () => {
         }
         return undefined;
       });
+      mockQuery.mockResolvedValue({ items: [] });
 
       const event = makeEvent(makeValidBody());
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
-      expect(result.statusCode).toBe(403);
-      expect(responseBody.error.code).toBe('DAILY_CAP_REACHED');
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.success).toBe(true);
+      expect(responseBody.data.capReached).toBe(true);
     });
 
   });
@@ -373,7 +375,7 @@ describe('scanQR handler', () => {
       expect(responseBody.data).toHaveProperty('availableMinigames');
       expect(Array.isArray(responseBody.data.availableMinigames)).toBe(true);
       expect(responseBody.data.availableMinigames.length).toBeGreaterThanOrEqual(3);
-      expect(responseBody.data.availableMinigames.length).toBeLessThanOrEqual(5);
+      expect(responseBody.data.availableMinigames.length).toBeLessThanOrEqual(6);
 
       const minigame = responseBody.data.availableMinigames[0];
       expect(minigame).toHaveProperty('minigameId');

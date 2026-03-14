@@ -4,7 +4,7 @@ import QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { success, error, ErrorCode } from '../../shared/response';
 import { generateQrSchema } from '../../shared/schemas';
-import { getItem } from '../../shared/db';
+import { getItem, updateItem } from '../../shared/db';
 import { generateQrPayload } from '../../shared/hmac';
 import type { DailyConfig, Location, QrPayload } from '../../shared/types';
 
@@ -112,12 +112,22 @@ export async function handler(
     const { date } = parsed.data;
 
     // Get daily config
-    const dailyConfig = await getItem<DailyConfig>('daily-config', { date });
+    const dailyConfig = await getItem<Record<string, unknown>>('daily-config', { date });
     if (!dailyConfig) {
       return error(ErrorCode.NOT_FOUND, 'Daily config not found for this date', 404);
     }
 
-    const { qrSecret, activeLocationIds } = dailyConfig;
+    // Return cached QR codes if they already exist
+    const cachedQrCodes = dailyConfig.qrCodes as { locationId: string; locationName: string; qrPayload: string; qrImageBase64: string }[] | undefined;
+    if (cachedQrCodes && cachedQrCodes.length > 0) {
+      return success({
+        qrCodes: cachedQrCodes,
+        printablePdfKey: `qr-sheets/${date}.pdf`,
+        cached: true,
+      });
+    }
+
+    const { qrSecret, activeLocationIds } = dailyConfig as unknown as DailyConfig;
 
     // Generate QR codes for each active location
     const qrCodes: QrCodeEntry[] = [];
@@ -144,27 +154,44 @@ export async function handler(
       });
     }
 
-    // Generate PDF
-    const pdfBuffer = await generatePdf(qrCodes, date);
+    // Generate PDF (non-fatal — QR images are the primary output)
+    let pdfKey: string | null = null;
+    try {
+      const pdfBuffer = await generatePdf(qrCodes, date);
+      pdfKey = `qr-sheets/${date}.pdf`;
+      await s3.send(
+        new PutObjectCommand({
+          Bucket: ASSETS_BUCKET,
+          Key: pdfKey,
+          Body: pdfBuffer,
+          ContentType: 'application/pdf',
+        })
+      );
+    } catch (pdfErr) {
+      console.warn('PDF generation failed (non-fatal):', pdfErr);
+    }
 
-    // Upload PDF to S3
-    const pdfKey = `qr-sheets/${date}.pdf`;
-    await s3.send(
-      new PutObjectCommand({
-        Bucket: ASSETS_BUCKET,
-        Key: pdfKey,
-        Body: pdfBuffer,
-        ContentType: 'application/pdf',
-      })
-    );
+    // Persist generated QR codes to daily config for future retrieval
+    const qrCodesForStorage = qrCodes.map((qr) => ({
+      locationId: qr.locationId,
+      locationName: qr.locationName,
+      qrPayload: qr.qrPayloadString,
+      qrImageBase64: qr.qrImageBase64,
+    }));
+
+    try {
+      await updateItem(
+        'daily-config',
+        { date },
+        'SET qrCodes = :qrCodes',
+        { ':qrCodes': qrCodesForStorage },
+      );
+    } catch (saveErr) {
+      console.warn('Failed to cache QR codes (non-fatal):', saveErr);
+    }
 
     return success({
-      qrCodes: qrCodes.map((qr) => ({
-        locationId: qr.locationId,
-        locationName: qr.locationName,
-        qrPayload: qr.qrPayloadString,
-        qrImageBase64: qr.qrImageBase64,
-      })),
+      qrCodes: qrCodesForStorage,
       printablePdfKey: pdfKey,
     });
   } catch (err) {

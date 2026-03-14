@@ -21,6 +21,8 @@ export const handler = async (
       targetSpace: config.targetSpace,
       status: config.status,
       difficulty: config.difficulty,
+      resetSeq: config.resetSeq ?? 0,
+      winnerClan: config.winnerClan ?? null,
     });
   } catch (err) {
     console.error('getDailyInfo error:', err);

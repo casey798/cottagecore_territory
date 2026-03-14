@@ -57,10 +57,14 @@ export const completeMinigameSchema = z.object({
   solutionData: z.record(z.unknown()),
 });
 
+const pointSchema = z.object({ x: z.number(), y: z.number() });
+
 export const targetSpaceSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
   mapOverlayId: z.string().min(1),
+  polygonPoints: z.array(pointSchema).optional(),
+  gridCells: z.array(pointSchema).optional(),
 });
 
 export const setDailyConfigSchema = z.object({
