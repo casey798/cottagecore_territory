@@ -1,46 +1,32 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import crypto from 'crypto';
 import { extractUserId } from '../../shared/auth';
-import { getItem, putItem, query } from '../../shared/db';
-import { MINIGAME_POOL } from '../../shared/minigames';
+import { getItem, putItem } from '../../shared/db';
+import { MINIGAME_POOL, MINIGAME_IDS } from '../../shared/minigames';
 import { generatePuzzle as generatePipsPuzzle } from '../../shared/minigames/pipsGenerator';
 import { generatePuzzle as generatePathWeaverPuzzle } from '../../shared/minigames/pathWeaverGenerator';
 import { getRandomPuzzle as getRandomMosaicPuzzle } from './mosaic/puzzleLibrary';
 import { generatePuzzle as generateGroveEquationsPuzzle } from '../../shared/minigames/groveEquationsGenerator';
 import { generateGame as generateBloomSequenceGame } from '../../shared/minigames/bloomSequenceGenerator';
 import { success, error, ErrorCode } from '../../shared/response';
-import { startMinigameSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
-import {
-  COOP_MINIGAME_IDS,
-  GameResult,
-  GameSession,
-  Location,
-  LocationMasterConfig,
-  PlayerLock,
-  User,
-} from '../../shared/types';
+import { GameResult, GameSession, User } from '../../shared/types';
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
     const userId = extractUserId(event);
 
-    const parsed = startMinigameSchema.safeParse(JSON.parse(event.body || '{}'));
-    if (!parsed.success) {
-      return error(ErrorCode.VALIDATION_ERROR, parsed.error.message, 400);
-    }
+    const body = JSON.parse(event.body || '{}');
+    let minigameId = body.minigameId as string | undefined;
 
-    const { locationId, minigameId, coopPartnerId } = parsed.data;
+    // If no minigameId provided, pick a random one
+    if (!minigameId) {
+      minigameId = MINIGAME_IDS[Math.floor(Math.random() * MINIGAME_IDS.length)];
+    }
 
     // Validate minigame ID
     if (!MINIGAME_POOL[minigameId]) {
       return error(ErrorCode.VALIDATION_ERROR, 'Invalid minigame ID', 400);
-    }
-
-    // Verify location exists
-    const location = await getItem<Location>('locations', { locationId });
-    if (!location) {
-      return error(ErrorCode.NOT_FOUND, 'Location not found', 404);
     }
 
     // Verify user exists
@@ -49,68 +35,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.NOT_FOUND, 'User not found', 404);
     }
 
-    // Check location lock
-    const today = getTodayISTString();
-    const dateUserLocation = `${today}#${userId}#${locationId}`;
-    const lock = await getItem<PlayerLock>('player-locks', { dateUserLocation });
-    if (lock) {
-      return error(ErrorCode.LOCATION_LOCKED, 'This location is locked for you until tomorrow', 403);
-    }
-
-    // Check if player already won this minigame today (across any location)
-    const { items: todaySessions } = await query<GameSession>(
-      'game-sessions',
-      'userId = :uid AND #d = :date',
-      { ':uid': userId, ':date': today },
-      {
-        indexName: 'UserDateIndex',
-        expressionNames: { '#d': 'date' },
-        scanIndexForward: false,
-        limit: 50,
-      }
-    );
-    const alreadyWon = todaySessions.some(
-      (s) => s.minigameId === minigameId && s.result === GameResult.Win && s.completedAt !== null,
-    );
-    if (alreadyWon) {
-      return error(ErrorCode.MINIGAME_ALREADY_WON, 'You have already won this challenge today', 400);
-    }
-
-    // Fetch location-master-config (best-effort) for coopOnly enforcement
-    let masterConfig: LocationMasterConfig | undefined;
-    try {
-      masterConfig = await getItem<LocationMasterConfig>('location-master-config', { locationId });
-    } catch (e) {
-      console.warn('[startMinigame] Failed to fetch location-master-config (non-fatal):', e);
-    }
-    const coopOnly = masterConfig?.coopOnly ?? location.coopOnly ?? false;
-
-    // Co-op only enforcement
-    if (coopOnly && !coopPartnerId) {
-      return error(ErrorCode.COOP_REQUIRED, 'This location requires a co-op partner.', 400);
-    }
-    if (coopOnly && !COOP_MINIGAME_IDS.includes(minigameId)) {
-      return error(ErrorCode.VALIDATION_ERROR, 'Solo minigames are not available at this location.', 400);
-    }
-
-    // Co-op partner validation (cross-clan allowed)
-    let partnerUser: User | undefined;
-    if (coopPartnerId) {
-      partnerUser = await getItem<User>('users', { userId: coopPartnerId });
-      if (!partnerUser) {
-        return error(ErrorCode.NOT_FOUND, 'Co-op partner not found', 404);
-      }
-    }
-
     const meta = MINIGAME_POOL[minigameId];
     const sessionId = crypto.randomUUID();
     const salt = crypto.randomBytes(32).toString('hex');
     const now = new Date().toISOString();
+    const today = getTodayISTString();
 
     const session: GameSession = {
       sessionId,
       userId,
-      locationId,
+      locationId: 'practice',
       minigameId,
       date: today,
       startedAt: now,
@@ -120,12 +54,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       chestDropped: false,
       chestAssetId: null,
       completionHash: '',
-      coopPartnerId: coopPartnerId ?? null,
+      coopPartnerId: null,
       _salt: salt,
       timeLimit: meta.timeLimit,
+      practiceSession: true,
     };
 
-    // Generate puzzle data for minigames that need server-side generation
+    // Generate puzzle data (same logic as startMinigame.ts)
     let puzzleData: Record<string, unknown> = {
       type: minigameId,
     };
@@ -167,7 +102,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         type: minigameId,
         numbers: eqPuzzle.numbers,
         target: eqPuzzle.target,
-        // solution is NOT sent to client
       };
     }
 
@@ -176,9 +110,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       (session as unknown as Record<string, unknown>).puzzleSolution = {
         rounds: bsGame.rounds,
       };
-      // Send rounds with correctAnswer — the client needs it for local
-      // validation. Server-side validation via stored puzzleSolution is
-      // the anti-cheat layer (verifies chosen indices match correct answers).
       puzzleData = {
         type: minigameId,
         rounds: bsGame.rounds,
@@ -214,14 +145,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
     }
 
-    // Inject partner identity into puzzleData for co-op game components
-    if (coopPartnerId && partnerUser) {
-      puzzleData.p1Name = user.displayName;
-      puzzleData.p1Clan = user.clan;
-      puzzleData.p2Name = partnerUser.displayName;
-      puzzleData.p2Clan = partnerUser.clan;
-    }
-
     await putItem('game-sessions', session as unknown as Record<string, unknown>);
 
     return success({
@@ -232,7 +155,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       puzzleData,
     });
   } catch (err) {
-    console.error('startMinigame error:', err);
+    console.error('startPractice error:', err);
     return error(ErrorCode.INTERNAL_ERROR, 'Internal server error', 500);
   }
 };

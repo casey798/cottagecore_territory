@@ -1,5 +1,5 @@
 import React from 'react';
-import { render } from '@testing-library/react-native';
+import { render, waitFor, fireEvent } from '@testing-library/react-native';
 
 // Mock dependencies
 jest.mock('react-native/Libraries/Animated/NativeAnimatedHelper');
@@ -57,7 +57,7 @@ describe('ResultScreen', () => {
     expect(getByText('Your clan now has 200 XP today!')).toBeTruthy();
   });
 
-  it('win state with chest drop shows asset info', () => {
+  it('win state with chest drop shows asset info', async () => {
     mockParams = {
       result: 'win',
       xpEarned: 25,
@@ -76,11 +76,20 @@ describe('ResultScreen', () => {
       locationLocked: false,
     };
 
-    const { getByText } = render(<ResultScreen />);
+    const { getByText, findByText } = render(<ResultScreen />);
 
-    expect(getByText('Chest Drop!')).toBeTruthy();
-    expect(getByText('Golden Banner')).toBeTruthy();
-    expect(getByText('LEGENDARY')).toBeTruthy();
+    // Chest reveal is animated — wait for the "A chest appeared!" phase
+    const chestText = await findByText('A chest appeared!', {}, { timeout: 3000 });
+    expect(chestText).toBeTruthy();
+
+    // Open the chest to reveal the item
+    fireEvent.press(getByText('Open Chest'));
+
+    // After opening, asset details are shown
+    await waitFor(() => {
+      expect(getByText('Golden Banner')).toBeTruthy();
+      expect(getByText('Legendary')).toBeTruthy();
+    });
   });
 
   it('win state without chest shows "no chest" message', () => {

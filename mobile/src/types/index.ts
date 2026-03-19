@@ -4,8 +4,6 @@ export type LocationCategory = 'courtyard' | 'corridor' | 'garden' | 'classroom'
 
 export type DailyStatus = 'active' | 'scoring' | 'complete';
 
-export type Difficulty = 'easy' | 'medium' | 'hard';
-
 export type GameResult = 'win' | 'lose' | 'timeout' | 'abandoned';
 
 export type AssetCategory = 'banner' | 'statue' | 'furniture' | 'mural' | 'pet' | 'special';
@@ -24,6 +22,7 @@ export interface AvatarConfig {
   skinTone: number;
   outfit: number;
   accessory: number;
+  characterPreset?: number;
 }
 
 export interface User {
@@ -59,6 +58,7 @@ export interface Location {
   geofenceRadius: number;
   category: LocationCategory;
   locked: boolean;
+  bonusXP?: boolean;
 }
 
 export interface TargetSpace {
@@ -77,10 +77,16 @@ export interface DailyInfo {
   date: string;
   targetSpace: TargetSpace;
   status: DailyStatus;
-  difficulty: Difficulty;
   eventWindows: EventWindow[];
   resetSeq?: number;
   winnerClan?: string | null;
+  quietMode?: boolean;
+}
+
+export interface CheckinResponse {
+  locationId: string;
+  locationName: string;
+  checkedIn: boolean;
 }
 
 export interface MinigameInfo {
@@ -98,11 +104,21 @@ export interface QrData {
   h: string;
 }
 
+export interface LocationModifiers {
+  spaceFact: string | null;
+  coopOnly: boolean;
+  firstVisitBonus: boolean;
+  bonusXP: boolean;
+  minigameAffinity: string[] | null;
+  linkedTo: string | null;
+}
+
 export interface ScanQRResponse {
   locationId: string;
   locationName: string;
   availableMinigames: MinigameInfo[];
   xpAvailable?: boolean;
+  locationModifiers?: LocationModifiers;
 }
 
 export interface GameSession {
@@ -148,6 +164,8 @@ export interface CompleteGameResponse {
   clanTodayXp?: number;
   chestDrop: ChestDrop;
   locationLocked?: boolean;
+  bonusXpTriggered?: boolean;
+  linkedLocation?: { locationId: string; name: string } | null;
 }
 
 export interface ClanScore {
@@ -155,6 +173,8 @@ export interface ClanScore {
   todayXp: number;
   seasonXp: number;
   spacesCaptured: number;
+  todayParticipants: number;
+  rosterSize: number;
 }
 
 export interface CaptureHistoryEntry {
@@ -258,7 +278,7 @@ export interface ApiResponse<T> {
 export interface WsScoreUpdate {
   type: 'SCORE_UPDATE';
   data: {
-    clans: Array<{ clanId: ClanId; todayXp: number }>;
+    clans: Array<{ clanId: ClanId; todayXp: number; todayParticipants: number; rosterSize: number }>;
     timestamp: string;
   };
 }
@@ -289,7 +309,97 @@ export interface WsScoringComplete {
   };
 }
 
-export type WsMessage = WsScoreUpdate | WsCaptureMessage | WsDailyReset | WsScoringComplete;
+export interface WsScoresChanged {
+  type: 'SCORES_CHANGED';
+  data?: Record<string, unknown>;
+}
+
+export type WsMessage = WsScoreUpdate | WsCaptureMessage | WsDailyReset | WsScoringComplete | WsScoresChanged;
+
+// ── Season Summary types ──────────────────────────────────────────
+
+export interface SeasonSummaryData {
+  winnerClan: ClanId | null;
+  clans: Array<{
+    clanId: ClanId;
+    seasonXp: number;
+    spacesCaptured: number;
+  }>;
+  topPlayersByXp: Array<{
+    userId: string;
+    displayName: string;
+    clan: ClanId;
+    seasonXp: number;
+  }>;
+  topPlayersByStreak: Array<{
+    userId: string;
+    displayName: string;
+    clan: ClanId;
+    bestStreak: number;
+  }>;
+  mostDecoratedSpaces: Array<{
+    spaceId: string;
+    spaceName: string;
+    decoratorCount: number;
+  }>;
+  playerStats: {
+    seasonXp: number;
+    totalWins: number;
+    bestStreak: number;
+    spacesDiscovered: number;
+  };
+}
+
+// ── Mosaic minigame types ──────────────────────────────────────────
+
+export interface MosaicCell { col: number; row: number; }
+
+export interface MosaicTile {
+  tileId: string;
+  shape: 'SQUARE' | 'BAR_3' | 'BAR_4' | 'L' | 'L_MIRROR' | 'T' | 'S' | 'PLUS';
+  assetKey: 'mo_tile_leaf' | 'mo_tile_mushroom' | 'mo_tile_stone' | 'mo_tile_acorn';
+}
+
+export interface MosaicTilePlacement {
+  tileId: string;
+  originCol: number;
+  originRow: number;
+  rotation: 0 | 90 | 180 | 270;
+}
+
+export interface MosaicPuzzle {
+  id: string;
+  gridCols: number;
+  gridRows: number;
+  targetCells: MosaicCell[];
+  tiles: MosaicTile[];
+  solution: MosaicTilePlacement[];
+}
+
+export interface MosaicPuzzleClient extends Omit<MosaicPuzzle, 'solution'> {}
+
+// ── Free-Roam Check-In types ────────────────────────────────────────
+
+export type ActivityCategory =
+  | 'high_effort_personal'
+  | 'low_effort_personal'
+  | 'high_effort_social'
+  | 'low_effort_social';
+
+export type Satisfaction = 0 | 0.25 | 0.5 | 0.75 | 1;
+
+export type Sentiment = 'yes' | 'maybe' | 'no';
+
+export type SpaceSentiment = 'yes' | 'maybe' | 'no';
+
+export type LeaveReason =
+  | 'navigated_away'
+  | 'new_scan'
+  | 'app_backgrounded'
+  | 'fallback_next_session'
+  | 'fallback_end_of_day';
+
+export type Floor = 'outdoor' | 'ground' | 'first' | 'second' | 'third';
 
 export enum ErrorCode {
   InvalidDomain = 'INVALID_DOMAIN',

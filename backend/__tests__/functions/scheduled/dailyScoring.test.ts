@@ -38,7 +38,6 @@ const MOCK_DAILY_CONFIG = {
   qrSecret: 'test-secret',
   winnerClan: null,
   status: 'active',
-  difficulty: 'medium',
 };
 
 const MOCK_EVENT: ScheduledEvent = {

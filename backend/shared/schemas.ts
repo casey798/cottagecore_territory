@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 const clanIdSchema = z.enum(['ember', 'tide', 'bloom', 'gale', 'hearth']);
-const difficultySchema = z.enum(['easy', 'medium', 'hard']);
 const notificationTypeSchema = z.enum(['event', 'alert', 'hype', 'info']);
 const gameResultSchema = z.enum(['win', 'lose', 'timeout', 'abandoned']);
 
@@ -69,10 +68,13 @@ export const targetSpaceSchema = z.object({
 
 export const setDailyConfigSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  activeLocationIds: z.array(z.string().uuid()).min(1),
-  targetSpace: targetSpaceSchema,
-  difficulty: difficultySchema,
-});
+  activeLocationIds: z.array(z.string().uuid()).min(1).optional(),
+  targetSpace: targetSpaceSchema.optional(),
+  quietMode: z.boolean().optional(),
+}).refine(
+  (data) => data.quietMode === true || (data.activeLocationIds && data.activeLocationIds.length > 0 && data.targetSpace),
+  { message: 'activeLocationIds and targetSpace are required when quietMode is not true' }
+);
 
 export const generateQrSchema = z.object({
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),

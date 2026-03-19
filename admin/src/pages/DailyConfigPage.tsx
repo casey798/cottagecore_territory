@@ -1,15 +1,23 @@
 import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { getLocations } from '@/api/locations';
+import { getLocations, getMasterLocations, suggestDailyPool, deployAssignments, getSeasonSchedule, saveSeasonSchedule } from '@/api/locations';
 import { getMapConfig } from '@/api/map';
 import { getDailyConfig, setDailyConfig, applyDailyConfig, sendTestNotification, triggerScheduledJob, getUserByEmail, resetPlayerState } from '@/api/daily';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ErrorAlert } from '@/components/ErrorAlert';
+import { ConfirmDialog } from '@/components/ConfirmDialog';
 import { MapPolygonEditor, type PolygonValue } from '@/components/MapPolygonEditor';
 import { MAP_WIDTH, MAP_HEIGHT, TILE_SIZE } from '@/constants/map';
-import type { Location } from '@/types';
+import type { Location, LocationClassification, SuggestedLocation, ScheduleEntry } from '@/types';
 
-const DIFFICULTIES = ['easy', 'medium', 'hard'] as const;
+const CLASSIFICATION_BADGE: Record<LocationClassification, string> = {
+  'Social Hub': 'bg-green-100 text-green-800',
+  'Transit / Forced Stay': 'bg-blue-100 text-blue-800',
+  'Hidden Gem': 'bg-yellow-100 text-yellow-800',
+  'Dead Zone': 'bg-red-100 text-red-800',
+  Unvisited: 'bg-gray-100 text-gray-700',
+  TBD: 'bg-purple-100 text-purple-800',
+};
 
 const TEST_NOTIFICATION_WINDOWS = [
   { value: 'morning', label: 'Morning Break (10:40 AM)' },
@@ -53,7 +61,6 @@ function getTodayIST(): string {
 export function DailyConfigPage() {
   const today = useMemo(() => getTodayIST(), []);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [difficulty, setDifficulty] = useState<'easy' | 'medium' | 'hard'>('medium');
   const [targetName, setTargetName] = useState('');
   const [targetDesc, setTargetDesc] = useState('');
   const [targetOverlay, setTargetOverlay] = useState('default');
@@ -61,6 +68,7 @@ export function DailyConfigPage() {
     polygonPoints: [],
     cells: [],
   });
+  const [quietMode, setQuietMode] = useState(false);
   const [notification, setNotification] = useState<{
     type: 'success' | 'error';
     message: string;
@@ -145,6 +153,103 @@ export function DailyConfigPage() {
     },
   });
 
+  // ── Algorithm Suggest state ──────────────────
+  const [suggestions, setSuggestions] = useState<SuggestedLocation[]>([]);
+  const [suggestChecked, setSuggestChecked] = useState<Set<string>>(new Set());
+
+  const suggestMut = useMutation({
+    mutationFn: suggestDailyPool,
+    onSuccess: (data) => {
+      setSuggestions(data.suggestions);
+      setSuggestChecked(
+        new Set(data.suggestions.filter((s) => s.included).map((s) => s.locationId)),
+      );
+    },
+    onError: (err) => {
+      setNotification({ type: 'error', message: (err as Error).message });
+      setTimeout(() => setNotification(null), 5000);
+    },
+  });
+
+  function acceptSuggested() {
+    setSelectedIds(new Set(suggestChecked));
+  }
+
+  // ── Deploy Assignments state ───────────────
+  const [deployConfirmOpen, setDeployConfirmOpen] = useState(false);
+  const [deployResult, setDeployResult] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  const deployMut = useMutation({
+    mutationFn: deployAssignments,
+    onSuccess: (data) => {
+      setDeployResult({
+        type: 'success',
+        message: `Assigned ${data.assigned} players (${data.failed} failed) for ${data.date}`,
+      });
+      setTimeout(() => setDeployResult(null), 8000);
+    },
+    onError: (err) => {
+      setDeployResult({
+        type: 'error',
+        message: (err as Error).message,
+      });
+      setTimeout(() => setDeployResult(null), 8000);
+    },
+  });
+
+  // ── Capture Schedule state ─────────────────
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleRows, setScheduleRows] = useState<ScheduleEntry[]>([]);
+  const [schedSaveResult, setSchedSaveResult] = useState<{
+    type: 'success' | 'error';
+    message: string;
+  } | null>(null);
+
+  const { data: masterLocations } = useQuery({
+    queryKey: ['master-locations'],
+    queryFn: getMasterLocations,
+  });
+
+  const { data: existingSchedule } = useQuery({
+    queryKey: ['season-schedule'],
+    queryFn: getSeasonSchedule,
+  });
+
+  useEffect(() => {
+    if (existingSchedule && scheduleRows.length === 0) {
+      setScheduleRows(existingSchedule);
+    }
+  }, [existingSchedule]);
+
+  const schedSaveMut = useMutation({
+    mutationFn: () => saveSeasonSchedule(scheduleRows),
+    onSuccess: () => {
+      setSchedSaveResult({ type: 'success', message: 'Schedule saved.' });
+      setTimeout(() => setSchedSaveResult(null), 5000);
+    },
+    onError: (err) => {
+      setSchedSaveResult({ type: 'error', message: (err as Error).message });
+      setTimeout(() => setSchedSaveResult(null), 5000);
+    },
+  });
+
+  function addScheduleRow() {
+    setScheduleRows((prev) => [...prev, { date: '', captureSpaceId: '' }]);
+  }
+
+  function removeScheduleRow(idx: number) {
+    setScheduleRows((prev) => prev.filter((_, i) => i !== idx));
+  }
+
+  function updateScheduleRow(idx: number, field: keyof ScheduleEntry, value: string) {
+    setScheduleRows((prev) =>
+      prev.map((row, i) => (i === idx ? { ...row, [field]: value } : row)),
+    );
+  }
+
   const { data: mapConfig } = useQuery({
     queryKey: ['map-config'],
     queryFn: getMapConfig,
@@ -163,8 +268,8 @@ export function DailyConfigPage() {
   // Pre-fill fields from existing config
   useEffect(() => {
     if (existingConfig) {
+      setQuietMode(existingConfig.quietMode ?? false);
       setSelectedIds(new Set(existingConfig.activeLocationIds));
-      setDifficulty(existingConfig.difficulty);
       if (existingConfig.targetSpace) {
         setTargetName(existingConfig.targetSpace.name);
         setTargetDesc(existingConfig.targetSpace.description);
@@ -183,25 +288,29 @@ export function DailyConfigPage() {
 
   const saveMut = useMutation({
     mutationFn: async () => {
-      if (selectedIds.size === 0) throw new Error('Select at least one location');
-      if (!targetName.trim()) throw new Error('Target space name is required');
-      if (!targetDesc.trim()) throw new Error('Target space description is required');
+      if (!quietMode) {
+        if (selectedIds.size === 0) throw new Error('Select at least one location');
+        if (!targetName.trim()) throw new Error('Target space name is required');
+        if (!targetDesc.trim()) throw new Error('Target space description is required');
+      }
 
-      const body = {
+      const body: Record<string, unknown> = {
         date: today,
-        activeLocationIds: Array.from(selectedIds),
-        targetSpace: {
+        quietMode,
+      };
+
+      if (!quietMode) {
+        body.activeLocationIds = Array.from(selectedIds);
+        body.targetSpace = {
           name: targetName.trim(),
           description: targetDesc.trim(),
           mapOverlayId: targetOverlay.trim() || 'default',
           polygonPoints: polygonValue.polygonPoints,
           gridCells: polygonValue.cells,
-        },
-        difficulty,
-      };
-      console.log('[DailyConfig] Saving:', JSON.stringify(body, null, 2));
-      const result = await setDailyConfig(body);
-      console.log('[DailyConfig] Response:', JSON.stringify(result, null, 2));
+        };
+      }
+
+      const result = await setDailyConfig(body as Parameters<typeof setDailyConfig>[0]);
       return result;
     },
     onSuccess: (data) => {
@@ -218,23 +327,30 @@ export function DailyConfigPage() {
 
   const applyMut = useMutation({
     mutationFn: async () => {
-      if (selectedIds.size === 0) throw new Error('Select at least one location');
-      if (!targetName.trim()) throw new Error('Target space name is required');
-      if (!targetDesc.trim()) throw new Error('Target space description is required');
+      if (!quietMode) {
+        if (selectedIds.size === 0) throw new Error('Select at least one location');
+        if (!targetName.trim()) throw new Error('Target space name is required');
+        if (!targetDesc.trim()) throw new Error('Target space description is required');
+      }
 
       // Save config first
-      await setDailyConfig({
+      const body: Record<string, unknown> = {
         date: today,
-        activeLocationIds: Array.from(selectedIds),
-        targetSpace: {
+        quietMode,
+      };
+
+      if (!quietMode) {
+        body.activeLocationIds = Array.from(selectedIds);
+        body.targetSpace = {
           name: targetName.trim(),
           description: targetDesc.trim(),
           mapOverlayId: targetOverlay.trim() || 'default',
           polygonPoints: polygonValue.polygonPoints,
           gridCells: polygonValue.cells,
-        },
-        difficulty,
-      });
+        };
+      }
+
+      await setDailyConfig(body as Parameters<typeof setDailyConfig>[0]);
 
       // Then apply immediately
       return applyDailyConfig();
@@ -336,10 +452,42 @@ export function DailyConfigPage() {
       {isLoading && <LoadingSpinner />}
       {error && <ErrorAlert message={(error as Error).message} />}
 
+      {/* Quiet Mode toggle */}
+      <div className="mb-4 rounded-lg border border-[#8B6914]/20 bg-white p-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-[#3D2B1F]">Quiet mode</h2>
+            <p className="text-sm text-[#3D2B1F]/60">
+              Suspends competitive gameplay. Players can still access minigames for practice and check in at locations.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={quietMode}
+            onClick={() => setQuietMode((v) => !v)}
+            className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${
+              quietMode ? 'bg-[#D4A843]' : 'bg-[#A0937D]/40'
+            }`}
+          >
+            <span
+              className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
+                quietMode ? 'translate-x-5' : 'translate-x-0'
+              }`}
+            />
+          </button>
+        </div>
+        {quietMode && (
+          <div className="mt-3 rounded border border-[#D4A843]/30 bg-[#D4A843]/10 px-3 py-2 text-sm text-[#8B6914]">
+            No location pool or target space required. QR generation will be disabled.
+          </div>
+        )}
+      </div>
+
       {locations && (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
           {/* Left: Location selection */}
-          <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
+          <div className={`rounded-lg border border-[#8B6914]/20 bg-white p-4 ${quietMode ? 'pointer-events-none opacity-40' : ''}`}>
             <div className="mb-3 flex items-center justify-between">
               <h2 className="text-lg font-semibold text-[#3D2B1F]">
                 Active Locations ({selectedIds.size}/{activeLocations.length})
@@ -385,9 +533,9 @@ export function DailyConfigPage() {
             </div>
           </div>
 
-          {/* Right: Target space + difficulty */}
+          {/* Right: Target space */}
           <div className="space-y-4">
-            <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
+            <div className={`rounded-lg border border-[#8B6914]/20 bg-white p-4 ${quietMode ? 'pointer-events-none opacity-40' : ''}`}>
               <h2 className="mb-3 text-lg font-semibold text-[#3D2B1F]">
                 Today's Capturable Space
               </h2>
@@ -443,27 +591,6 @@ export function DailyConfigPage() {
               )}
             </div>
 
-            <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
-              <h2 className="mb-3 text-lg font-semibold text-[#3D2B1F]">
-                Difficulty
-              </h2>
-              <div className="flex gap-2">
-                {DIFFICULTIES.map((d) => (
-                  <button
-                    key={d}
-                    onClick={() => setDifficulty(d)}
-                    className={`rounded px-4 py-2 text-sm font-medium capitalize transition ${
-                      difficulty === d
-                        ? 'bg-[#8B6914] text-white'
-                        : 'bg-[#F5EACB] text-[#3D2B1F] hover:bg-[#D4A843]/30'
-                    }`}
-                  >
-                    {d}
-                  </button>
-                ))}
-              </div>
-            </div>
-
             <div className="flex gap-3">
               <button
                 onClick={() => saveMut.mutate()}
@@ -483,6 +610,194 @@ export function DailyConfigPage() {
           </div>
         </div>
       )}
+
+      {/* Algorithm Suggest Section */}
+      {locations && (
+        <div className="mt-6 rounded-lg border border-[#8B6914]/20 bg-white p-4">
+          <div className="mb-3 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-[#3D2B1F]">Algorithm Suggest</h2>
+            <div className="flex gap-2">
+              <button
+                onClick={() => suggestMut.mutate()}
+                disabled={suggestMut.isPending}
+                className="rounded bg-[#8B6914] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#6B5210] disabled:opacity-50"
+              >
+                {suggestMut.isPending ? 'Computing...' : suggestions.length > 0 ? 'Regenerate' : 'Suggest Pool'}
+              </button>
+              {suggestions.length > 0 && (
+                <button
+                  onClick={acceptSuggested}
+                  className="rounded bg-[#27AE60] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#219A52]"
+                >
+                  Accept Suggested
+                </button>
+              )}
+            </div>
+          </div>
+          {suggestions.length > 0 && (
+            <div className="max-h-64 space-y-1 overflow-y-auto">
+              {suggestions.map((s) => (
+                <label
+                  key={s.locationId}
+                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 hover:bg-[#F5EACB]"
+                >
+                  <input
+                    type="checkbox"
+                    checked={suggestChecked.has(s.locationId)}
+                    onChange={() => {
+                      setSuggestChecked((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(s.locationId)) next.delete(s.locationId);
+                        else next.add(s.locationId);
+                        return next;
+                      });
+                    }}
+                    className="accent-[#8B6914]"
+                  />
+                  <span className="w-8 text-sm font-bold text-[#8B6914]">#{s.qrNumber}</span>
+                  <span className="flex-1 text-sm text-[#3D2B1F]">{s.name}</span>
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-medium ${CLASSIFICATION_BADGE[s.classification] ?? 'bg-gray-100 text-gray-700'}`}>
+                    {s.classification}
+                  </span>
+                  <span className="w-10 text-right text-xs font-medium text-[#3D2B1F]/60">
+                    {s.score.toFixed(1)}
+                  </span>
+                  {s.warning && (
+                    <span className="flex items-center gap-0.5 rounded bg-yellow-50 px-1.5 py-0.5 text-xs text-yellow-700">
+                      <span>&#9888;</span> {s.warning}
+                    </span>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Capture Schedule Section */}
+      <div className="mt-6 rounded-lg border border-[#8B6914]/20 bg-white p-4">
+        <button
+          onClick={() => setScheduleOpen((v) => !v)}
+          className="flex w-full items-center justify-between text-lg font-semibold text-[#3D2B1F]"
+        >
+          <span>Season Capture Schedule</span>
+          <span className="text-sm text-[#8B6914]">{scheduleOpen ? '\u25B2' : '\u25BC'}</span>
+        </button>
+        {scheduleOpen && (
+          <div className="mt-3">
+            {schedSaveResult && (
+              <div
+                className={`mb-3 rounded p-2 text-sm ${
+                  schedSaveResult.type === 'success'
+                    ? 'border border-[#27AE60]/30 bg-[#27AE60]/10 text-[#27AE60]'
+                    : 'border border-red-300 bg-red-50 text-red-800'
+                }`}
+              >
+                {schedSaveResult.message}
+              </div>
+            )}
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-[#8B6914]/10 text-left text-xs font-medium text-[#3D2B1F]/50">
+                  <th className="py-1.5 pr-2">Day</th>
+                  <th className="py-1.5 pr-2">Date</th>
+                  <th className="py-1.5 pr-2">Space Name</th>
+                  <th className="py-1.5 w-16"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {scheduleRows.map((row, idx) => (
+                  <tr key={idx} className="border-b border-[#8B6914]/5">
+                    <td className="py-1.5 pr-2 text-[#3D2B1F]/50">Day {idx + 1}</td>
+                    <td className="py-1.5 pr-2">
+                      <input
+                        type="date"
+                        value={row.date}
+                        onChange={(e) => updateScheduleRow(idx, 'date', e.target.value)}
+                        className="rounded border border-[#8B6914]/30 bg-white px-2 py-1 text-sm text-[#3D2B1F] focus:border-[#D4A843] focus:outline-none"
+                      />
+                    </td>
+                    <td className="py-1.5 pr-2">
+                      <select
+                        value={row.captureSpaceId}
+                        onChange={(e) => updateScheduleRow(idx, 'captureSpaceId', e.target.value)}
+                        className="w-full rounded border border-[#8B6914]/30 bg-white px-2 py-1 text-sm text-[#3D2B1F] focus:border-[#D4A843] focus:outline-none"
+                      >
+                        <option value="">Select location...</option>
+                        {(masterLocations ?? []).map((l) => (
+                          <option key={l.locationId} value={l.locationId}>
+                            #{l.qrNumber} {l.name}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td className="py-1.5">
+                      <button
+                        onClick={() => removeScheduleRow(idx)}
+                        className="text-xs text-red-500 hover:text-red-700"
+                      >
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="mt-3 flex gap-2">
+              <button
+                onClick={addScheduleRow}
+                className="rounded bg-[#F5EACB] px-3 py-1.5 text-sm font-medium text-[#3D2B1F] hover:bg-[#D4A843]/30"
+              >
+                + Add Day
+              </button>
+              <button
+                onClick={() => schedSaveMut.mutate()}
+                disabled={schedSaveMut.isPending}
+                className="rounded bg-[#8B6914] px-3 py-1.5 text-sm font-semibold text-white hover:bg-[#6B5210] disabled:opacity-50"
+              >
+                {schedSaveMut.isPending ? 'Saving...' : 'Save Schedule'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Deploy Assignments Section */}
+      <div className="mt-6 rounded-lg border border-[#8B6914]/20 bg-white p-4">
+        <h2 className="mb-3 text-lg font-semibold text-[#3D2B1F]">Deploy Player Assignments</h2>
+        <p className="mb-3 text-sm text-[#3D2B1F]/60">
+          Compute weighted location assignments for all players based on cluster weights, rotation history, and spatial spread.
+        </p>
+        {deployResult && (
+          <div
+            className={`mb-3 rounded p-2 text-sm ${
+              deployResult.type === 'success'
+                ? 'border border-[#27AE60]/30 bg-[#27AE60]/10 text-[#27AE60]'
+                : 'border border-red-300 bg-red-50 text-red-800'
+            }`}
+          >
+            {deployResult.message}
+          </div>
+        )}
+        <button
+          onClick={() => setDeployConfirmOpen(true)}
+          disabled={deployMut.isPending}
+          className="rounded bg-[#C0392B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#A93226] disabled:opacity-50"
+        >
+          {deployMut.isPending ? 'Deploying...' : 'Deploy Player Assignments'}
+        </button>
+      </div>
+
+      <ConfirmDialog
+        isOpen={deployConfirmOpen}
+        onClose={() => setDeployConfirmOpen(false)}
+        onConfirm={() => {
+          setDeployConfirmOpen(false);
+          deployMut.mutate();
+        }}
+        title="Deploy Assignments"
+        message="This will compute and write location assignments for all ~421 players. Continue?"
+      />
 
       {IS_DEV && (
         <div className="mt-6 rounded-lg border border-[#D4A843]/30 bg-[#D4A843]/5 p-4">

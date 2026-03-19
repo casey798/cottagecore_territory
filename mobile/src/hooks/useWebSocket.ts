@@ -45,11 +45,85 @@ export function useWebSocket(): void {
     }
   }, [setClans]);
 
+  // Check if local state is stale (app backgrounded across midnight or missed WS reset)
+  // Also detects missed scoring completion and triggers capture celebration.
+  const checkAndClearStaleState = useCallback(async () => {
+    const today = getTodayISTString();
+    const { lastResetDate } = useGameStore.getState();
+
+    // Cross-day staleness: date changed while app was backgrounded
+    if (lastResetDate && lastResetDate !== today) {
+      resetDaily();
+      useMapStore.getState().clearLockedFlags();
+      useMapStore.getState().loadTodayLocations();
+      useMapStore.getState().loadCapturedSpaces();
+      fetchScores();
+      return;
+    }
+
+    // Same-day staleness: poll server resetSeq to detect missed WS resets
+    // AND check for missed scoring completion (capture celebration)
+    try {
+      const result = await mapApi.getDailyInfo();
+      if (result.success && result.data) {
+        // Detect missed daily reset
+        if (result.data.resetSeq) {
+          const localSeq = useGameStore.getState().resetSeq;
+          if (result.data.resetSeq !== localSeq) {
+            resetDaily();
+            setResetSeq(result.data.resetSeq);
+            useMapStore.getState().clearLockedFlags();
+            useMapStore.getState().loadTodayLocations();
+            useMapStore.getState().loadCapturedSpaces();
+            fetchScores();
+          }
+        }
+
+        // Detect missed scoring completion — trigger celebration if not yet seen
+        if (
+          result.data.status === 'complete' &&
+          result.data.winnerClan &&
+          result.data.targetSpace?.name
+        ) {
+          const { lastSeenCelebrationDate, celebrationPending } =
+            useGameStore.getState();
+          if (lastSeenCelebrationDate !== today && !celebrationPending) {
+            setCaptureResult({
+              winnerClan: result.data.winnerClan,
+              spaceName: result.data.targetSpace.name,
+            });
+            setCelebrationPending(
+              result.data.winnerClan,
+              result.data.targetSpace.name,
+            );
+            setClanCaptureResult(
+              result.data.winnerClan,
+              result.data.targetSpace.name,
+            );
+            // Refresh map to show new territory
+            useMapStore.getState().loadCapturedSpaces();
+            fetchScores();
+          }
+        }
+      }
+    } catch {
+      // Silently fail — will retry on next foreground
+    }
+  }, [resetDaily, setResetSeq, fetchScores, setCaptureResult, setCelebrationPending, setClanCaptureResult]);
+
+  // Use a ref so startPolling always calls the latest checkAndClearStaleState
+  const checkStaleRef = useRef(checkAndClearStaleState);
+  useEffect(() => {
+    checkStaleRef.current = checkAndClearStaleState;
+  }, [checkAndClearStaleState]);
+
   const startPolling = useCallback(() => {
     if (pollTimerRef.current) return;
     pollTimerRef.current = setInterval(() => {
       if (!isConnectedRef.current && mountedRef.current) {
         fetchScores();
+        // Also check for missed scoring completion while WS is down
+        checkStaleRef.current();
       }
     }, POLL_INTERVAL_MS);
   }, [fetchScores]);
@@ -98,6 +172,8 @@ export function useWebSocket(): void {
               todayXp: c.todayXp,
               seasonXp: existing?.seasonXp ?? 0,
               spacesCaptured: existing?.spacesCaptured ?? 0,
+              todayParticipants: c.todayParticipants ?? existing?.todayParticipants ?? 0,
+              rosterSize: c.rosterSize ?? existing?.rosterSize ?? 0,
             };
           });
           setClans(updatedClans);
@@ -175,40 +251,6 @@ export function useWebSocket(): void {
       ws.close();
     };
   }, [setClans, setCaptureResult, setCelebrationPending, setClanCaptureResult, resetDaily, setResetSeq, fetchScores, setWsConnected, startPolling, stopPolling]);
-
-  // Check if local state is stale (app backgrounded across midnight or missed WS reset)
-  const checkAndClearStaleState = useCallback(async () => {
-    const today = getTodayISTString();
-    const { lastResetDate } = useGameStore.getState();
-
-    // Cross-day staleness: date changed while app was backgrounded
-    if (lastResetDate && lastResetDate !== today) {
-      resetDaily();
-      useMapStore.getState().clearLockedFlags();
-      useMapStore.getState().loadTodayLocations();
-      useMapStore.getState().loadCapturedSpaces();
-      fetchScores();
-      return;
-    }
-
-    // Same-day staleness: poll server resetSeq to detect missed WS resets
-    try {
-      const result = await mapApi.getDailyInfo();
-      if (result.success && result.data?.resetSeq) {
-        const localSeq = useGameStore.getState().resetSeq;
-        if (result.data.resetSeq !== localSeq) {
-          resetDaily();
-          setResetSeq(result.data.resetSeq);
-          useMapStore.getState().clearLockedFlags();
-          useMapStore.getState().loadTodayLocations();
-          useMapStore.getState().loadCapturedSpaces();
-          fetchScores();
-        }
-      }
-    } catch {
-      // Silently fail — will retry on next foreground
-    }
-  }, [resetDaily, setResetSeq, fetchScores]);
 
   // Re-check stale state whenever the app returns to foreground
   useEffect(() => {

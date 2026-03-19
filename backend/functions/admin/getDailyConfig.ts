@@ -24,7 +24,6 @@ export async function handler(
       date: config.date,
       activeLocationIds: config.activeLocationIds,
       targetSpace: config.targetSpace,
-      difficulty: config.difficulty,
       status: config.status,
       winnerClan: config.winnerClan,
     });

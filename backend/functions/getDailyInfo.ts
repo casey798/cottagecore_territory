@@ -13,16 +13,23 @@ export const handler = async (
     const config = await getItem<DailyConfig>('daily-config', { date: today });
 
     if (!config) {
-      return error(ErrorCode.NOT_FOUND, 'No daily config found for today', 404);
+      return success({
+        date: today,
+        targetSpace: null,
+        status: null,
+        resetSeq: 0,
+        winnerClan: null,
+        quietMode: true,
+      });
     }
 
     return success({
       date: config.date,
       targetSpace: config.targetSpace,
       status: config.status,
-      difficulty: config.difficulty,
       resetSeq: config.resetSeq ?? 0,
       winnerClan: config.winnerClan ?? null,
+      quietMode: config.quietMode ?? false,
     });
   } catch (err) {
     console.error('getDailyInfo error:', err);

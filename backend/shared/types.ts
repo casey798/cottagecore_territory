@@ -1,3 +1,13 @@
+export type Phase1Cluster = 'nomad' | 'seeker' | 'drifter' | 'forced' | 'disengaged';
+
+export type LocationClassification =
+  | 'Social Hub'
+  | 'Transit / Forced Stay'
+  | 'Hidden Gem'
+  | 'Dead Zone'
+  | 'Unvisited'
+  | 'TBD';
+
 export enum ClanId {
   Ember = 'ember',
   Tide = 'tide',
@@ -50,12 +60,6 @@ export enum DailyConfigStatus {
   Complete = 'complete',
 }
 
-export enum Difficulty {
-  Easy = 'easy',
-  Medium = 'medium',
-  Hard = 'hard',
-}
-
 export enum AssetObtainedFrom {
   Chest = 'chest',
   Reward = 'reward',
@@ -68,6 +72,7 @@ export interface AvatarConfig {
   skinTone: number;
   outfit: number;
   accessory: number;
+  characterPreset?: number;
 }
 
 export interface User {
@@ -85,6 +90,7 @@ export interface User {
   tutorialDone: boolean;
   fcmToken: string;
   createdAt: string;
+  phase1Cluster?: Phase1Cluster | null;
 }
 
 export interface Clan {
@@ -93,6 +99,8 @@ export interface Clan {
   todayXpTimestamp: string;
   seasonXp: number;
   spacesCaptured: number;
+  todayParticipants: number;
+  rosterSize: number;
 }
 
 export interface Location {
@@ -105,6 +113,38 @@ export interface Location {
   active: boolean;
   chestDropModifier: number;
   notes: string;
+  coopOnly?: boolean;
+}
+
+export const COOP_MINIGAME_IDS: readonly string[] = [
+  'kindred-coop',
+  'cipher-stones-coop',
+  'pips-coop',
+  'stone-pairs-coop',
+  'potion-logic-coop',
+  'vine-trail-coop',
+];
+
+export const SOLO_CHEST_WEIGHTS = [
+  { rarity: 'common',    weight: 60 },
+  { rarity: 'uncommon',  weight: 25 },
+  { rarity: 'rare',      weight: 12 },
+  { rarity: 'legendary', weight: 3  },
+] as const;
+
+export const COOP_CHEST_WEIGHTS = [
+  { rarity: 'common',    weight: 15 },
+  { rarity: 'uncommon',  weight: 20 },
+  { rarity: 'rare',      weight: 40 },
+  { rarity: 'legendary', weight: 25 },
+] as const;
+
+export interface LocationModifiers {
+  coopOnly: boolean;
+  spaceFact: string | null;
+  firstVisitBonus: boolean;
+  bonusXP: boolean;
+  minigameAffinity: string[] | null;
 }
 
 export interface TargetSpace {
@@ -122,8 +162,8 @@ export interface DailyConfig {
   qrSecret: string;
   winnerClan: ClanId | null;
   status: DailyConfigStatus;
-  difficulty: Difficulty;
   resetSeq?: number;
+  quietMode?: boolean;
 }
 
 export interface LocationMinigameSet {
@@ -134,6 +174,7 @@ export interface PlayerAssignment {
   dateUserId: string;
   assignedLocationIds: string[];
   locationMinigames?: Record<string, LocationMinigameSet>;
+  weightsUsed?: Record<string, number>;
 }
 
 export interface GameSession {
@@ -153,6 +194,11 @@ export interface GameSession {
   _salt?: string;
   puzzleData?: MinigamePuzzle;
   timeLimit?: number;
+  spaceSentiment?: SpaceSentiment | null;
+  practiceSession?: boolean;
+  leftAt?: string | null;
+  dwellTime?: number | null;
+  leaveReason?: LeaveReason | null;
 }
 
 export interface PlayerLock {
@@ -170,6 +216,8 @@ export interface CapturedSpace {
   mapOverlayId: string;
   polygonPoints?: Array<{ x: number; y: number }>;
   gridCells?: Array<{ x: number; y: number }>;
+  clanXpSnapshot?: Record<string, number>;
+  totalDayXp?: number;
 }
 
 export interface AssetCatalog {
@@ -325,7 +373,6 @@ export interface SetDailyConfigRequest {
   date: string;
   activeLocationIds: string[];
   targetSpace: TargetSpace;
-  difficulty: Difficulty;
 }
 
 export interface GenerateQrRequest {
@@ -377,6 +424,8 @@ export interface ClanScore {
   todayXp: number;
   seasonXp: number;
   spacesCaptured: number;
+  todayParticipants: number;
+  rosterSize: number;
 }
 
 export interface ChestDrop {
@@ -393,4 +442,208 @@ export interface ChestDrop {
 export interface JwtPayload {
   uid: string;
   email?: string;
+}
+
+// ── Mosaic minigame types ──────────────────────────────────────────
+
+export interface MosaicCell { col: number; row: number; }
+
+export interface MosaicTile {
+  tileId: string;
+  shape: 'SQUARE' | 'BAR_3' | 'BAR_4' | 'L' | 'L_MIRROR' | 'T' | 'S' | 'PLUS';
+  assetKey: 'mo_tile_leaf' | 'mo_tile_mushroom' | 'mo_tile_stone' | 'mo_tile_acorn';
+}
+
+export interface MosaicTilePlacement {
+  tileId: string;
+  originCol: number;
+  originRow: number;
+  rotation: 0 | 90 | 180 | 270;
+}
+
+export interface MosaicPuzzle {
+  id: string;
+  gridCols: number;
+  gridRows: number;
+  targetCells: MosaicCell[];
+  tiles: MosaicTile[];
+  solution: MosaicTilePlacement[];
+}
+
+export interface MosaicPuzzleClient extends Omit<MosaicPuzzle, 'solution'> {}
+
+// ── Free-Roam Check-In types ────────────────────────────────────────
+
+export type ActivityCategory =
+  | 'high_effort_personal'
+  | 'low_effort_personal'
+  | 'high_effort_social'
+  | 'low_effort_social';
+
+export type Satisfaction = 0 | 0.25 | 0.5 | 0.75 | 1;
+
+export type Sentiment = 'yes' | 'maybe' | 'no';
+
+export type SpaceSentiment = 'yes' | 'maybe' | 'no';
+
+export type LeaveReason =
+  | 'navigated_away'
+  | 'new_scan'
+  | 'app_backgrounded'
+  | 'fallback_next_session'
+  | 'fallback_end_of_day';
+
+export interface SubmitLeaveRequest {
+  sessionId: string;
+  leftAt: string;
+  reason: LeaveReason;
+}
+
+export type Floor = 'outdoor' | 'ground' | 'first' | 'second' | 'third';
+
+export interface CheckIn {
+  checkInId: string;
+  userId: string;
+  clanId: string;
+  gpsLat: number;
+  gpsLng: number;
+  pixelX: number;
+  pixelY: number;
+  activityCategory: ActivityCategory;
+  satisfaction: Satisfaction;
+  sentiment: Sentiment;
+  floor: Floor;
+  timestamp: string;
+  date: string;
+}
+
+export interface CheckinRecord {
+  userId: string;
+  locationId: string;
+  locationName: string;
+  timestamp: string;
+  date: string;
+}
+
+export interface SubmitCheckInRequest {
+  gpsLat: number;
+  gpsLng: number;
+  pixelX: number;
+  pixelY: number;
+  activityCategory: ActivityCategory;
+  satisfaction: Satisfaction;
+  sentiment: Sentiment;
+  floor: Floor;
+}
+
+// ── Location Master & Cluster Config types ─────────────────────────
+
+export interface LocationMasterConfig {
+  locationId: string;
+  qrNumber: number;
+  name: string;
+
+  // GPS + Map
+  gpsLat: number;
+  gpsLng: number;
+  geofenceRadius: number;
+  mapPixelX: number;
+  mapPixelY: number;
+  normalizedX: number;
+  normalizedY: number;
+  floor: string;
+
+  // Phase 1 metadata (read-only after import)
+  classification: LocationClassification;
+  sdtDeficit: number;
+  priorityTier: 'P1-Critical' | 'P1-Seed' | 'P2-High' | 'P3-Medium' | null;
+  phase1Visits: number;
+  phase1Satisfaction: number | null;
+  phase1DominantCluster: string | null;
+  isNewSpace: boolean;
+
+  // Game config
+  active: boolean;
+  chestDropModifier: number;
+
+  // Mechanic modifiers
+  firstVisitBonus: boolean;
+  coopOnly: boolean;
+  bonusXP: boolean;
+  spaceFact: string | null;
+  minigameAffinity: string[] | null;
+  linkedTo: string | null;
+
+  // Admin notes
+  notes: string;
+
+  // Runtime (auto-updated)
+  lastActiveDate: string | null;
+  totalPhase2GameSessions: number;
+  totalPhase2FreeRoamCheckins: number;
+  avgPhase2Satisfaction: number | null;
+
+  // Rolling 3-day visit window (updated by daily reset)
+  // Index 0 = yesterday, 1 = two days ago, 2 = three days ago
+  last3DaysVisits: [number, number, number];
+}
+
+export interface ClusterWeights {
+  'Social Hub': number;
+  'Transit / Forced Stay': number;
+  'Hidden Gem': number;
+  'Dead Zone': number;
+  'Unvisited': number;
+}
+
+export interface ClusterWeightConfig {
+  configId: 'current';
+  weights: Record<Phase1Cluster | 'null', ClusterWeights>;
+  badPairings: Record<Phase1Cluster, string[]>;
+  assignmentCounts: Record<Phase1Cluster | 'null', number>;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+// ── Season Summary types ──────────────────────────────────────────
+
+export interface SeasonSummaryData {
+  winnerClan: ClanId | null;
+  clans: Array<{
+    clanId: ClanId;
+    seasonXp: number;
+    spacesCaptured: number;
+  }>;
+  topPlayersByXp: Array<{
+    userId: string;
+    displayName: string;
+    clan: ClanId;
+    seasonXp: number;
+  }>;
+  topPlayersByStreak: Array<{
+    userId: string;
+    displayName: string;
+    clan: ClanId;
+    bestStreak: number;
+  }>;
+  mostDecoratedSpaces: Array<{
+    spaceId: string;
+    spaceName: string;
+    decoratorCount: number;
+  }>;
+  playerStats: {
+    seasonXp: number;
+    totalWins: number;
+    bestStreak: number;
+    spacesDiscovered: number;
+  };
+}
+
+export interface DailyLocationPool {
+  date: string;
+  activeLocationIds: string[];
+  captureSpaceId: string | null;
+  algorithmScores: Record<string, number>;
+  amPool: string[] | null;
+  pmPool: string[] | null;
 }

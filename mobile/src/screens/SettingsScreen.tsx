@@ -14,7 +14,6 @@ export default function SettingsScreen() {
 
       <View style={styles.spacer} />
 
-      {/* TODO: remove before launch */}
       <Pressable
         style={({ pressed }) => [
           styles.signOutButton,

@@ -9,7 +9,7 @@ import {
   StyleSheet,
   Dimensions,
 } from 'react-native';
-import { PALETTE, UI } from '@/constants/colors';
+import { PALETTE, UI, KEYBOARD } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 
 import { generateClientCompletionHash } from '@/utils/hmac';
@@ -20,6 +20,7 @@ import {
   isValidWord,
   type LetterResult,
 } from './GroveWordsLogic';
+import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 
 // ── Constants ────────────────────────────────────────────────────────
 
@@ -36,6 +37,20 @@ const TILE_COLORS: Record<LetterResult, string> = {
   present: PALETTE.honeyGold,
   absent: PALETTE.stoneGrey,
 };
+
+const KEY_COLORS: Record<LetterResult, string> = {
+  correct: KEYBOARD.correctGreen,
+  present: KEYBOARD.presentYellow,
+  absent: KEYBOARD.absentGray,
+};
+
+const KEY_DEFAULT_BG = KEYBOARD.defaultBg;
+const KEY_DEFAULT_TEXT = KEYBOARD.textDark;
+const KEY_COLORED_TEXT = KEYBOARD.textLight;
+const KEY_H_GAP = 4;
+const KEY_V_GAP = 6;
+const KEY_HEIGHT = 56;
+const KB_H_PAD = 16;
 
 // ── Helper: best state for keyboard coloring ─────────────────────────
 
@@ -56,7 +71,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
   // Generate puzzle client-side on mount
   const puzzleRef = useRef(generatePuzzle());
   const targetWord = puzzleRef.current.word;
-  const gameDuration = timeLimit > 0 ? timeLimit : 120;
+  const gameDuration = timeLimit > 0 ? timeLimit : 180;
 
   // ── State ──────────────────────────────────────────────────────────
 
@@ -66,10 +81,13 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
   const [keyStates, setKeyStates] = useState<Record<string, KeyState>>({});
   const [message, setMessage] = useState('');
   const [gameOver, setGameOver] = useState(false);
+  const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
+  const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [timeLeft, setTimeLeft] = useState(gameDuration);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
+  const pendingCompleteRef = useRef<Parameters<typeof onComplete>[0] | null>(null);
 
   // ── Timer (Date.now() deltas) ──────────────────────────────────────
 
@@ -97,13 +115,15 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
       if (completedRef.current) return;
       completedRef.current = true;
       setGameOver(true);
+      setOverlayResult(outcome === 'win' ? 'win' : 'lose');
+      setShowCompleteOverlay(true);
 
       const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
       const solved = outcome === 'win';
       const allGuesses = [...guesses, ...(currentInput.length === WORD_LENGTH ? [currentInput] : [])].filter(Boolean);
       const completionHash = generateClientCompletionHash(sessionId, outcome, timeTaken);
 
-      onComplete({
+      pendingCompleteRef.current = {
         result: outcome,
         timeTaken,
         completionHash,
@@ -111,10 +131,17 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
           guesses: allGuesses,
           solved,
         },
-      });
+      };
     },
-    [guesses, currentInput, onComplete, sessionId],
+    [guesses, currentInput, sessionId],
   );
+
+  const handleContinue = useCallback(() => {
+    if (pendingCompleteRef.current) {
+      onComplete(pendingCompleteRef.current);
+      pendingCompleteRef.current = null;
+    }
+  }, [onComplete]);
 
   // ── Key press handler ──────────────────────────────────────────────
 
@@ -162,14 +189,16 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
         if (result.every((r) => r === 'correct')) {
           completedRef.current = true;
           setGameOver(true);
+          setOverlayResult('win');
+          setShowCompleteOverlay(true);
           const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
           const completionHash = generateClientCompletionHash(sessionId, 'win', timeTaken);
-          onComplete({
+          pendingCompleteRef.current = {
             result: 'win',
             timeTaken,
             completionHash,
             solutionData: { guesses: newGuesses, solved: true },
-          });
+          };
           return;
         }
 
@@ -177,14 +206,16 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
         if (newGuesses.length >= MAX_GUESSES) {
           completedRef.current = true;
           setGameOver(true);
+          setOverlayResult('lose');
+          setShowCompleteOverlay(true);
           const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
           const completionHash = generateClientCompletionHash(sessionId, 'lose', timeTaken);
-          onComplete({
+          pendingCompleteRef.current = {
             result: 'lose',
             timeTaken,
             completionHash,
             solutionData: { guesses: newGuesses, solved: false },
-          });
+          };
           return;
         }
 
@@ -197,7 +228,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
         setMessage('');
       }
     },
-    [gameOver, currentInput, guesses, results, keyStates, targetWord, onComplete, sessionId],
+    [gameOver, currentInput, guesses, results, keyStates, targetWord, sessionId],
   );
 
   // ── Render helpers ─────────────────────────────────────────────────
@@ -271,15 +302,18 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
 
   const keyBgColor = (key: string): string => {
     const state = keyStates[key];
-    if (!state || state === 'unused') return PALETTE.cream;
-    return TILE_COLORS[state];
+    if (!state || state === 'unused') return KEY_DEFAULT_BG;
+    return KEY_COLORS[state];
   };
 
   const keyTextColor = (key: string): string => {
     const state = keyStates[key];
-    if (!state || state === 'unused') return UI.text;
-    return PALETTE.cream;
+    if (!state || state === 'unused') return KEY_DEFAULT_TEXT;
+    return KEY_COLORED_TEXT;
   };
+
+  const regularKeyWidth = (screenWidth - KB_H_PAD * 2 - KEY_H_GAP * 9) / 10;
+  const wideKeyWidth = regularKeyWidth * 1.5;
 
   const timerFraction = timeLeft / gameDuration;
 
@@ -309,53 +343,81 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
       {/* Grid */}
       <View style={styles.gridContainer}>{renderGrid()}</View>
 
-      {/* Game over reveal */}
-      {gameOver && (
-        <Text style={styles.revealText}>
-          {guesses[guesses.length - 1]?.toUpperCase() === targetWord
-            ? 'Well done!'
-            : `The word was ${targetWord}`}
-        </Text>
-      )}
-
       {/* Keyboard */}
-      <View style={styles.keyboard}>
-        {KEYBOARD_ROWS.map((row, rowIdx) => (
-          <View key={rowIdx} style={styles.keyboardRow}>
-            {row.map((key) => {
-              const isWide = key === 'ENTER' || key === 'DEL';
-              return (
-                <TouchableOpacity
-                  key={key}
+      {!showCompleteOverlay && <View style={styles.keyboard}>
+        {/* Row 1: Q–P (10 keys, full width) */}
+        <View style={styles.keyboardRow}>
+          {KEYBOARD_ROWS[0].map((key) => (
+            <TouchableOpacity
+              key={key}
+              style={[styles.key, { width: regularKeyWidth, backgroundColor: keyBgColor(key) }]}
+              onPress={() => handleKey(key)}
+              disabled={gameOver}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.keyText, { color: keyTextColor(key) }]}>{key}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {/* Row 2: A–L (9 keys, centered with half-key offset) */}
+        <View style={[styles.keyboardRow, { paddingHorizontal: (regularKeyWidth + KEY_H_GAP) / 2 }]}>
+          {KEYBOARD_ROWS[1].map((key) => (
+            <TouchableOpacity
+              key={key}
+              style={[styles.key, { width: regularKeyWidth, backgroundColor: keyBgColor(key) }]}
+              onPress={() => handleKey(key)}
+              disabled={gameOver}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.keyText, { color: keyTextColor(key) }]}>{key}</Text>
+            </TouchableOpacity>
+          ))}
+        </View>
+        {/* Row 3: ENTER Z–M DEL */}
+        <View style={styles.keyboardRow}>
+          {KEYBOARD_ROWS[2].map((key) => {
+            const isWide = key === 'ENTER' || key === 'DEL';
+            const label = key === 'DEL' ? '\u232B' : key;
+            return (
+              <TouchableOpacity
+                key={key}
+                style={[
+                  styles.key,
+                  {
+                    width: isWide ? wideKeyWidth : regularKeyWidth,
+                    backgroundColor: isWide ? KEY_COLORS.absent : keyBgColor(key),
+                  },
+                ]}
+                onPress={() => handleKey(key)}
+                disabled={gameOver}
+                activeOpacity={0.7}
+              >
+                <Text
                   style={[
-                    styles.key,
+                    styles.keyText,
                     {
-                      backgroundColor: isWide ? PALETTE.warmBrown : keyBgColor(key),
-                      minWidth: isWide ? 56 : 30,
-                      flex: isWide ? 1.4 : 1,
+                      color: isWide ? KEY_COLORED_TEXT : keyTextColor(key),
+                      fontSize: key === 'ENTER' ? 11 : 13,
                     },
                   ]}
-                  onPress={() => handleKey(key)}
-                  disabled={gameOver}
-                  activeOpacity={0.7}
                 >
-                  <Text
-                    style={[
-                      styles.keyText,
-                      {
-                        color: isWide ? PALETTE.cream : keyTextColor(key),
-                        fontSize: isWide ? 11 : 15,
-                      },
-                    ]}
-                  >
-                    {key}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        ))}
-      </View>
+                  {label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>}
+
+      {/* Game complete overlay */}
+      {showCompleteOverlay && (
+        <GameCompleteOverlay
+          result={overlayResult}
+          xpEarned={overlayResult === 'win' ? 25 : 0}
+          correctWord={targetWord}
+          onContinue={handleContinue}
+        />
+      )}
     </View>
   );
 }
@@ -414,31 +476,25 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodyBold,
     textTransform: 'uppercase',
   },
-  revealText: {
-    fontFamily: FONTS.headerBold,
-    fontSize: 20,
-    color: UI.text,
-    marginVertical: 4,
-  },
   keyboard: {
     width: '100%',
-    paddingHorizontal: 4,
-    gap: 4,
+    paddingHorizontal: KB_H_PAD,
+    gap: KEY_V_GAP,
     paddingBottom: 8,
   },
   keyboardRow: {
     flexDirection: 'row',
     justifyContent: 'center',
-    gap: 4,
+    gap: KEY_H_GAP,
   },
   key: {
-    height: 44,
+    height: KEY_HEIGHT,
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingHorizontal: 2,
   },
   keyText: {
-    fontFamily: FONTS.bodySemiBold,
+    fontFamily: FONTS.bodyBold,
+    fontSize: 13,
   },
 });

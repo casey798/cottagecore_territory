@@ -3,7 +3,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
 import { setDailyConfigSchema } from '../../shared/schemas';
 import { getItem, putItem } from '../../shared/db';
-import { DailyConfigStatus, Difficulty } from '../../shared/types';
+import { DailyConfigStatus } from '../../shared/types';
 import type { DailyConfig } from '../../shared/types';
 
 export async function handler(
@@ -25,9 +25,7 @@ export async function handler(
       return error(ErrorCode.VALIDATION_ERROR, parsed.error.message, 400);
     }
 
-    const { date, activeLocationIds, targetSpace, difficulty: difficultyRaw } = parsed.data;
-    const difficulty = difficultyRaw as Difficulty;
-    console.log('[setDailyConfig] Validated data:', { date, activeLocationIds, difficulty, targetSpace });
+    const { date, activeLocationIds, targetSpace, quietMode } = parsed.data;
 
     // Check if config already exists for this date — reuse qrSecret if so
     const existing = await getItem<DailyConfig>('daily-config', { date });
@@ -37,16 +35,16 @@ export async function handler(
     // Create daily config record, preserving existing qrCodes if present
     const dailyConfig: Record<string, unknown> = {
       date,
-      activeLocationIds,
-      targetSpace,
+      activeLocationIds: activeLocationIds ?? [],
+      targetSpace: targetSpace ?? null,
       qrSecret,
       winnerClan: null,
       status: DailyConfigStatus.Active,
-      difficulty,
+      quietMode: quietMode ?? false,
     };
 
-    if (existing && (existing as Record<string, unknown>).qrCodes) {
-      dailyConfig.qrCodes = (existing as Record<string, unknown>).qrCodes;
+    if (existing && (existing as unknown as Record<string, unknown>).qrCodes) {
+      dailyConfig.qrCodes = (existing as unknown as Record<string, unknown>).qrCodes;
     }
 
     console.log('[setDailyConfig] Writing to DynamoDB:', JSON.stringify(dailyConfig));

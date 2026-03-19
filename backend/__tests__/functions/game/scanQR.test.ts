@@ -102,8 +102,7 @@ describe('scanQR handler', () => {
           qrSecret: 'test-secret',
           targetSpace: { name: 'Test Space', description: 'A test', mapOverlayId: 'overlay-1' },
           status: 'active',
-          difficulty: 'medium',
-          winnerClan: null,
+                   winnerClan: null,
         };
       }
       if (table === 'locations') {
@@ -135,9 +134,41 @@ describe('scanQR handler', () => {
           clan: 'ember',
         };
       }
+      if (table === 'location-master-config') {
+        return undefined; // default: no master config
+      }
       return undefined;
     });
 
+    mockQuery.mockResolvedValue({ items: [] });
+  }
+
+  function setupCoopOnlyPath(): void {
+    mockGetItem.mockImplementation(async (table: string) => {
+      if (table === 'daily-config') {
+        return {
+          date: TODAY, activeLocationIds: [LOCATION_ID], qrSecret: 'test-secret',
+          targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
+          status: 'active', winnerClan: null,
+        };
+      }
+      if (table === 'locations') {
+        return {
+          locationId: LOCATION_ID, name: 'Co-op Location', gpsLat: 13.0, gpsLng: 80.2,
+          geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1,
+          notes: '', coopOnly: true,
+        };
+      }
+      if (table === 'player-assignments') {
+        return { dateUserId: `${TODAY}#${USER_ID}`, assignedLocationIds: [LOCATION_ID] };
+      }
+      if (table === 'player-locks') return undefined;
+      if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember' };
+      if (table === 'location-master-config') {
+        return { locationId: LOCATION_ID, coopOnly: true, spaceFact: null, firstVisitBonus: false, bonusXP: false, minigameAffinity: null };
+      }
+      return undefined;
+    });
     mockQuery.mockResolvedValue({ items: [] });
   }
 
@@ -165,8 +196,7 @@ describe('scanQR handler', () => {
             activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
             status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
+                       winnerClan: null,
           };
         }
         return undefined;
@@ -186,7 +216,7 @@ describe('scanQR handler', () => {
           return {
             date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active', difficulty: 'medium', winnerClan: null,
+            status: 'active', winnerClan: null,
           };
         }
         if (table === 'locations') {
@@ -219,8 +249,7 @@ describe('scanQR handler', () => {
             activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
             status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
+                       winnerClan: null,
           };
         }
         if (table === 'locations') {
@@ -253,6 +282,16 @@ describe('scanQR handler', () => {
       expect(responseBody.error.code).toBe('NOT_ASSIGNED');
     });
 
+    it('returns COOP_REQUIRED when scanning co-op-only location without partner', async () => {
+      setupCoopOnlyPath();
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(400);
+      expect(responseBody.error.code).toBe('COOP_REQUIRED');
+    });
+
     it('returns LOCATION_LOCKED when player has a lock record for this location', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'daily-config') {
@@ -262,8 +301,7 @@ describe('scanQR handler', () => {
             activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
             status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
+                       winnerClan: null,
           };
         }
         if (table === 'locations') {
@@ -312,8 +350,7 @@ describe('scanQR handler', () => {
             activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
             status: 'active',
-            difficulty: 'medium',
-            winnerClan: null,
+                       winnerClan: null,
           };
         }
         if (table === 'locations') {
@@ -418,7 +455,7 @@ describe('scanQR handler', () => {
           return {
             date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active', difficulty: 'medium', winnerClan: null,
+            status: 'active', winnerClan: null,
           };
         }
         if (table === 'locations') {
@@ -481,7 +518,7 @@ describe('scanQR handler', () => {
           return {
             date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active', difficulty: 'medium', winnerClan: null,
+            status: 'active', winnerClan: null,
           };
         }
         if (table === 'locations') {
@@ -523,13 +560,52 @@ describe('scanQR handler', () => {
       expect(minigameIds).not.toContain('grove-words');
     });
 
+    it('returns locationModifiers in success response', async () => {
+      setupSuccessPath();
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const body = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      expect(body.data.locationModifiers).toBeDefined();
+      expect(body.data.locationModifiers.coopOnly).toBe(false);
+    });
+
+    it('filters to co-op minigames when coopOnly is true', async () => {
+      setupCoopOnlyPath();
+      const body = makeValidBody();
+      (body as Record<string, unknown>).coopPartnerId = '00000000-0000-0000-0000-000000000001';
+      const event = makeEvent(body);
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      const ids = responseBody.data.availableMinigames.map((m: { minigameId: string }) => m.minigameId);
+      for (const id of ids) {
+        expect(id).toMatch(/-coop$/);
+      }
+    });
+
+    it('excludes co-op minigames from solo locations', async () => {
+      setupSuccessPath();
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      const ids = responseBody.data.availableMinigames.map((m: { minigameId: string }) => m.minigameId);
+      for (const id of ids) {
+        expect(id).not.toMatch(/-coop$/);
+      }
+    });
+
     it('returns ALL_MINIGAMES_PLAYED when all 12 minigames played today', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'daily-config') {
           return {
             date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
             targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active', difficulty: 'medium', winnerClan: null,
+            status: 'active', winnerClan: null,
           };
         }
         if (table === 'locations') {
@@ -550,10 +626,11 @@ describe('scanQR handler', () => {
         return undefined;
       });
 
-      // All 12 minigames played today at various locations
+      // All 15 solo minigames played today at various locations
       const allMinigames = [
         'grove-words', 'kindred', 'stone-pairs', 'pips', 'vine-trail', 'mosaic',
-        'crossvine', 'number-grove', 'potion-logic', 'leaf-sort', 'cipher-stones', 'path-weaver',
+        'number-grove', 'potion-logic', 'leaf-sort', 'cipher-stones', 'path-weaver',
+        'firefly-flow', 'grove-equations', 'bloom-sequence', 'shift-slide',
       ];
       mockQuery.mockResolvedValue({
         items: allMinigames.map((id, i) => ({

@@ -54,10 +54,10 @@ class MockWebSocket {
 (global as unknown as Record<string, unknown>).WebSocket = MockWebSocket;
 
 const MOCK_CLANS = [
-  { clanId: 'ember' as const, todayXp: 500, seasonXp: 2000, spacesCaptured: 3 },
-  { clanId: 'tide' as const, todayXp: 750, seasonXp: 1800, spacesCaptured: 2 },
-  { clanId: 'bloom' as const, todayXp: 300, seasonXp: 2500, spacesCaptured: 5 },
-  { clanId: 'gale' as const, todayXp: 600, seasonXp: 1500, spacesCaptured: 1 },
+  { clanId: 'ember' as const, todayXp: 500, seasonXp: 2000, spacesCaptured: 3, todayParticipants: 10, rosterSize: 80 },
+  { clanId: 'tide' as const, todayXp: 750, seasonXp: 1800, spacesCaptured: 2, todayParticipants: 15, rosterSize: 80 },
+  { clanId: 'bloom' as const, todayXp: 300, seasonXp: 2500, spacesCaptured: 5, todayParticipants: 6, rosterSize: 80 },
+  { clanId: 'gale' as const, todayXp: 600, seasonXp: 1500, spacesCaptured: 1, todayParticipants: 12, rosterSize: 80 },
 ];
 
 describe('useClanScores / useClanStore integration', () => {
@@ -117,6 +117,8 @@ describe('useClanScores / useClanStore integration', () => {
         todayXp: c.todayXp,
         seasonXp: existing?.seasonXp ?? 0,
         spacesCaptured: existing?.spacesCaptured ?? 0,
+        todayParticipants: existing?.todayParticipants ?? 0,
+        rosterSize: existing?.rosterSize ?? 0,
       };
     });
     useClanStore.getState().setClans(updatedClans);
