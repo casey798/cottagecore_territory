@@ -1,7 +1,8 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
 import { seasonResetSchema } from '../../shared/schemas';
-import { scan, updateItem } from '../../shared/db';
+import { scan, updateItem, putItem, getItem } from '../../shared/db';
+import { getTodayISTString } from '../../shared/time';
 import type { User, Clan, CapturedSpace } from '../../shared/types';
 
 export async function handler(
@@ -79,6 +80,30 @@ export async function handler(
         lastSpaceKey = result.lastEvaluatedKey;
       } while (lastSpaceKey);
     }
+
+    // Update season metadata
+    const today = getTodayISTString();
+
+    // Close previous season
+    const prevMeta = await getItem<Record<string, unknown>>('daily-config', { date: 'season-meta' });
+    if (prevMeta && !prevMeta.seasonEndDate) {
+      await updateItem(
+        'daily-config',
+        { date: 'season-meta' },
+        'SET seasonEndDate = :endDate, seasonStatus = :status',
+        { ':endDate': today, ':status': 'complete' },
+      );
+    }
+
+    // Write new season metadata
+    await putItem('daily-config', {
+      date: 'season-meta',
+      seasonNumber: newSeasonNumber,
+      seasonStartDate: today,
+      seasonEndDate: null,
+      seasonStatus: 'active',
+      totalPlayers: usersReset,
+    } as unknown as Record<string, unknown>);
 
     return success({
       message: 'Season reset completed',

@@ -9,6 +9,8 @@ export interface GroupPack {
 
 import { GROUP_PACKS } from './groupPacks';
 
+export const MAX_MISTAKES = 8;
+
 export interface KindredPuzzle {
   words: string[];
   groups: GroupDefinition[];

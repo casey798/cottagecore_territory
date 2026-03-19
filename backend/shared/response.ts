@@ -27,12 +27,15 @@ export const enum ErrorCode {
   INTERNAL_ERROR = 'INTERNAL_ERROR',
   NOT_ADMIN = 'NOT_ADMIN',
   ALL_MINIGAMES_PLAYED = 'ALL_MINIGAMES_PLAYED',
+  NOT_IN_RANGE = 'NOT_IN_RANGE',
+  ALREADY_CHECKED_IN = 'ALREADY_CHECKED_IN',
+  COOP_REQUIRED = 'COOP_REQUIRED',
 }
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Content-Type,Authorization,X-Amz-Date,X-Api-Key',
-  'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS',
+  'Access-Control-Allow-Methods': 'GET,POST,PUT,PATCH,DELETE,OPTIONS',
   'Content-Type': 'application/json',
 };
 

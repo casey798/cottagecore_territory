@@ -30,6 +30,8 @@ export const handler = async (
           todayXp: clan?.todayXp ?? 0,
           seasonXp: clan?.seasonXp ?? 0,
           spacesCaptured: spaceCounts[clanId] ?? 0,
+          todayParticipants: clan?.todayParticipants ?? 0,
+          rosterSize: clan?.rosterSize ?? 0,
         } satisfies ClanScore;
       })
     );

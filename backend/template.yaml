@@ -53,6 +53,10 @@ Globals:
         ADMIN_NOTIFICATIONS_TABLE: !Ref AdminNotificationsTable
         WS_CONNECTIONS_TABLE: !Ref WsConnectionsTable
         ASSETS_BUCKET: !Ref AssetsBucket
+        CHECKINS_TABLE: !Ref CheckInsTable
+        ADMIN_AUDIT_TABLE: !Ref AdminAuditTable
+        LOCATION_MASTER_CONFIG_TABLE: !Ref LocationMasterConfigTable
+        CLUSTER_WEIGHT_CONFIG_TABLE: !Ref ClusterWeightConfigTable
 
 # ---------------------------------------------------------------------------
 # Resources
@@ -78,7 +82,7 @@ Resources:
               Header: Authorization
               ReauthorizeEvery: 300
       Cors:
-        AllowMethods: "'GET,POST,PUT,DELETE,OPTIONS'"
+        AllowMethods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
         AllowHeaders: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
         AllowOrigin: "'*'"
       GatewayResponses:
@@ -88,7 +92,7 @@ Resources:
             Headers:
               Access-Control-Allow-Origin: "'*'"
               Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
-              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
           ResponseTemplates:
             application/json: '{"success":false,"error":{"code":"UNAUTHORIZED","message":"Unauthorized"}}'
         ACCESS_DENIED:
@@ -97,7 +101,7 @@ Resources:
             Headers:
               Access-Control-Allow-Origin: "'*'"
               Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
-              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
           ResponseTemplates:
             application/json: '{"success":false,"error":{"code":"FORBIDDEN","message":"Access denied"}}'
         DEFAULT_4XX:
@@ -105,13 +109,13 @@ Resources:
             Headers:
               Access-Control-Allow-Origin: "'*'"
               Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
-              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
         DEFAULT_5XX:
           ResponseParameters:
             Headers:
               Access-Control-Allow-Origin: "'*'"
               Access-Control-Allow-Headers: "'Content-Type,Authorization,X-Amz-Date,X-Api-Key'"
-              Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              Access-Control-Allow-Methods: "'GET,POST,PUT,PATCH,DELETE,OPTIONS'"
 
   # =========================================================================
   # WebSocket API Gateway
@@ -502,6 +506,81 @@ Resources:
         - AttributeName: email
           KeyType: HASH
 
+  # 16. Check-Ins (free-roam research data)
+  CheckInsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-checkins
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: checkInId
+          AttributeType: S
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+        - AttributeName: timestamp
+          AttributeType: S
+      KeySchema:
+        - AttributeName: checkInId
+          KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: UserDateIndex
+          KeySchema:
+            - AttributeName: userId
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: DateIndex
+          KeySchema:
+            - AttributeName: date
+              KeyType: HASH
+            - AttributeName: timestamp
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  # 17. Admin Audit
+  AdminAuditTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-admin-audit
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: auditId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: auditId
+          KeyType: HASH
+
+  # 18. Location Master Config
+  LocationMasterConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-location-master-config
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: locationId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: locationId
+          KeyType: HASH
+
+  # 19. Cluster Weight Config
+  ClusterWeightConfigTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-cluster-weight-config
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: configId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: configId
+          KeyType: HASH
+
   # =========================================================================
   # Lambda Authorizer
   # =========================================================================
@@ -867,6 +946,8 @@ Resources:
             TableName: !Ref PlayerAssignmentsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref PlayerLocksTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
       Events:
         Api:
           Type: Api
@@ -1044,6 +1125,118 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  StartPracticeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-startPractice
+      CodeUri: functions/game/
+      Handler: startPractice.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/startPractice
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - startPractice.ts
+        External:
+          - '@aws-sdk/*'
+
+  GameCheckinFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-gameCheckin
+      CodeUri: functions/game/
+      Handler: checkin.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/checkin
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - checkin.ts
+        External:
+          - '@aws-sdk/*'
+
+  SubmitLeaveFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-submitLeave
+      CodeUri: functions/game/
+      Handler: submitLeave.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/session/leave
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - submitLeave.ts
+
+  SubmitSentimentFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-submitSentiment
+      CodeUri: functions/game/
+      Handler: submitSentiment.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /game/session/{sessionId}/sentiment
+            Method: PATCH
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - submitSentiment.ts
+
   # =========================================================================
   # Scores Functions
   # =========================================================================
@@ -1104,6 +1297,41 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - getCaptureHistory.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetSeasonSummaryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getSeasonSummary
+      CodeUri: functions/scores/
+      Handler: getSeasonSummary.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /season/summary
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getSeasonSummary.ts
         External:
           - '@aws-sdk/*'
 
@@ -1249,6 +1477,172 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  GetLocationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getLocations
+      CodeUri: functions/admin/
+      Handler: getLocations.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations/master
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getLocations.ts
+        External:
+          - '@aws-sdk/*'
+
+  UpdateLocationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-updateLocation
+      CodeUri: functions/admin/
+      Handler: updateLocation.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations/master/{locationId}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - updateLocation.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetClusterWeightsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getClusterWeights
+      CodeUri: functions/admin/
+      Handler: getClusterWeights.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterWeightConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/clusters/weights
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getClusterWeights.ts
+        External:
+          - '@aws-sdk/*'
+
+  UpdateClusterWeightsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-updateClusterWeights
+      CodeUri: functions/admin/
+      Handler: updateClusterWeights.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterWeightConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/clusters/weights
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - updateClusterWeights.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetSeasonScheduleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getSeasonSchedule
+      CodeUri: functions/admin/
+      Handler: getSeasonSchedule.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/season/schedule
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getSeasonSchedule.ts
+        External:
+          - '@aws-sdk/*'
+
+  SaveSeasonScheduleFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-saveSeasonSchedule
+      CodeUri: functions/admin/
+      Handler: saveSeasonSchedule.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/season/schedule
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - saveSeasonSchedule.ts
+        External:
+          - '@aws-sdk/*'
+
   GetUsersFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1273,6 +1667,157 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - getUsers.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetUserSessionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getUserSessions
+      CodeUri: functions/admin/
+      Handler: getUserSessions.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/users/{userId}/sessions
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getUserSessions.ts
+        External:
+          - '@aws-sdk/*'
+
+  UpdateUserStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-updateUserStatus
+      CodeUri: functions/admin/
+      Handler: updateUserStatus.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminAuditTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/users/{userId}/status
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - updateUserStatus.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdjustUserXpFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adjustUserXp
+      CodeUri: functions/admin/
+      Handler: adjustUserXp.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminAuditTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/users/{userId}/xp-adjust
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adjustUserXp.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetUserDetailFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getUserDetail
+      CodeUri: functions/admin/
+      Handler: getUserDetail.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/users/{userId}/detail
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getUserDetail.ts
+        External:
+          - '@aws-sdk/*'
+
+  UpdateUserClusterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-updateUserCluster
+      CodeUri: functions/admin/
+      Handler: updateUserCluster.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminAuditTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/users/{userId}/cluster
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - updateUserCluster.ts
         External:
           - '@aws-sdk/*'
 
@@ -1418,6 +1963,71 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  DeployAssignmentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-deployAssignments
+      CodeUri: functions/admin/
+      Handler: deployAssignments.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterWeightConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/daily/deploy
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - deployAssignments.ts
+        External:
+          - '@aws-sdk/*'
+
+  SuggestDailyPoolFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-suggestDailyPool
+      CodeUri: functions/admin/
+      Handler: suggestDailyPool.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/daily/suggest
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - suggestDailyPool.ts
+        External:
+          - '@aws-sdk/*'
+
   GenerateQrFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1545,6 +2155,33 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - sendNotification.ts
+        External:
+          - '@aws-sdk/*'
+
+  CancelNotificationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-cancelNotification
+      CodeUri: functions/admin/
+      Handler: cancelNotification.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminNotificationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/notifications/{notificationId}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - cancelNotification.ts
         External:
           - '@aws-sdk/*'
 
@@ -1761,6 +2398,8 @@ Resources:
             TableName: !Ref PlayerAssetsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
       Events:
         Api:
           Type: Api
@@ -1779,12 +2418,96 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  GetSeasonStatusFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getSeasonStatus
+      CodeUri: functions/admin/
+      Handler: getSeasonStatus.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/season/status
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getSeasonStatus.ts
+        External:
+          - '@aws-sdk/*'
+
+  ImportClustersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-importClusters
+      CodeUri: functions/admin/
+      Handler: importClusters.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/import/clusters
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - importClusters.ts
+        External:
+          - '@aws-sdk/*'
+
+  ImportSpaceMetadataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-importSpaceMetadata
+      CodeUri: functions/admin/
+      Handler: importSpaceMetadata.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/import/space-metadata
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - importSpaceMetadata.ts
+        External:
+          - '@aws-sdk/*'
+
   AnalyticsFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub grovewars-${Stage}-analytics
       CodeUri: functions/admin/
       Handler: analytics.handler
+      Timeout: 30
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
@@ -1811,6 +2534,264 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - analytics.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsOverviewFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsOverview
+      CodeUri: functions/admin/
+      Handler: analyticsOverview.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/overview
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsOverview.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsEngagementFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsEngagement
+      CodeUri: functions/admin/
+      Handler: analyticsEngagement.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/engagement
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsEngagement.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsClansFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsClans
+      CodeUri: functions/admin/
+      Handler: analyticsClans.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/clans
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsClans.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsLocationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsLocations
+      CodeUri: functions/admin/
+      Handler: analyticsLocations.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/locations
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsLocations.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsMinigamesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsMinigames
+      CodeUri: functions/admin/
+      Handler: analyticsMinigames.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/minigames
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsMinigames.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsFreeRoamFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsFreeRoam
+      CodeUri: functions/admin/
+      Handler: analyticsFreeRoam.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/free-roam
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsFreeRoam.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsClustersFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsClusters
+      CodeUri: functions/admin/
+      Handler: analyticsClusters.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/clusters
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsClusters.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsDecayFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsDecay
+      CodeUri: functions/admin/
+      Handler: analyticsDecay.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/decay
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsDecay.ts
         External:
           - '@aws-sdk/*'
 
@@ -1915,6 +2896,10 @@ Resources:
             TableName: !Ref LocationsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref WsConnectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
         - Statement:
             - Effect: Allow
               Action:
@@ -2281,6 +3266,426 @@ Resources:
       FunctionName: !Ref EventWindowFinalFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt FinalPushRule.Arn
+
+  # Dwell fallback — 6:30 PM IST (1:00 PM UTC)
+  ComputeDwellFallbacksFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-computeDwellFallbacks
+      CodeUri: functions/scheduled/
+      Handler: computeDwellFallbacks.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - computeDwellFallbacks.ts
+
+  DwellFallbackRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-dwell-fallback
+      Description: Compute dwell time fallbacks at 6:30 PM IST (1:00 PM UTC)
+      ScheduleExpression: cron(0 13 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ComputeDwellFallbacksFunction.Arn
+          Id: DwellFallbackTarget
+
+  DwellFallbackPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ComputeDwellFallbacksFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DwellFallbackRule.Arn
+
+  # Process Scheduled Notifications — every 5 minutes
+  ProcessScheduledNotificationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-processScheduledNotifications
+      CodeUri: functions/scheduled/
+      Handler: processScheduledNotifications.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminNotificationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - processScheduledNotifications.ts
+
+  ScheduledNotificationsRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-process-scheduled-notifications
+      Description: Process scheduled notifications every 5 minutes
+      ScheduleExpression: cron(0/5 * * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt ProcessScheduledNotificationsFunction.Arn
+          Id: ScheduledNotificationsTarget
+
+  ScheduledNotificationsPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ProcessScheduledNotificationsFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt ScheduledNotificationsRule.Arn
+
+  # =========================================================================
+  # Check-In Functions
+  # =========================================================================
+  SubmitCheckinFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-submitCheckin
+      CodeUri: functions/checkin/
+      Handler: submitCheckin.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /checkin/submit
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - submitCheckin.ts
+
+  ExportGameSessionsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportGameSessions
+      CodeUri: functions/admin/
+      Handler: exportGameSessions.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/game-sessions
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportGameSessions.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportPlayerProfilesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportPlayerProfiles
+      CodeUri: functions/admin/
+      Handler: exportPlayerProfiles.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/player-profiles
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportPlayerProfiles.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportDailyConfigsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportDailyConfigs
+      CodeUri: functions/admin/
+      Handler: exportDailyConfigs.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/daily-configs
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportDailyConfigs.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportPlayerAssignmentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportPlayerAssignments
+      CodeUri: functions/admin/
+      Handler: exportPlayerAssignments.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/player-assignments
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportPlayerAssignments.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportCaptureHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportCaptureHistory
+      CodeUri: functions/admin/
+      Handler: exportCaptureHistory.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/capture-history
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportCaptureHistory.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportLocationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportLocations
+      CodeUri: functions/admin/
+      Handler: exportLocations.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/locations
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportLocations.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsClusterMigrationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsClusterMigration
+      CodeUri: functions/admin/
+      Handler: analyticsClusterMigration.handler
+      Timeout: 60
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/cluster-migration
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsClusterMigration.ts
+        External:
+          - '@aws-sdk/*'
+
+  HallOfFameFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-hallOfFame
+      CodeUri: functions/admin/
+      Handler: hallOfFame.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/season/halloffame
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - hallOfFame.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportCheckinsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportCheckins
+      CodeUri: functions/admin/
+      Handler: exportCheckins.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/checkins/export
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportCheckins.ts
+
+  ExportNotificationHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportNotificationHistory
+      CodeUri: functions/admin/
+      Handler: exportNotificationHistory.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AdminNotificationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/notification-history
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportNotificationHistory.ts
+        External:
+          - '@aws-sdk/*'
 
 # ---------------------------------------------------------------------------
 # Outputs

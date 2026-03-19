@@ -1,7 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { putItem } from '../shared/db';
+import { putItem, getItem } from '../shared/db';
 import { verifyToken } from '../shared/auth';
-import { WsConnection, ClanId } from '../shared/types';
+import { WsConnection, ClanId, User } from '../shared/types';
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   const connectionId = event.requestContext.connectionId;
@@ -16,8 +16,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
   try {
     const claims = await verifyToken(token);
-    const userId = claims.sub;
-    const clan = claims['custom:clan'] as ClanId;
+    const userId = claims.uid;
+    const user = await getItem<User>('users', { userId });
+    const clan = (user?.clan as ClanId) ?? ClanId.Ember;
 
     const now = new Date().toISOString();
     const ttl = Math.floor(Date.now() / 1000) + 86400; // 24 hours from now

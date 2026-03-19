@@ -41,6 +41,12 @@ interface GameState {
   setResetSeq: (seq: number) => void;
   setCelebrationPending: (clan: string, spaceName: string) => void;
   clearCelebration: () => void;
+  quietMode: boolean;
+  setQuietMode: (v: boolean) => void;
+  activeLocationSessionId: string | null;
+  activeLocationSessionStart: string | null;
+  setActiveLocationSession: (sessionId: string) => void;
+  clearActiveLocationSession: () => void;
   resetDaily: () => void;
 }
 
@@ -62,6 +68,9 @@ export const useGameStore = create<GameState>()(
       pendingCelebrationClan: null,
       pendingCelebrationSpace: null,
       lastSeenCelebrationDate: null,
+      quietMode: false,
+      activeLocationSessionId: null,
+      activeLocationSessionStart: null,
 
       recordWin: () =>
         set((state) => ({ todayXp: state.todayXp + XP_PER_WIN })),
@@ -127,6 +136,20 @@ export const useGameStore = create<GameState>()(
           lastSeenCelebrationDate: getTodayISTString(),
         }),
 
+      setQuietMode: (v: boolean) => set({ quietMode: v }),
+
+      setActiveLocationSession: (sessionId: string) =>
+        set({
+          activeLocationSessionId: sessionId,
+          activeLocationSessionStart: new Date().toISOString(),
+        }),
+
+      clearActiveLocationSession: () =>
+        set({
+          activeLocationSessionId: null,
+          activeLocationSessionStart: null,
+        }),
+
       resetDaily: () =>
         set({
           todayXp: 0,
@@ -137,6 +160,8 @@ export const useGameStore = create<GameState>()(
           dailyInfo: null,
           lastResetDate: getTodayISTString(),
           resetSeq: 0,
+          activeLocationSessionId: null,
+          activeLocationSessionStart: null,
         }),
     }),
     {

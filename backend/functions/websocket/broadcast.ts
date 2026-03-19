@@ -43,7 +43,12 @@ export async function broadcastScoreUpdate(stage: string): Promise<void> {
     const clans = await Promise.all(
       CLAN_IDS.map(async (clanId) => {
         const clan = await getItem<Clan>('clans', { clanId });
-        return { clanId, todayXp: clan?.todayXp ?? 0 };
+        return {
+          clanId,
+          todayXp: clan?.todayXp ?? 0,
+          todayParticipants: clan?.todayParticipants ?? 0,
+          rosterSize: clan?.rosterSize ?? 0,
+        };
       })
     );
 

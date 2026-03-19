@@ -27,6 +27,8 @@ export function DebugPanel() {
   const clearDebugLocation = useDebugStore((s) => s.clearDebugLocation);
   const toggleDebugMode = useDebugStore((s) => s.toggleDebugMode);
   const toggleTapToSetMode = useDebugStore((s) => s.toggleTapToSetMode);
+  const showAllMinigames = useDebugStore((s) => s.showAllMinigames);
+  const setShowAllMinigames = useDebugStore((s) => s.setShowAllMinigames);
   const todayLocations = useMapStore((s) => s.todayLocations ?? []);
 
   // Get real GPS state (this will return debug values if debug is on,
@@ -87,6 +89,24 @@ export function DebugPanel() {
             </Pressable>
           )}
         </View>
+
+        {/* Show All Minigames Toggle */}
+        {__DEV__ && (
+          <View style={styles.row}>
+            <Text style={styles.label}>All Minigames:</Text>
+            <Pressable
+              style={[
+                styles.toggleButton,
+                showAllMinigames && styles.toggleButtonActive,
+              ]}
+              onPress={() => setShowAllMinigames(!showAllMinigames)}
+            >
+              <Text style={styles.toggleButtonText}>
+                {showAllMinigames ? 'ON' : 'OFF'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
 
         {/* Manual Lat/Lng Input */}
         <View style={styles.inputRow}>

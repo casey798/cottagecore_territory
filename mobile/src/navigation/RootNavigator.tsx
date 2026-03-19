@@ -30,6 +30,7 @@ export function RootNavigator() {
   const isHydrated = useAuthStore((s) => s.isHydrated);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const tutorialDone = useAuthStore((s) => s.tutorialDone);
+  const tutorialSkipped = useAuthStore((s) => s.tutorialSkipped);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const logout = useAuthStore((s) => s.logout);
 
@@ -67,7 +68,7 @@ export function RootNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!isAuthenticated ? (
           <Stack.Screen name="Login" component={LoginScreen} />
-        ) : !tutorialDone ? (
+        ) : !tutorialDone && !tutorialSkipped ? (
           <Stack.Screen name="Tutorial" component={TutorialScreen} />
         ) : (
           <Stack.Screen name="Main" component={MainStack} />

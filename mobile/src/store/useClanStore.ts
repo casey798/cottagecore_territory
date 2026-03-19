@@ -3,11 +3,11 @@ import { ClanScore } from '@/types';
 
 const DEV_SEED_CLANS: ClanScore[] = __DEV__
   ? [
-      { clanId: 'ember', todayXp: 875, seasonXp: 8750, spacesCaptured: 5 },
-      { clanId: 'tide', todayXp: 1100, seasonXp: 9200, spacesCaptured: 6 },
-      { clanId: 'bloom', todayXp: 650, seasonXp: 7800, spacesCaptured: 2 },
-      { clanId: 'gale', todayXp: 950, seasonXp: 8100, spacesCaptured: 4 },
-      { clanId: 'hearth', todayXp: 400, seasonXp: 3200, spacesCaptured: 1 },
+      { clanId: 'ember', todayXp: 875, seasonXp: 8750, spacesCaptured: 5, todayParticipants: 12, rosterSize: 30 },
+      { clanId: 'tide', todayXp: 1100, seasonXp: 9200, spacesCaptured: 6, todayParticipants: 18, rosterSize: 28 },
+      { clanId: 'bloom', todayXp: 650, seasonXp: 7800, spacesCaptured: 2, todayParticipants: 8, rosterSize: 25 },
+      { clanId: 'gale', todayXp: 950, seasonXp: 8100, spacesCaptured: 4, todayParticipants: 14, rosterSize: 32 },
+      { clanId: 'hearth', todayXp: 400, seasonXp: 3200, spacesCaptured: 1, todayParticipants: 5, rosterSize: 20 },
     ]
   : [];
 

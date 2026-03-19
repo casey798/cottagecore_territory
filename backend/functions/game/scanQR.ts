@@ -8,8 +8,11 @@ import { scanQrSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
 import { MINIGAME_POOL } from '../../shared/minigames';
 import {
+  COOP_MINIGAME_IDS,
   DailyConfig,
   Location,
+  LocationMasterConfig,
+  LocationModifiers,
   PlayerAssignment,
   PlayerLock,
   User,
@@ -20,11 +23,20 @@ import {
 const DAILY_XP_CAP = 100;
 const SET_SIZE = 6;
 
-function pickRandomMinigames(excludeIds: string[]): string[] {
+function pickRandomMinigames(excludeIds: string[], coopOnly: boolean): string[] {
   const allEntries = Object.keys(MINIGAME_POOL);
-  const pool = allEntries.filter((id) => !excludeIds.includes(id));
+  const coopSet = new Set(COOP_MINIGAME_IDS);
+
+  let pool: string[];
+  if (coopOnly) {
+    pool = allEntries.filter((id) => coopSet.has(id) && !excludeIds.includes(id));
+  } else {
+    pool = allEntries.filter((id) => !coopSet.has(id) && !excludeIds.includes(id));
+  }
+
   const shuffled = pool.sort(() => Math.random() - 0.5);
-  return shuffled.slice(0, Math.min(SET_SIZE, shuffled.length));
+  const count = Math.max(coopOnly ? 3 : SET_SIZE, 0);
+  return shuffled.slice(0, Math.min(count, shuffled.length));
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -80,6 +92,29 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }
     }
 
+    // Bridge the two-table problem: fetch location-master-config (best-effort)
+    let masterConfig: LocationMasterConfig | undefined;
+    try {
+      masterConfig = await getItem<LocationMasterConfig>('location-master-config', { locationId });
+    } catch (e) {
+      console.warn('[scanQR] Failed to fetch location-master-config (non-fatal):', e);
+    }
+
+    const coopOnly = masterConfig?.coopOnly ?? location.coopOnly ?? false;
+    const spaceFact = masterConfig?.spaceFact ?? null;
+    const firstVisitBonus = masterConfig?.firstVisitBonus ?? false;
+    const bonusXP = masterConfig?.bonusXP ?? false;
+    const minigameAffinity = masterConfig?.minigameAffinity ?? null;
+
+    // Step 4b: Co-op required check
+    if (coopOnly) {
+      const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
+      const coopPartnerId = (body as { coopPartnerId?: string | null }).coopPartnerId;
+      if (!coopPartnerId) {
+        return error(ErrorCode.COOP_REQUIRED, 'This location requires a co-op partner.', 400);
+      }
+    }
+
     // Step 5: Location locked
     const dateUserLocation = `${today}#${userId}#${locationId}`;
     const lock = await getItem<PlayerLock>('player-locks', { dateUserLocation });
@@ -122,8 +157,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (savedSet) {
       minigameIds = savedSet.minigameIds;
     } else {
-      // First scan at this location today — roll a new set excluding won minigames
-      minigameIds = pickRandomMinigames([...wonToday]);
+      // First scan at this location today — roll a new set
+      minigameIds = pickRandomMinigames([...wonToday], coopOnly);
 
       if (minigameIds.length === 0) {
         return error(
@@ -166,12 +201,51 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       (s) => s.locationId === locationId && s.result === 'win' && s.xpEarned > 0 && s.completedAt,
     );
 
+    // Close any previous open sessions (leftAt is null)
+    try {
+      const now = new Date();
+      const nowISO = now.toISOString();
+      const thirtyMinAgo = now.getTime() - 30 * 60 * 1000;
+
+      const openSessions = todaySessions.filter((s) => {
+        if (s.leftAt) return false;
+        // Completed game but player never left
+        if (s.completedAt) return true;
+        // Abandoned: started > 30 min ago and never completed
+        if (!s.completedAt && new Date(s.startedAt).getTime() < thirtyMinAgo) return true;
+        return false;
+      });
+
+      for (const session of openSessions) {
+        const startMs = new Date(session.startedAt).getTime();
+        const dwellTime = Math.min(Math.round((now.getTime() - startMs) / 1000), 7200);
+        await updateItem(
+          'game-sessions',
+          { sessionId: session.sessionId },
+          'SET leftAt = :leftAt, dwellTime = :dwellTime, leaveReason = :reason',
+          { ':leftAt': nowISO, ':dwellTime': dwellTime, ':reason': 'new_scan' },
+        ).catch(() => {}); // non-fatal
+      }
+    } catch (e) {
+      console.warn('[scanQR] Failed to close previous sessions (non-fatal):', e);
+    }
+
+    // Build locationModifiers for the client
+    const locationModifiers: LocationModifiers = {
+      coopOnly,
+      spaceFact,
+      firstVisitBonus,
+      bonusXP,
+      minigameAffinity,
+    };
+
     return success({
       locationId,
       locationName: location.name,
       availableMinigames,
       xpAvailable,
       capReached,
+      locationModifiers,
     });
   } catch (err) {
     console.error('scanQR error:', err);

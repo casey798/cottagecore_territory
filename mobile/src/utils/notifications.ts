@@ -1,5 +1,10 @@
 import { PermissionsAndroid, Platform } from 'react-native';
-import messaging from '@react-native-firebase/messaging';
+import {
+  getMessaging,
+  requestPermission,
+  getToken,
+  AuthorizationStatus,
+} from '@react-native-firebase/messaging';
 import { updateFcmToken } from '@/api/player';
 
 export async function registerFcmToken(token: string): Promise<void> {
@@ -28,14 +33,15 @@ export async function requestNotificationPermission(): Promise<void> {
       }
     }
 
-    const authStatus = await messaging().requestPermission();
+    const msg = getMessaging();
+    const authStatus = await requestPermission(msg);
     const granted =
-      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-      authStatus === messaging.AuthorizationStatus.PROVISIONAL;
+      authStatus === AuthorizationStatus.AUTHORIZED ||
+      authStatus === AuthorizationStatus.PROVISIONAL;
 
     if (granted) {
       console.log('[FCM] Permission granted, status:', authStatus);
-      const token = await messaging().getToken();
+      const token = await getToken(msg);
       console.log('[FCM] Token obtained:', token ? token.substring(0, 20) + '...' : 'NONE');
       if (token) {
         await registerFcmToken(token);

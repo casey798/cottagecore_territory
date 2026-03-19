@@ -3,7 +3,7 @@ import { extractUserId } from '../shared/auth';
 import { getItem } from '../shared/db';
 import { getTodayISTString } from '../shared/time';
 import { success, error, ErrorCode } from '../shared/response';
-import { PlayerAssignment, Location, PlayerLock, DailyConfig } from '../shared/types';
+import { PlayerAssignment, Location, LocationMasterConfig, PlayerLock, DailyConfig } from '../shared/types';
 
 const STAGE = process.env.STAGE || 'dev';
 
@@ -55,6 +55,15 @@ export const handler = async (
           dateUserLocation: `${today}#${userId}#${locationId}`,
         });
 
+        // Best-effort fetch from location-master-config for bonusXP
+        let bonusXP = false;
+        try {
+          const masterConfig = await getItem<LocationMasterConfig>('location-master-config', { locationId });
+          bonusXP = masterConfig?.bonusXP ?? false;
+        } catch {
+          // non-fatal
+        }
+
         return {
           locationId,
           name: location?.name ?? 'Unknown',
@@ -63,6 +72,7 @@ export const handler = async (
           geofenceRadius: location?.geofenceRadius ?? 0,
           category: location?.category ?? 'other',
           locked: !!lock,
+          bonusXP,
         };
       })
     );

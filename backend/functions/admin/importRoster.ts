@@ -1,7 +1,7 @@
 import { randomUUID } from 'crypto';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
-import { batchWrite } from '../../shared/db';
+import { batchWrite, updateItem } from '../../shared/db';
 import { ClanId } from '../../shared/types';
 import type { User } from '../../shared/types';
 
@@ -96,6 +96,29 @@ export async function handler(
     // Batch write users
     if (usersToWrite.length > 0) {
       await batchWrite('users', usersToWrite);
+    }
+
+    // Update rosterSize for all five clans
+    const clanCounts: Record<string, number> = {
+      [ClanId.Ember]: 0,
+      [ClanId.Tide]: 0,
+      [ClanId.Bloom]: 0,
+      [ClanId.Gale]: 0,
+      [ClanId.Hearth]: 0,
+    };
+    for (const user of usersToWrite) {
+      const userClan = (user as { clan: string }).clan;
+      if (userClan in clanCounts) {
+        clanCounts[userClan]++;
+      }
+    }
+    for (const [clanId, count] of Object.entries(clanCounts)) {
+      await updateItem(
+        'clans',
+        { clanId },
+        'SET rosterSize = :count',
+        { ':count': count }
+      );
     }
 
     return success({

@@ -1,6 +1,30 @@
 # GroveWars — Game Design Document
 ### Clan-Based Territory Capture Game for Campus Revitalization
-**Version 1.1 — March 2026**
+**Version 1.2 — March 2026 (Updated to reflect actual implementation)**
+
+---
+
+## Implementation Status Summary
+
+| Component | Status | Notes |
+|-----------|--------|-------|
+| **Backend (AWS SAM)** | ✅ Complete | 13 DynamoDB tables, all Lambda functions, REST + WebSocket APIs |
+| **Auth** | ✅ Complete | Migrated from Cognito → Google Sign-In + Firebase |
+| **Mobile App Scaffold** | ✅ Complete | React Native Android, landscape-locked, Zustand stores, navigation |
+| **Map System** | ✅ Complete | Skia rendering, affine calibration, GPS tracking, territory overlays |
+| **QR System** | ✅ Complete | HMAC-signed daily QR codes, camera scan, geofence verification |
+| **Minigames** | ✅ Complete (15/15) | All 15 minigames implemented with logic, tests, and anti-cheat hashes |
+| **XP / Scoring** | ✅ Complete | 25 XP/win, 100 cap, cooldowns, locks, streaks, tiebreaker |
+| **Territory Capture** | ✅ Complete | 6 PM scoring, daily reset, WebSocket broadcasts, celebrations |
+| **WebSocket** | ✅ Complete | Score updates, captures, resets, stale-state detection, polling fallback |
+| **Push Notifications** | ✅ Complete | FCM integration, event windows, admin triggers |
+| **Admin Dashboard** | 🔶 Partial | Daily config, locations, roster, map calibration, QR gen, capture history — all done. Notifications, analytics, users, season pages are stubs |
+| **Tutorial / Storyline** | ❌ Not started | Elder Moss NPC, 5-scene tutorial |
+| **Character Creation** | ❌ Not started | Pixel avatar customization |
+| **Player Profile Screen** | ❌ Not started | Stats, streaks, badges |
+| **Asset Inventory Screen** | ❌ Not started | Grid view with expiry countdown |
+| **Space Decoration** | ❌ Not started | Drag-and-drop asset placement |
+| **Season Summary Screen** | ❌ Not started | End-of-season hall of fame |
 
 ---
 
@@ -8,7 +32,7 @@
 
 **Title:** GroveWars (working title — cottagecore-themed campus territory game)
 
-**Elevator Pitch:** Four college house clans compete daily to capture key campus spaces by completing puzzle minigames at physical locations. Players scan QR codes, solve timed challenges, and earn XP for their clan. At 6 PM each day, the highest-scoring clan captures that day's designated space — permanently marked on a beautiful pixel art campus map. Over a 2-week season, the map fills with clan banners and trophies, bringing life to overlooked corners of campus.
+**Elevator Pitch:** Five college house clans compete daily to capture key campus spaces by completing puzzle minigames at physical locations. Players scan QR codes, solve timed challenges, and earn XP for their clan. At 6 PM each day, the highest-scoring clan captures that day's designated space — permanently marked on a beautiful pixel art campus map. Over a 2-week season, the map fills with clan banners and trophies, bringing life to overlooked corners of campus.
 
 **Core Goal:** Revitalize underutilized campus spaces by gamifying foot traffic. Built on data from 700+ activity logs collected over 1.5 weeks via a prior campus activity-tagging app.
 
@@ -69,9 +93,9 @@ Same XP rules apply — these are just notification-driven activity pulses.
 ## 3. Player Identity & Clans
 
 ### Onboarding Flow
-1. **College email sign-in** (verified against allowed domain)
+1. **Google Sign-In** (college Google account, verified via Firebase Authentication)
 2. **Automatic clan assignment** based on CSV roster of house memberships
-   - Red House, Blue House, Yellow House, Green House
+   - Red House (Ember), Blue House (Tide), Yellow House (Bloom), Green House (Gale), Purple House (Hearth)
    - Permanent for the season — no switching
 3. **Storyline tutorial begins** (see Section 9)
 4. **Character creation** (embedded in tutorial narrative)
@@ -199,30 +223,37 @@ The app then assigns each player a **random subset of 3–5 locations** from the
 ## 6. Minigames
 
 ### Overview
-- **Total at launch:** ~10 puzzle minigames
+- **Total at launch:** 15 puzzle minigames (all implemented)
 - **Per location session:** Player sees 3–5 randomly selected
-- **Type:** Timed puzzles (offline/client-side with server validation of completion)
-- **Difficulty:** Moderate — should take 30–90 seconds, with a time limit adding pressure
+- **Type:** Timed puzzles — 6 with server-side puzzle generation, 9 with client-side generation, all with server validation of completion
+- **Difficulty:** Moderate — should take 30–90 seconds, with a time limit adding pressure. Admin can set difficulty tier per day (easy/medium/hard)
 - **Co-op mode:** Same-clan, shared screen (2 players, 1 phone)
 
 ### Minigame List (Launch Set)
 
 All minigames are inspired by the NYT Games style — clean, elegant, word/logic/pattern puzzles with simple rules but satisfying depth. Re-themed with cottagecore aesthetics.
 
-| # | Name | Inspired By | Description | Time Limit | Co-op? |
-|---|------|-------------|-------------|------------|--------|
-| 1 | **Grove Words** | Wordle | Guess a 5-letter nature/campus word in 6 tries. Color-coded feedback (green = correct, yellow = wrong position, grey = not in word). Word pool is cottagecore-themed: BLOOM, GROVE, CREEK, STONE, FERNS, etc. | 120s | Yes (discuss guesses together) |
-| 2 | **Kindred** | Connections | 16 cottagecore-themed words displayed in a grid. Find 4 groups of 4 related words (e.g., "Types of flowers", "Things in a garden shed", "Sounds at dawn", "Baking ingredients"). 4 mistakes allowed. | 150s | Yes (one player suggests, other confirms) |
-| 3 | **Pips** | NYT Pips | Tap tiles to fill a shape within a limited number of moves. Each tap fills the tile and its neighbors in a pattern. Complete the shape exactly — no over-filling. Grids get complex. | 90s | Yes (alternate turns tapping) |
-| 4 | **Vine Trail** | Strands | Find themed words hidden in a letter grid by drawing paths through adjacent letters. All words relate to a secret theme. Find the "spangram" (theme word) that connects two sides of the board. | 180s | Yes (one searches top half, other searches bottom) |
-| 5 | **Mosaic** | Tiles/Tangram | Arrange pixel art tiles (cottagecore shapes: leaves, mushrooms, stones) to fill a target silhouette perfectly. Tiles can be rotated. No overlaps, no gaps. | 90s | Yes (one rotates, other places) |
-| 6 | **Crossvine** | Mini Crossword | A small 5×5 crossword with cottagecore/campus clues. Simple vocabulary, satisfying to complete quickly. New puzzle generated per session. | 120s | Yes (one does across, other does down) |
-| 7 | **Number Grove** | Sudoku (mini) | A 4×4 or 6×6 mini-sudoku themed as a "planting grid" — place seed types (icons instead of numbers) so each row, column, and box has one of each. | 120s | No |
-| 8 | **Stone Pairs** | Memory/Matching | Flip cottagecore-themed stone tablets to find matching pairs. 4×4 grid (8 pairs). Fewer flips = faster time. Memorize positions across flips. | 60s | Yes (take turns flipping) |
-| 9 | **Potion Logic** | Logic grid puzzle | 3 potions, 3 ingredients, 3 effects — use clues to figure out which potion has which ingredient and effect. Classic logic deduction in a cozy frame. | 120s | Yes (one reads clues, other fills grid) |
-| 10 | **Leaf Sort** | Water Sort / color sort | Sort colored leaves into jars — each jar should contain only one color. Limited empty jars to work with. Move leaves one at a time, only onto matching colors or into empty jars. | 90s | Yes (discuss strategy, alternate moves) |
-| 11 | **Cipher Stones** | Cryptogram | A short quote about nature/campus encoded with a substitution cipher. Decode it letter by letter. Decoded letters auto-fill all instances. | 120s | Yes (one guesses vowels, other consonants) |
-| 12 | **Path Weaver** | Nonogram/Picross | Fill in a pixel grid using row/column number clues to reveal a hidden cottagecore image (mushroom, fox, flower, etc.). Mini 5×5 or 8×8 grid. | 120s | No |
+| # | Name | Inspired By | Description | Time Limit | Co-op? | Status |
+|---|------|-------------|-------------|------------|--------|--------|
+| 1 | **Grove Words** | Wordle | Guess a 5-letter nature/campus word in 6 tries. Color-coded feedback (green = correct, yellow = wrong position, grey = not in word). Handles duplicate letters correctly. | 120s | Yes (discuss guesses together) | ✅ Implemented |
+| 2 | **Kindred** | Connections | 16 cottagecore-themed words displayed in a grid. Find 4 groups of 4 related words. 8 mistakes allowed. 50+ curated group packs. | 150s | Yes (one player suggests, other confirms) | ✅ Implemented |
+| 3 | **Pips** | NYT Pips | Lights-out variant: toggle cells and their neighbors to turn all cells OFF. Server-generated puzzles with move limits. | 60s | Yes (alternate turns tapping) | ✅ Implemented (server-side puzzle generation) |
+| 4 | **Vine Trail** | Strands | Find themed words hidden in a letter grid by tracing paths through adjacent letters. 50+ curated vine trail packs. | 180s | Yes (one searches top half, other searches bottom) | ✅ Implemented |
+| 5 | **Mosaic** | Tiles/Tangram | Arrange pixel art tiles to fill a target silhouette. Tiles can be rotated. Uses Skia Canvas rendering. Server-side puzzle library with validation. | 90s | Yes (one rotates, other places) | ✅ Implemented (server-side puzzle library + validation) |
+| 6 | **Number Grove** | Sudoku (mini) | 6×6 mini-sudoku with 2×3 boxes. Validity-preserving shuffles (row bands, column stacks, relabeling) for variety. | 120s | No | ✅ Implemented |
+| 7 | **Stone Pairs** | Memory/Matching | Flip cottagecore-themed stone tablets to find matching pairs. 4×4 grid (8 pairs). 6 themed icon sets (nature, creatures, food, weather, garden, cozy). Fisher-Yates shuffle. | 60s | Yes (take turns flipping) | ✅ Implemented |
+| 8 | **Potion Logic** | Logic grid puzzle | 3 potions × 3 ingredients × 3 effects — use clues to deduce the grid. Sophisticated auto-marking cascade system that propagates eliminations. | 120s | Yes (one reads clues, other fills grid) | ✅ Implemented |
+| 9 | **Leaf Sort** | Water Sort / color sort | Sort colored beads into jars — each jar should contain only one color. Limited empty jars to work with. | 90s | Yes (discuss strategy, alternate moves) | ✅ Implemented |
+| 10 | **Cipher Stones** | Cryptogram | A short quote encoded with a substitution cipher. Decode it letter by letter. Decoded letters auto-fill all instances. Curated quote database. | 120s | Yes (one guesses vowels, other consonants) | ✅ Implemented |
+| 11 | **Path Weaver** | Nonogram/Picross | Fill in a pixel grid using row/column number clues to reveal a hidden cottagecore image. Server-generated puzzles with preset image grids. | 150s | No | ✅ Implemented (server-side puzzle generation) |
+| 12 | **Firefly Flow** | Lights Out | Lights-out style connection puzzle: connect pairs and light all tiles. | 90s | No | ✅ Implemented |
+| 13 | **Grove Equations** | 24 Game | Combine 4 numbers with operators (+, −, ×, ÷) to reach a target number. Server-generated puzzles. | 120s | No | ✅ Implemented (server-side puzzle generation) |
+| 14 | **Bloom Sequence** | Pattern Recognition | 3-round pattern recognition: identify the sequence and pick the 6th item. Server-generated puzzles with difficulty scaling. | 90s | No | ✅ Implemented (server-side puzzle generation) |
+| 15 | **Shift-Slide** | 15-Puzzle | Slide tiles to reveal a hidden cottagecore image (10 preset images: butterfly, cottage, fox, owl, etc.). Server provides image ID and scramble seed. | 90s | No | ✅ Implemented |
+
+> **Note:** Crossvine (mini crossword) was removed from the launch set. Four new minigames were added: Firefly Flow, Grove Equations, Bloom Sequence, and Shift-Slide — bringing the total to 15.
+>
+> **Puzzle Generation:** 6 minigames use server-side puzzle generation (Mosaic, Path Weaver, Grove Equations, Bloom Sequence, Shift-Slide, Pips). The remaining 9 generate puzzles client-side.
 
 ### Minigame Design Principles
 - **Clean and elegant:** Simple rules, no tutorial needed beyond a 1-line instruction
@@ -239,10 +270,12 @@ All minigames are inspired by the NYT Games style — clean, elegant, word/logic
   │   ├─ +25 XP to player's clan total
   │   ├─ Random chest drop? (see Section 8)
   │   ├─ 5-minute cooldown starts
-  │   └─ Can play another minigame at same or different location
-  └─ Timer expires → LOSE
+  │   ├─ Can play another minigame at same or different location
+  │   └─ Already-won minigames available as practice (0 XP)
+  └─ Timer expires / Abandon → LOSE
       ├─ 0 XP
       ├─ THIS location locks for THIS player until end of day
+      ├─ Back-nav interception warns: "Leaving will lock this location for the rest of the day"
       └─ Player must go to a different location to play again
 ```
 
@@ -253,11 +286,13 @@ All minigames are inspired by the NYT Games style — clean, elegant, word/logic
 - Specific co-op mechanics vary by minigame (see table above)
 
 ### Anti-Cheat (Minigames)
-- Timer runs server-side (start timestamp recorded at QR scan)
-- Completion packet sent to server: `{ player_id, minigame_id, location_id, score, time_taken, completion_hash }`
-- `completion_hash` = HMAC of (player_id + minigame_id + score + secret_salt) — prevents forged results
+- Timer runs server-side (start timestamp recorded at session creation)
+- Completion packet sent to server: `{ sessionId, result, completionHash, solutionData }`
+- `completionHash` = HMAC of (sessionId + result + salt) — prevents forged results. Salt stored on game session (`_salt` field)
 - Server validates time_taken is within plausible range
-- Rate limiting: no more than 1 minigame completion per 4 minutes per player
+- Server-side puzzle validation for mosaic, path-weaver, grove-equations, bloom-sequence, pips (solution not sent to client)
+- Prevents duplicate wins of the same minigame per day at the same location
+- Rate limiting: 5-minute cooldown between completions per player
 
 ---
 
@@ -466,25 +501,36 @@ Admins can push custom notifications to all players or specific clans at any tim
 
 ### Dashboard Features
 
-**Daily Management:**
-- Set today's location pool (toggle locations on/off)
-- Set today's capturable key space (dropdown of all campus spaces)
-- Generate and download daily QR codes (printable PDF sheet)
-- Preview announcement text
-- **Send custom push notification** (message, target audience, notification type)
+**Daily Management: ✅ Implemented**
+- Set today's location pool (toggle locations on/off, quick select buttons)
+- Set today's capturable key space (name, description, map overlay ID)
+- Draw territory polygon on map editor (polygon points or grid cells)
+- Set difficulty level (easy/medium/hard)
+- Generate and download daily QR codes (printable PDF via jsPDF, per-location QR with payload)
+- Dev-only: test notification triggers for all event windows, scheduled job triggers (daily reset, scoring, asset expiry), player state reset utility
 
-**Location Management:**
+**Location Management: ✅ Implemented**
 - CRUD for all campus locations
 - Set GPS coordinates + geofence radius per location
 - Tag with category, notes, activity log data
 - Set chest drop rate modifier per location
+- Toggle active/inactive status
 
-**Map Calibration:**
-- Upload/replace campus PNG
+**Map Calibration: ✅ Implemented**
+- Upload/replace campus PNG (presigned S3 PUT URL)
 - Set 4 calibration points (pixel coords + GPS coords)
 - Preview calibration accuracy with test points
+- Compute and save affine transformation matrix
 
-**Analytics:**
+**Roster Import: ✅ Implemented**
+- Import clan roster (CSV: email → house mapping)
+- Template download, CSV parsing, success/skip/error counts
+
+**Capture History: ✅ Implemented**
+- View territory captures for current season (table with date, space, clan)
+- Bulk selection and delete with confirmation
+
+**Analytics: ❌ Not yet implemented (stub page)**
 - Daily/weekly/season XP totals per clan
 - Participation rate per clan (% of members who played)
 - Location heatmap (which pins get most traffic)
@@ -492,13 +538,15 @@ Admins can push custom notifications to all players or specific clans at any tim
 - Top collected assets (ranked list for physical display)
 - Capture history timeline
 
-**Season Management:**
+**Custom Notifications: ❌ Not yet implemented (stub page)**
+- Send custom push notification (compose, target, send, history log)
+
+**Season Management: ❌ Not yet implemented (stub page)**
 - Start new season (resets all XP, optionally resets territories)
 - Hall of Fame: season winners, top players, stats
 - Export season data (CSV)
 
-**User Management:**
-- Import clan roster (CSV: email → house mapping)
+**User Management: ❌ Not yet implemented (stub page)**
 - View player list, XP, status
 - Ban/suspend players
 - Manual XP adjustments (if needed)
@@ -512,17 +560,17 @@ Admins can push custom notifications to all players or specific clans at any tim
 | Layer | Technology | Rationale |
 |-------|-----------|-----------|
 | **Mobile App** | React Native (Android) | Cross-platform capable, good GPS/camera/notification APIs, Claude Code friendly |
-| **State Management** | Redux Toolkit or Zustand | Real-time score updates, offline-first minigame state |
-| **Map Rendering** | React Native Canvas or react-native-skia | Render pixel art PNG + overlays + pins + player position |
-| **QR Scanning** | react-native-camera + ML Kit or react-native-vision-camera | Fast QR decode |
-| **GPS** | react-native-geolocation-service | High accuracy mode |
-| **Push Notifications** | Firebase Cloud Messaging (FCM) | Reliable Android push, free tier |
-| **Backend API** | AWS Lambda + API Gateway | Serverless, scales to 500 DAU easily |
+| **State Management** | Zustand | Real-time score updates, offline-first minigame state — simpler than Redux |
+| **Map Rendering** | @shopify/react-native-skia | Render pixel art PNG + overlays + pins + player position (also used by Mosaic minigame) |
+| **QR Scanning** | react-native-vision-camera | Fast QR decode |
+| **GPS** | react-native-geolocation-service | High accuracy mode (FusedLocationProviderClient) |
+| **Push Notifications** | @react-native-firebase/messaging (FCM) | Reliable Android push, free tier |
+| **Backend API** | AWS Lambda + API Gateway (SAM) | Serverless, scales to 500 DAU easily |
 | **Database** | AWS DynamoDB | Real-time reads for clan scores, low latency |
-| **Auth** | AWS Cognito | College email verification, JWT tokens |
+| **Auth** | Google Sign-In + Firebase Authentication | College Google account login, Firebase ID tokens for backend auth |
 | **File Storage** | AWS S3 | Campus map PNG, asset images, QR code PDFs |
-| **Real-time Scores** | AWS AppSync (GraphQL subscriptions) or WebSocket via API Gateway | Live clan score updates |
-| **Admin Dashboard** | React (web) | Hosted on AWS Amplify or S3 + CloudFront |
+| **Real-time Scores** | WebSocket via API Gateway | Live clan score updates, captures, daily resets, with polling fallback |
+| **Admin Dashboard** | React 18 + Vite + Tailwind CSS | Hosted on AWS Amplify or S3 + CloudFront |
 | **Scheduled Jobs** | AWS EventBridge + Lambda | 6 PM scoring, 8 AM day reset, 12 AM asset expiry, QR rotation |
 
 ### Data Model
@@ -532,7 +580,7 @@ Admins can push custom notifications to all players or specific clans at any tim
 user_id          (PK) — UUID
 email            — college email
 display_name     — chosen pseudonym
-clan             — "red" | "blue" | "yellow" | "green"
+clan             — "red" | "blue" | "yellow" | "green" | "purple"
 avatar_config    — JSON { hair_style, hair_color, skin_tone, outfit, accessory }
 today_xp         — int (0–100)
 season_xp        — int (cumulative)
@@ -546,7 +594,7 @@ tutorial_done    — boolean
 
 **Clans Table**
 ```
-clan_id          (PK) — "red" | "blue" | "yellow" | "green"
+clan_id          (PK) — "red" | "blue" | "yellow" | "green" | "purple"
 today_xp         — int (real-time aggregate)
 season_xp        — int
 spaces_captured  — int
@@ -656,12 +704,31 @@ active           — boolean
 ```
 notification_id  (PK) — UUID
 message          — text (140 char max)
-target           — "all" | "red" | "blue" | "yellow" | "green" | custom filter
+target           — "all" | "red" | "blue" | "yellow" | "green" | "purple" | custom filter
 notification_type — "event" | "alert" | "hype" | "info"
 sent_at          — timestamp
 sent_by          — admin user_id
 delivery_count   — int (number of devices reached)
 ```
+
+**WebSocket Connections Table**
+```
+connectionId     (PK) — API Gateway WebSocket connection ID
+userId           — authenticated user
+connectedAt      — timestamp
+ttl              — auto-expire (DynamoDB TTL)
+```
+
+### WebSocket Message Types (Implemented)
+| Type | Direction | Payload | Trigger |
+|------|-----------|---------|---------|
+| `SCORE_UPDATE` | Server → Client | Clan XP totals | Any minigame completion |
+| `CAPTURE` | Server → Client | Winning clan, space name | 6 PM scoring Lambda |
+| `DAILY_RESET` | Server → Client | New day config | 8 AM reset Lambda |
+| `SCORING_COMPLETE` | Server → Client | Final scores, winner | 6 PM scoring Lambda |
+| `SCORES_CHANGED` | Server → Client | Updated leaderboard | Score refresh needed |
+
+Client implements exponential backoff reconnection (max 30s), polling fallback (30s intervals), and cross-midnight stale-state detection.
 
 ---
 
@@ -672,7 +739,7 @@ delivery_count   — int (number of devices reached)
 ### Screen List
 
 1. **Splash Screen** — App logo, loading
-2. **Login Screen** — College email input → verification code
+2. **Login Screen** — Google Sign-In (college Google account via Firebase)
 3. **Tutorial (5 screens)** — Storyline onboarding (see Section 9)
 4. **Character Creation** — Embedded in tutorial Scene 3
 5. **Main Map Screen** — The core screen: pixel art map + pins + scores + player position
@@ -680,7 +747,7 @@ delivery_count   — int (number of devices reached)
 7. **Minigame Selection** — List of 3–5 available minigames at this location
 8. **Minigame Play** — Full-screen minigame with timer
 9. **Result Screen** — Win/lose animation, XP gained, chest drop
-10. **Clan Scoreboard** — Real-time scores for all 4 clans today
+10. **Clan Scoreboard** — Real-time scores for all 5 clans today
 11. **Player Profile** — Avatar, stats, collected assets
 12. **Space Decoration** — Drag-and-drop asset placement on captured space
 13. **Asset Inventory** — Grid view of all collected items
@@ -738,9 +805,7 @@ Landscape lets all 4 minigame cards display in a single row with descriptions vi
 ## 14. API Endpoints
 
 ### Auth
-- `POST /auth/signup` — Register with college email
-- `POST /auth/verify` — Verify email code
-- `POST /auth/login` — Get JWT token
+- `POST /auth/login` — Login with Firebase ID token (Google Sign-In), returns JWT + creates/retrieves user
 
 ### Player
 - `GET /player/profile` — Get own profile
@@ -782,74 +847,75 @@ Landscape lets all 4 minigame cards display in a single row with descriptions vi
 
 ## 15. Phased Build Plan
 
-### Phase 1: Foundation (Week 1–2)
+### Phase 1: Foundation (Week 1–2) — ✅ COMPLETED
 **Goal:** Core infrastructure, auth, and map rendering
 
-- [ ] React Native project setup (Android)
-- [ ] AWS backend: Cognito auth, DynamoDB tables, Lambda functions, API Gateway
-- [ ] College email sign-up / login flow
-- [ ] Clan roster CSV import → auto-assignment
-- [ ] Campus map PNG rendering with pan/zoom
-- [ ] 4-point calibration system (admin uploads map, sets calibration points)
-- [ ] GPS location tracking + player dot on map
-- [ ] Basic admin dashboard (web): login, location CRUD, map calibration
+- [x] React Native project setup (Android, landscape-locked)
+- [x] AWS backend: SAM template, DynamoDB tables (13), Lambda functions, API Gateway (REST + WebSocket)
+- [x] Auth flow (migrated from Cognito → Google Sign-In + Firebase Authentication)
+- [x] Clan roster CSV import → auto-assignment
+- [x] Campus map PNG rendering with pan/zoom (react-native-skia)
+- [x] 4-point affine calibration system (admin uploads map, sets calibration points)
+- [x] GPS location tracking + player dot on map
+- [x] Basic admin dashboard (web): login, location CRUD, map calibration, roster import
 
-### Phase 2: Core Game Loop (Week 3–4)
+### Phase 2: Core Game Loop (Week 3–4) — ✅ COMPLETED
 **Goal:** QR scanning, minigames, XP system
 
-- [ ] QR code generation system (daily rotating, HMAC-signed)
-- [ ] QR scanner in app (camera → decode → verify)
-- [ ] GPS geofence verification
-- [ ] Location pin rendering on map (active, locked, greyed out)
-- [ ] Randomized location assignment per player per day
-- [ ] Build first 3 minigames: Grove Words, Kindred, Stone Pairs
-- [ ] Minigame timer system
-- [ ] XP award on win (25 XP)
-- [ ] Location lock on lose
-- [ ] Daily XP cap (100)
-- [ ] 5-minute cooldown between games
-- [ ] Real-time clan scoreboard (WebSocket or AppSync)
+- [x] QR code generation system (daily rotating, HMAC-signed)
+- [x] QR scanner in app (camera → decode → verify)
+- [x] GPS geofence verification
+- [x] Location pin rendering on map (active, locked, greyed out) with proximity detection
+- [x] Randomized location assignment per player per day
+- [x] Build first 3 minigames: Grove Words, Kindred, Stone Pairs
+- [x] Minigame timer system (client-side countdown + server start timestamp validation)
+- [x] XP award on win (25 XP)
+- [x] Location lock on lose (with back-navigation interception warning)
+- [x] Daily XP cap (100)
+- [x] 5-minute cooldown between games
+- [x] Real-time clan scoreboard (WebSocket with polling fallback)
 
-### Phase 3: Territory & Capture (Week 5)
+### Phase 3: Territory & Capture (Week 5) — ✅ COMPLETED
 **Goal:** Daily capture cycle, map territory system
 
-- [ ] 6 PM scoring trigger (EventBridge → Lambda)
-- [ ] Clan comparison + winner determination
-- [ ] Map territory overlay rendering (clan colors on captured spaces)
-- [ ] Capture history storage
-- [ ] 8 AM daily reset (clear XP, locks, assign new locations)
-- [ ] Admin: set daily capturable space
-- [ ] Push notification system (FCM): day start, events, results
-- [ ] Capture celebration screen
+- [x] 6 PM scoring trigger (EventBridge → Lambda, dailyScoring with tiebreaker)
+- [x] Clan comparison + winner determination (earlier todayXpTimestamp wins ties)
+- [x] Map territory overlay rendering (clan colors on captured spaces)
+- [x] Capture history storage + admin capture history page with bulk delete
+- [x] 8 AM daily reset (clear XP, locks, assign new locations)
+- [x] Admin: set daily capturable space (with polygon/grid territory drawing)
+- [x] Push notification system (FCM): day start, events, results
+- [x] Capture celebration screen (triggered via WebSocket CAPTURE/SCORING_COMPLETE messages)
 
-### Phase 4: Content & Polish (Week 6–7)
+### Phase 4: Content & Polish (Week 6–7) — 🔶 PARTIALLY COMPLETED
 **Goal:** More minigames, assets, decoration, tutorial, streak system
 
-- [ ] Build remaining 9 minigames (12 total)
-- [ ] Co-op mode (shared screen, same clan)
-- [ ] Chest drop system (random after wins)
+- [x] Build all 15 minigames (exceeded original 12 target — Crossvine removed, 4 new added: Firefly Flow, Grove Equations, Bloom Sequence, Shift-Slide)
+- [x] Co-op mode (shared screen, same clan — validation in startMinigame)
+- [x] Chest drop system (random after wins, 15% base rate × location.chestDropModifier)
+- [x] Asset expiry system (midnight cleanup Lambda job)
+- [x] 9 PM asset expiry warning notification
+- [x] Event windows (notifications at break times — test triggers in admin DailyConfig)
+- [x] Streak tracking system (increment on active days, reset on miss — tracked in completeMinigame)
 - [ ] Asset catalog + inventory screen (with expiry countdown timers)
-- [ ] Asset expiry system (midnight cleanup Lambda job)
-- [ ] 9 PM asset expiry warning notification
 - [ ] Space decoration screen (drag-and-drop, landscape layout)
 - [ ] Character creation screen (pixel art customization)
 - [ ] Full tutorial/storyline (Elder Moss, 5 scenes)
-- [ ] Event windows (notifications at break times)
 - [ ] Player profile screen (with streak display + milestone badges)
-- [ ] Streak tracking system (increment on active days, reset on miss)
 
-### Phase 5: Admin & Analytics (Week 7–8)
+### Phase 5: Admin & Analytics (Week 7–8) — 🔶 PARTIALLY COMPLETED
 **Goal:** Full admin dashboard, analytics, season system, custom notifications
 
-- [ ] Admin dashboard: daily config wizard (locations + space + QR generation)
-- [ ] Admin custom push notification system (compose, target, send, history log)
-- [ ] Analytics: clan stats, location heatmap, minigame win rates
+- [x] Admin dashboard: daily config wizard (locations + space + difficulty + QR generation)
+- [x] QR code printable PDF generation (jsPDF, per-location QR with payload)
+- [x] Admin: manual territory override + reset (capture history page with bulk delete)
+- [ ] Admin custom push notification system (compose, target, send, history log) — page is stub
+- [ ] Analytics: clan stats, location heatmap, minigame win rates — page is stub
 - [ ] Asset analytics (top collected, distribution, expiry rates)
 - [ ] Streak analytics (avg streak per clan, participation trends)
-- [ ] Season management (start, end, reset, hall of fame)
+- [ ] Season management (start, end, reset, hall of fame) — page is stub
 - [ ] Season summary screen in app
-- [ ] Admin: manual territory override + reset
-- [ ] QR code printable PDF generation
+- [ ] User management page — page is stub
 
 ### Phase 6: Testing & Launch (Week 8–9)
 **Goal:** Beta testing, bug fixes, soft launch
@@ -866,7 +932,7 @@ Landscape lets all 4 minigame cards display in a single row with descriptions vi
 
 ## 16. Clan Lore & Theming
 
-### The Four Houses
+### The Five Houses
 
 | House | Color | Name | Element | Personality | Icon |
 |-------|-------|------|---------|-------------|------|
@@ -874,6 +940,7 @@ Landscape lets all 4 minigame cards display in a single row with descriptions vi
 | Blue | #2980B9 | **Tide** | Water/Calm | Strategic, wise, patient | Wave |
 | Yellow | #F1C40F | **Bloom** | Sun/Growth | Creative, cheerful, nurturing | Sunflower |
 | Green | #27AE60 | **Gale** | Wind/Forest | Adventurous, free-spirited, resilient | Leaf |
+| Purple | #7D3C98 | **Hearth** | Earth/Home | Warm, grounded, community-focused | Hearth |
 
 ### Cottagecore Art Direction
 - **Color palette:** Warm earth tones, muted pastels, forest greens, honey golds

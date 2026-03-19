@@ -15,6 +15,8 @@ const NAV_ITEMS = [
   { to: '/analytics', label: 'Analytics' },
   { to: '/users', label: 'Users' },
   { to: '/season', label: 'Season' },
+  { to: '/cluster-config', label: 'Clusters' },
+  { to: '/phase1-import', label: 'Phase 1 Import' },
 ];
 
 export function Layout({ children }: { children: ReactNode }) {

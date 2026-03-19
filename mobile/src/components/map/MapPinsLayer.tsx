@@ -46,6 +46,7 @@ export function MapPinsLayer({
           onPress={() => handlePress(location)}
           inRange={inRangeIds?.has(location.locationId)}
           xpExhausted={xpExhaustedIds?.has(location.locationId)}
+          bonusXP={location.bonusXP}
         />
       ))}
     </View>

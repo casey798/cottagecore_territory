@@ -12,7 +12,10 @@ export async function getDailyConfig(date?: string): Promise<DailyConfig | null>
 }
 
 export async function setDailyConfig(
-  config: Omit<DailyConfig, 'status' | 'winnerClan' | 'qrSecret'>,
+  config: Omit<DailyConfig, 'status' | 'winnerClan' | 'qrSecret'> & {
+    activeLocationIds?: string[];
+    targetSpace?: DailyConfig['targetSpace'];
+  },
 ): Promise<DailyConfig> {
   const res = await apiClient.post<DailyConfig>(
     '/admin/daily/config',

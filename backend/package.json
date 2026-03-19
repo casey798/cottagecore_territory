@@ -7,6 +7,10 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint . --ext .ts",
+    "seed:assets": "ts-node scripts/seedAssetCatalog.ts",
+    "seed:locations": "ts-node scripts/seedLocations.ts",
+    "seed:cluster-weights": "ts-node scripts/seedClusterWeights.ts",
+    "seed:user-clusters": "ts-node scripts/seedUserClusters.ts",
     "deploy:dev": "sam deploy --config-env dev",
     "deploy:prod": "sam deploy --config-env prod"
   },

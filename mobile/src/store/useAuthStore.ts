@@ -28,6 +28,7 @@ interface AuthState {
   clan: ClanId | null;
   email: string | null;
   tutorialDone: boolean;
+  tutorialSkipped: boolean;
   isAuthenticated: boolean;
   isHydrated: boolean;
   isLoading: boolean;
@@ -36,6 +37,7 @@ interface AuthState {
   setClan: (clan: ClanId) => Promise<boolean>;
   refreshSession: () => Promise<boolean>;
   setTutorialDone: () => void;
+  setTutorialSkipped: () => void;
   restoreSession: () => Promise<boolean>;
 }
 
@@ -47,6 +49,7 @@ export const useAuthStore = create<AuthState>()(
       clan: null,
       email: null,
       tutorialDone: false,
+      tutorialSkipped: false,
       isAuthenticated: false,
       isHydrated: false,
       isLoading: false,
@@ -97,6 +100,7 @@ export const useAuthStore = create<AuthState>()(
           clan: null,
           email: null,
           tutorialDone: false,
+          tutorialSkipped: false,
           isAuthenticated: false,
           isLoading: false,
         });
@@ -139,6 +143,10 @@ export const useAuthStore = create<AuthState>()(
         set({ tutorialDone: true });
       },
 
+      setTutorialSkipped: () => {
+        set({ tutorialSkipped: true });
+      },
+
       restoreSession: async () => {
         set({ isLoading: true });
         const stored = await getStoredTokens();
@@ -173,6 +181,7 @@ export const useAuthStore = create<AuthState>()(
         token: state.token,
         clan: state.clan,
         tutorialDone: state.tutorialDone,
+        tutorialSkipped: state.tutorialSkipped,
         email: state.email,
         isAuthenticated: state.isAuthenticated,
       }),

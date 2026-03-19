@@ -65,6 +65,14 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
 
   console.log(`Winner: ${winnerClan.clanId} with ${winnerClan.todayXp} XP`);
 
+  // Build clan XP snapshot from the clan records we already read
+  const clanXpSnapshot: Record<string, number> = {};
+  let totalDayXp = 0;
+  for (const clan of clans) {
+    clanXpSnapshot[clan.clanId] = clan.todayXp;
+    totalDayXp += clan.todayXp;
+  }
+
   // Step 4: Get today's daily-config for targetSpace info
   const todayConfig = await getItem<DailyConfig>('daily-config', { date: today });
   if (!todayConfig) {
@@ -82,6 +90,8 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     mapOverlayId: todayConfig.targetSpace.mapOverlayId,
     polygonPoints: todayConfig.targetSpace.polygonPoints,
     gridCells: todayConfig.targetSpace.gridCells,
+    clanXpSnapshot,
+    totalDayXp,
   };
 
   await putItem('captured-spaces', capturedSpace as unknown as Record<string, unknown>);

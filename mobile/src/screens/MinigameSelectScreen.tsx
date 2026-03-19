@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   Alert,
   Switch,
   TextInput,
+  Modal,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -16,12 +17,41 @@ import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { DAILY_XP_CAP } from '@/constants/config';
 import { useGameStore } from '@/store/useGameStore';
+import { useDebugStore } from '@/store/useDebugStore';
 import * as gameApi from '@/api/game';
 import { MinigameInfo } from '@/types';
+import { selectMinigamesByDifficulty } from '@/utils/minigameSelection';
+import { MINIGAME_DIFFICULTY, MinigameDifficulty } from '@/constants/minigames';
 
+const COOP_MINIGAME_IDS: readonly string[] = [
+  'kindred-coop',
+  'cipher-stones-coop',
+  'pips-coop',
+  'stone-pairs-coop',
+  'potion-logic-coop',
+  'vine-trail-coop',
+];
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type SelectRoute = RouteProp<MainModalParamList, 'MinigameSelect'>;
+
+const ALL_MINIGAMES: MinigameInfo[] = [
+  { minigameId: 'grove-words', name: 'Grove Words', timeLimit: 180, description: 'Word puzzle', completed: false },
+  { minigameId: 'kindred', name: 'Kindred', timeLimit: 150, description: 'Pattern matching', completed: false },
+  { minigameId: 'pips', name: 'Pips', timeLimit: 90, description: 'Dice puzzle', completed: false },
+  { minigameId: 'vine-trail', name: 'Vine Trail', timeLimit: 180, description: 'Path tracing', completed: false },
+  { minigameId: 'mosaic', name: 'Mosaic', timeLimit: 90, description: 'Tile assembly', completed: false },
+  { minigameId: 'number-grove', name: 'Number Grove', timeLimit: 120, description: 'Number puzzle', completed: false },
+  { minigameId: 'stone-pairs', name: 'Stone Pairs', timeLimit: 60, description: 'Memory matching', completed: false },
+  { minigameId: 'potion-logic', name: 'Potion Logic', timeLimit: 120, description: 'Logic puzzle', completed: false },
+  { minigameId: 'leaf-sort', name: 'Leaf Sort', timeLimit: 90, description: 'Sort colored beads into jars', completed: false },
+  { minigameId: 'cipher-stones', name: 'Cipher Stones', timeLimit: 120, description: 'Decryption puzzle', completed: false },
+  { minigameId: 'path-weaver', name: 'Path Weaver', timeLimit: 150, description: 'Fill the grid to reveal a hidden image', completed: false },
+  { minigameId: 'firefly-flow', name: 'Firefly Flow', timeLimit: 90, description: 'Connect the pairs and light every tile', completed: false },
+  { minigameId: 'grove-equations', name: 'Grove Equations', timeLimit: 120, description: 'Use 4 numbers and operators to reach the target', completed: false },
+  { minigameId: 'bloom-sequence', name: 'Bloom Sequence', timeLimit: 90, description: 'Find the pattern, complete the sequence', completed: false },
+  { minigameId: 'shift-slide', name: 'Shift & Slide', timeLimit: 90, description: 'Slide the tiles to restore the hidden image', completed: false },
+];
 
 const MINIGAME_ICONS: Record<string, string> = {
   'grove-words': '📝',
@@ -29,62 +59,138 @@ const MINIGAME_ICONS: Record<string, string> = {
   'pips': '🧩',
   'vine-trail': '🌿',
   'mosaic': '🪟',
-  'crossvine': '✏️',
   'number-grove': '🌱',
   'stone-pairs': '🪨',
   'potion-logic': '⚗️',
   'leaf-sort': '🍂',
   'cipher-stones': '🔮',
   'path-weaver': '🎨',
+  'firefly-flow': '🪲',
+  'grove-equations': '🧮',
+  'bloom-sequence': '🌸',
+  'shift-slide': '🧩',
+};
+
+const DIFFICULTY_BADGE: Record<MinigameDifficulty, { label: string; bg: string; text: string }> = {
+  easy:   { label: 'Easy',   bg: PALETTE.softGreen, text: PALETTE.cream },
+  medium: { label: 'Medium', bg: PALETTE.honeyGold, text: PALETTE.darkBrown },
+  hard:   { label: 'Hard',   bg: PALETTE.mutedRose,  text: PALETTE.cream },
 };
 
 export default function MinigameSelectScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<SelectRoute>();
-  const { locationId, locationName } = route.params;
+  const { locationId, locationName, practiceMode } = route.params;
   const lastScanResult = useGameStore((s) => s.lastScanResult);
   const setSessionId = useGameStore((s) => s.setSessionId);
+  const setActiveLocationSession = useGameStore((s) => s.setActiveLocationSession);
+  const clearActiveLocationSession = useGameStore((s) => s.clearActiveLocationSession);
   const todayXp = useGameStore((s) => s.todayXp);
+  const showAllMinigames = useDebugStore((s) => s.showAllMinigames);
   const [coopEnabled, setCoopEnabled] = useState(false);
   const [partnerId, setPartnerId] = useState('');
   const [loading, setLoading] = useState(false);
+  const navigatedForwardRef = useRef(false);
+  const [spaceFactDismissed, setSpaceFactDismissed] = useState(false);
+
+  const locationModifiers = lastScanResult?.locationModifiers;
+  const spaceFact = locationModifiers?.spaceFact ?? null;
+  const isCoopOnly = locationModifiers?.coopOnly ?? false;
+
+  // Fire leave event when navigating back (not forward into a minigame)
+  useEffect(() => {
+    const unsubscribe = navigation.addListener('beforeRemove', () => {
+      if (navigatedForwardRef.current) return; // going into minigame, not leaving
+      const sessionId = useGameStore.getState().activeLocationSessionId;
+      if (sessionId) {
+        gameApi.submitLeave(sessionId, 'navigated_away');
+        clearActiveLocationSession();
+      }
+    });
+    return unsubscribe;
+  }, [navigation, clearActiveLocationSession]);
 
   // If no scan result (e.g. cleared by daily reset), go back to map
+  // Skip this check when debug "Show All Minigames" is active or in practice mode
   useEffect(() => {
-    if (!lastScanResult) {
+    if (!lastScanResult && !practiceMode && !(__DEV__ && showAllMinigames)) {
       navigation.popToTop();
     }
-  }, [lastScanResult, navigation]);
+  }, [lastScanResult, navigation, showAllMinigames, practiceMode]);
 
   // Server is sole source of truth for XP availability
-  const xpAvailable = lastScanResult?.xpAvailable ?? true;
-  const minigames = lastScanResult?.availableMinigames || [];
+  const xpAvailable = practiceMode ? false : (lastScanResult?.xpAvailable ?? true);
+  const fullPool = practiceMode
+    ? ALL_MINIGAMES
+    : __DEV__ && showAllMinigames
+      ? ALL_MINIGAMES
+      : (lastScanResult?.availableMinigames || []);
+
+  // Belt-and-suspenders: client-side filter co-op IDs based on location mode
+  const coopSet = new Set(COOP_MINIGAME_IDS);
+  const filteredPool = fullPool.filter((m) =>
+    isCoopOnly ? coopSet.has(m.minigameId) : !coopSet.has(m.minigameId),
+  );
+
+  // Select once per mount / pool change: 2 Easy + 3 Medium + 1 Hard, shuffled
+  const [minigames] = useState(() =>
+    practiceMode ? ALL_MINIGAMES : selectMinigamesByDifficulty(filteredPool),
+  );
   const allExhausted = minigames.length > 0 && minigames.every((m) => m.completed);
 
   const handleSelect = async (minigame: MinigameInfo) => {
     if (loading) return;
     setLoading(true);
     try {
-      const coopPartnerId = coopEnabled && partnerId.trim() ? partnerId.trim() : null;
-      const result = await gameApi.startMinigame(
-        locationId,
-        minigame.minigameId,
-        coopPartnerId,
-      );
-      if (result.success && result.data) {
-        setSessionId(result.data.sessionId);
-        navigation.replace('MinigamePlay', {
-          sessionId: result.data.sessionId,
-          minigameId: minigame.minigameId,
-          timeLimit: result.data.timeLimit,
-          salt: result.data.salt,
-          locationId,
-          locationName,
-          puzzleData: result.data.puzzleData,
-          xpAvailable,
-        });
+      if (practiceMode) {
+        const result = await gameApi.startPractice(minigame.minigameId);
+        if (result.success && result.data) {
+          setSessionId(result.data.sessionId);
+          setActiveLocationSession(result.data.sessionId);
+          navigatedForwardRef.current = true;
+          navigation.replace('MinigamePlay', {
+            sessionId: result.data.sessionId,
+            minigameId: minigame.minigameId,
+            timeLimit: result.data.timeLimit,
+            salt: result.data.salt,
+            locationId,
+            locationName,
+            puzzleData: result.data.puzzleData,
+            xpAvailable: false,
+          });
+        } else {
+          Alert.alert('Error', result.error?.message || 'Failed to start practice.');
+        }
       } else {
-        Alert.alert('Error', result.error?.message || 'Failed to start minigame.');
+        // At co-op-only locations, partner ID is mandatory
+        if (isCoopOnly && !partnerId.trim()) {
+          Alert.alert('Partner Required', 'Enter your grove companion\'s player ID to continue.');
+          setLoading(false);
+          return;
+        }
+        const coopPartnerId = (isCoopOnly || coopEnabled) && partnerId.trim() ? partnerId.trim() : null;
+        const result = await gameApi.startMinigame(
+          locationId,
+          minigame.minigameId,
+          coopPartnerId,
+        );
+        if (result.success && result.data) {
+          setSessionId(result.data.sessionId);
+          setActiveLocationSession(result.data.sessionId);
+          navigatedForwardRef.current = true;
+          navigation.replace('MinigamePlay', {
+            sessionId: result.data.sessionId,
+            minigameId: minigame.minigameId,
+            timeLimit: result.data.timeLimit,
+            salt: result.data.salt,
+            locationId,
+            locationName,
+            puzzleData: result.data.puzzleData,
+            xpAvailable,
+          });
+        } else {
+          Alert.alert('Error', result.error?.message || 'Failed to start minigame.');
+        }
       }
     } catch {
       Alert.alert('Error', 'Failed to start minigame. Please try again.');
@@ -96,12 +202,23 @@ export default function MinigameSelectScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>{locationName}</Text>
-        <Text style={[styles.xpBadge, !xpAvailable && styles.xpBadgeMuted]}>
-          {todayXp}/{DAILY_XP_CAP} XP
+        <Text style={styles.headerTitle}>
+          {practiceMode ? 'Practice mode' : locationName}
         </Text>
+        {!practiceMode && (
+          <Text style={[styles.xpBadge, !xpAvailable && styles.xpBadgeMuted]}>
+            {todayXp}/{DAILY_XP_CAP} XP
+          </Text>
+        )}
+        {practiceMode && (
+          <View style={styles.practiceBadge}>
+            <Text style={styles.practiceBadgeText}>PRACTICE</Text>
+          </View>
+        )}
       </View>
-      {!xpAvailable && !allExhausted ? (
+      {practiceMode ? (
+        <Text style={styles.subtitle}>Pick any minigame to practice</Text>
+      ) : !xpAvailable && !allExhausted ? (
         <View style={styles.practiceHeader}>
           <View style={styles.practiceBadge}>
             <Text style={styles.practiceBadgeText}>PRACTICE MODE</Text>
@@ -113,11 +230,34 @@ export default function MinigameSelectScreen() {
       ) : (
         <Text style={styles.subtitle}>Choose a minigame</Text>
       )}
+      {/* Space Fact overlay */}
+      {spaceFact && !spaceFactDismissed && !practiceMode && (
+        <Modal transparent animationType="fade">
+          <View style={styles.overlayBackdrop}>
+            <View style={styles.overlayCard}>
+              <Text style={styles.overlayTitle}>Did you know?</Text>
+              <Text style={styles.overlayBody}>{spaceFact}</Text>
+              <TouchableOpacity
+                style={styles.overlayButton}
+                onPress={() => setSpaceFactDismissed(true)}
+              >
+                <Text style={styles.overlayButtonText}>Got it &rarr;</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      )}
+
       <ScrollView
         style={styles.scrollArea}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
+        {isCoopOnly && !practiceMode && (
+          <View style={styles.coopOnlyBanner}>
+            <Text style={styles.coopOnlyText}>🤝 Co-op only at this location</Text>
+          </View>
+        )}
         <View style={styles.grid}>
           {minigames.map((item) => (
             <TouchableOpacity
@@ -146,6 +286,16 @@ export default function MinigameSelectScreen() {
               ) : (
                 <Text style={styles.cardTime}>⏱ {item.timeLimit}s</Text>
               )}
+              {(() => {
+                const diff = MINIGAME_DIFFICULTY[item.minigameId];
+                if (!diff) return null;
+                const badge = DIFFICULTY_BADGE[diff];
+                return (
+                  <View style={[styles.diffBadge, { backgroundColor: badge.bg }]}>
+                    <Text style={[styles.diffBadgeText, { color: badge.text }]}>{badge.label}</Text>
+                  </View>
+                );
+              })()}
             </TouchableOpacity>
           ))}
         </View>
@@ -159,26 +309,44 @@ export default function MinigameSelectScreen() {
         )}
       </ScrollView>
       <View style={styles.bottomBar}>
-        {!allExhausted && (
+        {!allExhausted && !practiceMode && (
           <>
-            <View style={styles.coopRow}>
-              <Text style={styles.coopLabel}>Co-op Mode</Text>
-              <Switch
-                value={coopEnabled}
-                onValueChange={setCoopEnabled}
-                trackColor={{ false: PALETTE.stoneGrey, true: PALETTE.softGreen }}
-                thumbColor={coopEnabled ? PALETTE.honeyGold : PALETTE.cream}
-              />
-            </View>
-            {coopEnabled && (
-              <TextInput
-                style={styles.partnerInput}
-                placeholder="Partner's player ID"
-                placeholderTextColor={PALETTE.stoneGrey}
-                value={partnerId}
-                onChangeText={setPartnerId}
-                autoCapitalize="none"
-              />
+            {isCoopOnly ? (
+              <>
+                <Text style={styles.coopRequiredLabel}>
+                  This location requires a grove companion 🤝
+                </Text>
+                <TextInput
+                  style={styles.partnerInput}
+                  placeholder="Partner's player ID"
+                  placeholderTextColor={PALETTE.stoneGrey}
+                  value={partnerId}
+                  onChangeText={setPartnerId}
+                  autoCapitalize="none"
+                />
+              </>
+            ) : (
+              <>
+                <View style={styles.coopRow}>
+                  <Text style={styles.coopLabel}>Co-op Mode</Text>
+                  <Switch
+                    value={coopEnabled}
+                    onValueChange={setCoopEnabled}
+                    trackColor={{ false: PALETTE.stoneGrey, true: PALETTE.softGreen }}
+                    thumbColor={coopEnabled ? PALETTE.honeyGold : PALETTE.cream}
+                  />
+                </View>
+                {coopEnabled && (
+                  <TextInput
+                    style={styles.partnerInput}
+                    placeholder="Partner's player ID"
+                    placeholderTextColor={PALETTE.stoneGrey}
+                    value={partnerId}
+                    onChangeText={setPartnerId}
+                    autoCapitalize="none"
+                  />
+                )}
+              </>
             )}
           </>
         )}
@@ -327,6 +495,20 @@ const styles = StyleSheet.create({
     color: PALETTE.warmBrown,
     fontFamily: FONTS.bodyBold,
   },
+  diffBadge: {
+    position: 'absolute',
+    bottom: 4,
+    right: 4,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+    opacity: 0.85,
+  },
+  diffBadgeText: {
+    fontSize: 9,
+    fontFamily: FONTS.bodyBold,
+    letterSpacing: 0.3,
+  },
   exhaustedBanner: {
     backgroundColor: PALETTE.cream,
     borderWidth: 1,
@@ -364,6 +546,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
   },
+  coopRequiredLabel: {
+    color: PALETTE.warmBrown,
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
   partnerInput: {
     backgroundColor: PALETTE.cream,
     borderWidth: 1,
@@ -397,5 +586,64 @@ const styles = StyleSheet.create({
     color: PALETTE.cream,
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
+  },
+
+  // ── Space Fact overlay ──
+  overlayBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  overlayCard: {
+    backgroundColor: PALETTE.parchmentBg,
+    borderRadius: 16,
+    borderWidth: 2,
+    borderColor: PALETTE.warmBrown,
+    padding: 24,
+    alignItems: 'center',
+    maxWidth: 340,
+    width: '100%',
+  },
+  overlayTitle: {
+    fontSize: 28,
+    fontFamily: FONTS.headerBold,
+    color: PALETTE.warmBrown,
+    marginBottom: 12,
+  },
+  overlayBody: {
+    fontSize: 15,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.darkBrown,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 20,
+  },
+  overlayButton: {
+    backgroundColor: PALETTE.warmBrown,
+    paddingHorizontal: 28,
+    paddingVertical: 12,
+    borderRadius: 10,
+  },
+  overlayButtonText: {
+    fontSize: 15,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.cream,
+  },
+
+  // ── Co-op only banner ──
+  coopOnlyBanner: {
+    backgroundColor: PALETTE.honeyGold,
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  coopOnlyText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.cream,
   },
 });

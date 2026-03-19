@@ -8,36 +8,65 @@ import { completeMinigameSchema } from '../../shared/schemas';
 import { getTodayISTString, getMidnightISTAsISO, getNext8amISTEpochSeconds } from '../../shared/time';
 import { broadcastScoreUpdate } from '../websocket/broadcast';
 import {
+  applyTap as pipsApplyTap,
+  isSolved as pipsIsSolved,
+  type Grid as PipsGrid,
+} from '../../shared/minigames/pipsGenerator';
+import { puzzleLibrary } from './mosaic/puzzleLibrary';
+import { validateSolution as validateMosaicSolution } from './mosaic/mosaicLogic';
+import { validateSubmission as validatePathWeaverSubmission } from '../../shared/minigames/pathWeaverGenerator';
+import { validateSolution as validateGroveEquationsSolution } from '../../shared/minigames/groveEquationsGenerator';
+import { validateAnswers as validateBloomSequenceAnswers, type Round as BloomSequenceRound } from '../../shared/minigames/bloomSequenceGenerator';
+import type { MosaicTilePlacement } from '../../shared/types';
+import {
   AssetCatalog,
   AssetObtainedFrom,
   ChestDrop,
   GameResult,
   GameSession,
-  Location,
+  LocationMasterConfig,
   PlayerAsset,
   PlayerLock,
+  SOLO_CHEST_WEIGHTS,
+  COOP_CHEST_WEIGHTS,
   User,
 } from '../../shared/types';
 
 const XP_PER_WIN = 25;
 const DAILY_XP_CAP = 100;
-const BASE_CHEST_DROP_RATE = 0.15;
 const TIME_GRACE_SECONDS = 5;
 const MIN_COMPLETION_SECONDS = 5;
 
-async function selectWeightedRandomAsset(): Promise<AssetCatalog | null> {
+function rollRarityTier(weights: ReadonlyArray<{ readonly rarity: string; readonly weight: number }>): string {
+  const totalWeight = weights.reduce((sum, r) => sum + r.weight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const { rarity, weight } of weights) {
+    roll -= weight;
+    if (roll <= 0) return rarity;
+  }
+  return 'common';
+}
+
+async function selectRandomAssetByRarity(
+  weights: ReadonlyArray<{ readonly rarity: string; readonly weight: number }>,
+): Promise<AssetCatalog | null> {
   const { items: catalog } = await scan<AssetCatalog>('asset-catalog');
   if (catalog.length === 0) return null;
 
-  const totalWeight = catalog.reduce((sum, item) => sum + item.dropWeight, 0);
-  let random = Math.random() * totalWeight;
+  const rarity = rollRarityTier(weights);
+  let candidates = catalog.filter((a) => a.rarity === rarity);
 
-  for (const item of catalog) {
-    random -= item.dropWeight;
-    if (random <= 0) return item;
+  // Fallback to common if rolled tier is empty
+  if (candidates.length === 0) {
+    candidates = catalog.filter((a) => a.rarity === 'common');
   }
 
-  return catalog[catalog.length - 1];
+  // Final fallback: any asset
+  if (candidates.length === 0) {
+    candidates = catalog;
+  }
+
+  return candidates[Math.floor(Math.random() * candidates.length)];
 }
 
 async function awardXpAndStreak(
@@ -143,6 +172,30 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.SUSPICIOUS_TIME, 'Completion time is suspiciously fast', 400);
     }
 
+    // 4b. Practice session — skip all competitive logic
+    if (session.practiceSession) {
+      const now = new Date().toISOString();
+      await updateItem(
+        'game-sessions',
+        { sessionId },
+        'SET completedAt = :completedAt, #r = :result, xpEarned = :xp, completionHash = :hash, solutionData = :sd',
+        {
+          ':completedAt': now,
+          ':result': result,
+          ':xp': 0,
+          ':hash': completionHash,
+          ':sd': solutionData ?? {},
+        },
+        { '#r': 'result' }
+      );
+
+      return success({
+        result,
+        xpEarned: 0,
+        practiceMode: true,
+      });
+    }
+
     // 5. Query today's sessions (needed for duplicate check and per-location XP cap)
     const today = getTodayISTString();
     let todaySessions: GameSession[] = [];
@@ -178,7 +231,164 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }
     }
 
-    // No puzzle solution re-validation — solutionData is stored for analytics only.
+    // Pips puzzle solution validation
+    if (session.minigameId === 'pips' && result === GameResult.Win) {
+      const puzzleSolution = (session as unknown as Record<string, unknown>).puzzleSolution as
+        | { solutionTaps: Array<{ row: number; col: number }>; startGrid: PipsGrid }
+        | undefined;
+
+      if (!puzzleSolution || !solutionData) {
+        return error(ErrorCode.INVALID_HASH, 'Pips solution validation failed', 400);
+      }
+
+      const clientTaps = (solutionData as Record<string, unknown>).taps as
+        | Array<{ row: number; col: number }>
+        | undefined;
+      const clientMovesUsed = (solutionData as Record<string, unknown>).movesUsed as
+        | number
+        | undefined;
+
+      if (
+        !clientTaps ||
+        clientMovesUsed == null ||
+        clientMovesUsed !== clientTaps.length ||
+        clientMovesUsed < 1
+      ) {
+        return error(ErrorCode.INVALID_HASH, 'Pips solution validation failed', 400);
+      }
+
+      const sessionMoveLimit = (session as unknown as Record<string, unknown>).puzzleSolution
+        ? puzzleSolution.solutionTaps.length + 3
+        : 0;
+      if (clientMovesUsed > sessionMoveLimit) {
+        return error(ErrorCode.INVALID_HASH, 'Pips solution validation failed', 400);
+      }
+
+      // Replay client taps from startGrid and verify all cells OFF
+      let replayGrid: PipsGrid = puzzleSolution.startGrid.map((r) => [...r]);
+      for (const tap of clientTaps) {
+        replayGrid = pipsApplyTap(replayGrid, tap.row, tap.col);
+      }
+
+      if (!pipsIsSolved(replayGrid)) {
+        return error(ErrorCode.INVALID_HASH, 'Pips solution validation failed', 400);
+      }
+    }
+
+    // Mosaic puzzle solution validation
+    if (session.minigameId === 'mosaic' && result === GameResult.Win) {
+      const puzzleId = (session as unknown as Record<string, unknown>).puzzleId as string | undefined;
+      if (!puzzleId || !solutionData) {
+        return error(ErrorCode.INVALID_HASH, 'Mosaic solution validation failed', 400);
+      }
+
+      const puzzle = puzzleLibrary.find(p => p.id === puzzleId);
+      if (!puzzle) {
+        return error(ErrorCode.INVALID_HASH, 'Mosaic puzzle not found', 400);
+      }
+
+      const clientPlacements = (solutionData as Record<string, unknown>).placements as
+        | MosaicTilePlacement[]
+        | undefined;
+
+      if (!clientPlacements || !Array.isArray(clientPlacements)) {
+        return error(ErrorCode.INVALID_HASH, 'Mosaic solution validation failed', 400);
+      }
+
+      if (!validateMosaicSolution(puzzle, clientPlacements)) {
+        return error(ErrorCode.INVALID_HASH, 'Mosaic solution validation failed', 400);
+      }
+    }
+
+    // Grove Equations puzzle solution validation
+    if (session.minigameId === 'grove-equations' && result === GameResult.Win) {
+      const puzzleSolution = (session as unknown as Record<string, unknown>).puzzleSolution as
+        | { solution: string[]; numbers: number[]; target: number }
+        | undefined;
+
+      if (!puzzleSolution || !solutionData) {
+        return error(ErrorCode.INVALID_HASH, 'Grove Equations solution validation failed', 400);
+      }
+
+      const clientOperators = (solutionData as Record<string, unknown>).operators as
+        | string[]
+        | undefined;
+
+      if (!clientOperators || !Array.isArray(clientOperators) || clientOperators.length !== 3) {
+        return error(ErrorCode.INVALID_HASH, 'Grove Equations solution validation failed', 400);
+      }
+
+      if (!validateGroveEquationsSolution(puzzleSolution.numbers, clientOperators as Parameters<typeof validateGroveEquationsSolution>[1], puzzleSolution.target)) {
+        return error(ErrorCode.INVALID_HASH, 'Grove Equations solution validation failed', 400);
+      }
+    }
+
+    // Bloom Sequence puzzle solution validation
+    if (session.minigameId === 'bloom-sequence' && result === GameResult.Win) {
+      const puzzleSolution = (session as unknown as Record<string, unknown>).puzzleSolution as
+        | { rounds: BloomSequenceRound[] }
+        | undefined;
+
+      if (!puzzleSolution || !solutionData) {
+        return error(ErrorCode.INVALID_HASH, 'Bloom Sequence solution validation failed', 400);
+      }
+
+      const clientAnswers = (solutionData as Record<string, unknown>).answers as
+        | number[]
+        | undefined;
+
+      if (!clientAnswers || !Array.isArray(clientAnswers) || clientAnswers.length !== 3) {
+        return error(ErrorCode.INVALID_HASH, 'Bloom Sequence solution validation failed', 400);
+      }
+
+      if (!validateBloomSequenceAnswers(puzzleSolution.rounds, clientAnswers)) {
+        return error(ErrorCode.INVALID_HASH, 'Bloom Sequence solution validation failed', 400);
+      }
+    }
+
+    // Path Weaver puzzle solution validation
+    if (session.minigameId === 'path-weaver' && result === GameResult.Win) {
+      const storedSolution = (session as unknown as Record<string, unknown>).puzzleSolution as
+        | number[][]
+        | undefined;
+
+      if (!storedSolution || !solutionData) {
+        return error(ErrorCode.INVALID_HASH, 'Path Weaver solution validation failed', 400);
+      }
+
+      const clientGrid = (solutionData as Record<string, unknown>).grid as
+        | number[][]
+        | undefined;
+
+      if (!clientGrid || !Array.isArray(clientGrid)) {
+        return error(ErrorCode.INVALID_HASH, 'Path Weaver solution validation failed', 400);
+      }
+
+      if (!validatePathWeaverSubmission(storedSolution, clientGrid)) {
+        return error(ErrorCode.INVALID_HASH, 'Path Weaver solution validation failed', 400);
+      }
+    }
+
+    // Shift & Slide puzzle solution validation
+    if (session.minigameId === 'shift-slide' && result === GameResult.Win) {
+      if (!solutionData) {
+        return error(ErrorCode.INVALID_HASH, 'Shift & Slide solution validation failed', 400);
+      }
+
+      const finalBoard = (solutionData as Record<string, unknown>).finalBoard as number[] | undefined;
+      const moveCount = (solutionData as Record<string, unknown>).moveCount as number | undefined;
+
+      if (!Array.isArray(finalBoard) || finalBoard.length !== 9) {
+        return error(ErrorCode.INVALID_HASH, 'Shift & Slide solution validation failed', 400);
+      }
+
+      const boardIsSolved = finalBoard.every((val: number, i: number) => val === i);
+      const plausibleMoves = typeof moveCount === 'number' && moveCount >= 1 && moveCount <= 2000;
+
+      if (!boardIsSolved || !plausibleMoves) {
+        return error(ErrorCode.INVALID_HASH, 'Shift & Slide solution validation failed', 400);
+      }
+    }
 
     const now = new Date().toISOString();
     const gameResult = result as GameResult;
@@ -205,6 +415,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       let chestDrop: ChestDrop = { dropped: false };
       let chestAssetId: string | null = null;
       let chestDropped = false;
+      let partnerChestDrop: ChestDrop = { dropped: false };
 
       if (shouldAwardXp) {
         // First win at this location — attempt full rewards (cap-safe)
@@ -216,31 +427,92 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
         // Atomic clan XP (only if XP was actually awarded)
         if (clanId && xpToAward > 0) {
+          // First win of the day: todayXp went from 0 → 25, so increment todayParticipants
+          const isFirstWinToday = newTodayXp === XP_PER_WIN;
+          const clanUpdateExpr = isFirstWinToday
+            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
+            : 'SET todayXpTimestamp = :ts ADD todayXp :xp';
+          const clanUpdateValues = isFirstWinToday
+            ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
+            : { ':ts': now, ':xp': XP_PER_WIN };
           const updatedClan = await updateItem(
             'clans',
             { clanId },
-            'SET todayXpTimestamp = :ts ADD todayXp :xp',
-            { ':ts': now, ':xp': XP_PER_WIN }
+            clanUpdateExpr,
+            clanUpdateValues
           );
           clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
         }
 
-        // Chest drop (only if XP was actually awarded)
-        if (xpToAward > 0) {
-          const location = await getItem<Location>('locations', { locationId: session.locationId });
-          const chestDropModifier = location?.chestDropModifier ?? 1;
-          chestDropped = Math.random() < BASE_CHEST_DROP_RATE * chestDropModifier;
+        // Chest drop — 100% on XP-earning wins, rarity is weighted random
+        const isCoop = session.coopPartnerId !== null;
+        const chestWeights = isCoop ? COOP_CHEST_WEIGHTS : SOLO_CHEST_WEIGHTS;
 
-          if (chestDropped) {
-            const asset = await selectWeightedRandomAsset();
-            if (asset) {
-              const userAssetId = crypto.randomUUID();
-              chestAssetId = asset.assetId;
+        if (xpToAward === XP_PER_WIN) {
+          const asset = await selectRandomAssetByRarity(chestWeights);
+          if (asset) {
+            chestDropped = true;
+            const userAssetId = crypto.randomUUID();
+            chestAssetId = asset.assetId;
 
-              const playerAsset: PlayerAsset = {
-                userAssetId,
-                userId,
+            const playerAsset: PlayerAsset = {
+              userAssetId,
+              userId,
+              assetId: asset.assetId,
+              obtainedAt: now,
+              obtainedFrom: AssetObtainedFrom.Chest,
+              locationId: session.locationId,
+              placed: false,
+              expiresAt: getMidnightISTAsISO(),
+              expired: false,
+            };
+
+            await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
+
+            chestDrop = {
+              dropped: true,
+              asset: {
                 assetId: asset.assetId,
+                name: asset.name,
+                category: asset.category,
+                rarity: asset.rarity,
+                imageKey: asset.imageKey,
+              },
+            };
+          }
+        }
+
+        // Co-op: repeat XP/streak for partner + independent chest roll + cross-clan XP
+        if (session.coopPartnerId) {
+          const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
+          const partnerClanId = coopResult.clan;
+
+          // Credit partner's own clan (cross-clan support)
+          if (partnerClanId && coopResult.xpActuallyAwarded) {
+            const coopIsFirstWin = coopResult.newTodayXp === XP_PER_WIN;
+            const coopClanExpr = coopIsFirstWin
+              ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
+              : 'SET todayXpTimestamp = :ts ADD todayXp :xp';
+            const coopClanValues = coopIsFirstWin
+              ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
+              : { ':ts': now, ':xp': XP_PER_WIN };
+            await updateItem(
+              'clans',
+              { clanId: partnerClanId },
+              coopClanExpr,
+              coopClanValues
+            );
+          }
+
+          // Independent chest roll for partner
+          if (coopResult.xpActuallyAwarded) {
+            const partnerAsset = await selectRandomAssetByRarity(COOP_CHEST_WEIGHTS);
+            if (partnerAsset) {
+              const partnerUserAssetId = crypto.randomUUID();
+              const partnerPlayerAsset: PlayerAsset = {
+                userAssetId: partnerUserAssetId,
+                userId: session.coopPartnerId,
+                assetId: partnerAsset.assetId,
                 obtainedAt: now,
                 obtainedFrom: AssetObtainedFrom.Chest,
                 locationId: session.locationId,
@@ -248,34 +520,19 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
                 expiresAt: getMidnightISTAsISO(),
                 expired: false,
               };
+              await putItem('player-assets', partnerPlayerAsset as unknown as Record<string, unknown>);
 
-              await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
-
-              chestDrop = {
+              partnerChestDrop = {
                 dropped: true,
                 asset: {
-                  assetId: asset.assetId,
-                  name: asset.name,
-                  category: asset.category,
-                  rarity: asset.rarity,
-                  imageKey: asset.imageKey,
+                  assetId: partnerAsset.assetId,
+                  name: partnerAsset.name,
+                  category: partnerAsset.category,
+                  rarity: partnerAsset.rarity,
+                  imageKey: partnerAsset.imageKey,
                 },
               };
             }
-          }
-        }
-
-        // Co-op: repeat XP/streak for partner
-        if (session.coopPartnerId) {
-          const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
-          if (clanId && coopResult.xpActuallyAwarded) {
-            const updatedClan = await updateItem(
-              'clans',
-              { clanId },
-              'SET todayXpTimestamp = :ts ADD todayXp :xp',
-              { ':ts': now, ':xp': XP_PER_WIN }
-            );
-            clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
           }
         }
       } else {
@@ -316,6 +573,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         newTodayXp,
         clanTodayXp,
         chestDrop,
+        partnerChestDrop,
         capReached,
       });
     } else {
@@ -332,6 +590,25 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       };
 
       await putItem('player-locks', playerLock as unknown as Record<string, unknown>);
+
+      // 1b. Lock partner at co-op-only locations
+      if (session.coopPartnerId) {
+        let isCoopOnlyLocation = false;
+        try {
+          const mc = await getItem<LocationMasterConfig>('location-master-config', { locationId: session.locationId });
+          isCoopOnlyLocation = mc?.coopOnly ?? false;
+        } catch (e) {
+          console.warn('[completeMinigame] Failed to check coopOnly for partner lock (non-fatal):', e);
+        }
+        if (isCoopOnlyLocation) {
+          const partnerLock: PlayerLock = {
+            dateUserLocation: `${today}#${session.coopPartnerId}#${session.locationId}`,
+            lockedAt: now,
+            ttl,
+          };
+          await putItem('player-locks', partnerLock as unknown as Record<string, unknown>);
+        }
+      }
 
       // 2. Update session
       await updateItem(

@@ -3,10 +3,12 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { ClanId, ChestDrop } from '@/types';
+import { useAssetStore } from '@/store/useAssetStore';
+import UnplacedAssetsBadge from '@/components/common/UnplacedAssetsBadge';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useGameStore } from '@/store/useGameStore';
 import { getTodayISTString } from '@/utils/time';
@@ -19,9 +21,12 @@ import QRScannerScreen from '@/screens/QRScannerScreen';
 import MinigameSelectScreen from '@/screens/MinigameSelectScreen';
 import MinigamePlayScreen from '@/screens/MinigamePlayScreen';
 import ResultScreen from '@/screens/ResultScreen';
+import SpaceSentimentScreen from '@/screens/SpaceSentimentScreen';
 import SpaceDecorationScreen from '@/screens/SpaceDecorationScreen';
 import CaptureCelebrationScreen from '@/screens/CaptureCelebrationScreen';
 import SettingsScreen from '@/screens/SettingsScreen';
+import CharacterCreationScreen from '@/screens/CharacterCreationScreen';
+import SeasonSummaryScreen from '@/screens/SeasonSummaryScreen';
 
 export type MainTabParamList = {
   Map: undefined;
@@ -33,7 +38,7 @@ export type MainTabParamList = {
 export type MainModalParamList = {
   Tabs: undefined;
   QRScanner: { locationId?: string; locationName?: string } | undefined;
-  MinigameSelect: { locationId: string; locationName: string };
+  MinigameSelect: { locationId: string; locationName: string; practiceMode?: boolean };
   MinigamePlay: {
     sessionId: string;
     minigameId: string;
@@ -55,10 +60,26 @@ export type MainModalParamList = {
     locationId?: string;
     locationName?: string;
     minigameId?: string;
+    sessionId?: string;
+    practiceMode?: boolean;
+    bonusXpTriggered?: boolean;
+    linkedLocation?: { locationId: string; name: string } | null;
   };
-  SpaceDecoration: { spaceId: string };
+  SpaceSentiment: {
+    sessionId: string;
+    locationName: string;
+  };
+  SpaceDecoration: {
+    spaceId: string;
+    spaceName: string;
+    clan: ClanId;
+    gridCells: Array<{ x: number; y: number }>;
+    polygonPoints: Array<{ x: number; y: number }>;
+  };
   CaptureCelebration: { clan: ClanId; spaceName: string };
+  SeasonSummary: undefined;
   Settings: undefined;
+  CharacterCreation: undefined;
 };
 
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -69,6 +90,16 @@ function TabLabel({ label, focused }: { label: string; focused: boolean }) {
     <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>
       {label}
     </Text>
+  );
+}
+
+function InventoryTabLabel({ focused }: { focused: boolean }) {
+  const unplacedCount = useAssetStore((s) => s.unplacedCount);
+  return (
+    <View style={{ position: 'relative' }}>
+      <TabLabel label="Inventory" focused={focused} />
+      <UnplacedAssetsBadge count={unplacedCount} />
+    </View>
   );
 }
 
@@ -113,9 +144,7 @@ function TabNavigator() {
         name="Inventory"
         component={AssetInventoryScreen}
         options={{
-          tabBarLabel: ({ focused }) => (
-            <TabLabel label="Inventory" focused={focused} />
-          ),
+          tabBarLabel: ({ focused }) => <InventoryTabLabel focused={focused} />,
         }}
       />
     </Tab.Navigator>
@@ -191,6 +220,11 @@ export function MainStack() {
         options={{ presentation: 'modal' }}
       />
       <ModalStack.Screen
+        name="SpaceSentiment"
+        component={SpaceSentimentScreen}
+        options={{ presentation: 'fullScreenModal', gestureEnabled: false }}
+      />
+      <ModalStack.Screen
         name="SpaceDecoration"
         component={SpaceDecorationScreen}
         options={{ presentation: 'modal' }}
@@ -201,8 +235,18 @@ export function MainStack() {
         options={{ presentation: 'fullScreenModal' }}
       />
       <ModalStack.Screen
+        name="SeasonSummary"
+        component={SeasonSummaryScreen}
+        options={{ presentation: 'fullScreenModal' }}
+      />
+      <ModalStack.Screen
         name="Settings"
         component={SettingsScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <ModalStack.Screen
+        name="CharacterCreation"
+        component={CharacterCreationScreen}
         options={{ presentation: 'modal' }}
       />
     </ModalStack.Navigator>

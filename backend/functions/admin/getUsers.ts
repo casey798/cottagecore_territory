@@ -1,44 +1,41 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
-import { query } from '../../shared/db';
+import { scan, query } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
-import { User } from '../../shared/types';
+import type { User } from '../../shared/types';
 
-function adminCheck(event: APIGatewayProxyEvent): APIGatewayProxyResult | null {
-  const authorizer = event.requestContext.authorizer;
-  if (!authorizer) return error(ErrorCode.UNAUTHORIZED, 'Unauthorized', 401);
-  if (authorizer.isAdmin !== 'true') {
-    return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
-  }
-  return null;
-}
-
-export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
-  const denied = adminCheck(event);
-  if (denied) return denied;
-
+export async function handler(
+  event: APIGatewayProxyEvent
+): Promise<APIGatewayProxyResult> {
   try {
-    const email = event.queryStringParameters?.email;
-    if (!email) {
-      return error(ErrorCode.VALIDATION_ERROR, 'email query parameter is required', 400);
+    const authorizer = event.requestContext.authorizer;
+    if (!authorizer || authorizer.isAdmin !== 'true') {
+      return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
     }
 
-    const { items } = await query<User>(
-      'users',
-      'email = :email',
-      { ':email': email },
-      { indexName: 'EmailIndex' },
-    );
+    // If email query param is provided, do a targeted lookup
+    const email = event.queryStringParameters?.email;
+    if (email) {
+      const { items } = await query<User>(
+        'users',
+        'email = :email',
+        { ':email': email },
+        { indexName: 'EmailIndex' },
+      );
+      return success({ users: items });
+    }
 
-    return success({
-      users: items.map((u) => ({
-        userId: u.userId,
-        email: u.email,
-        displayName: u.displayName,
-        clan: u.clan,
-      })),
-    });
+    // Otherwise, full table scan for admin user list
+    const allUsers: User[] = [];
+    let lastKey: Record<string, unknown> | undefined;
+    do {
+      const result = await scan<User>('users', { exclusiveStartKey: lastKey });
+      allUsers.push(...result.items);
+      lastKey = result.lastEvaluatedKey;
+    } while (lastKey);
+
+    return success({ users: allUsers });
   } catch (err) {
     console.error('getUsers error:', err);
     return error(ErrorCode.INTERNAL_ERROR, 'Internal server error', 500);
   }
-};
+}

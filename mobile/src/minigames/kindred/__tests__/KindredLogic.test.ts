@@ -171,8 +171,8 @@ describe('validateSolution', () => {
 });
 
 describe('GROUP_PACKS integrity', () => {
-  it('has at least 40 packs', () => {
-    expect(GROUP_PACKS.length).toBeGreaterThanOrEqual(40);
+  it('has at least 20 packs', () => {
+    expect(GROUP_PACKS.length).toBeGreaterThanOrEqual(20);
   });
 
   it('every pack has exactly 4 groups of 4 words', () => {

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, BackHandler, Modal, Pressable } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, BackHandler, Modal, Pressable } from 'react-native';
 import { useNavigation, useRoute, RouteProp, EventArg } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
@@ -16,6 +16,24 @@ import { lockLandscape, lockPortrait } from '@/hooks/useScreenOrientation';
 import GroveWordsGame from '@/minigames/grove-words/GroveWordsGame';
 import KindredGame from '@/minigames/kindred/KindredGame';
 import StonePairsGame from '@/minigames/stone-pairs/StonePairsGame';
+import PipsGame from '@/minigames/pips/PipsGame';
+import VineTrailGame from '@/minigames/vine-trail/VineTrailGame';
+import MosaicGame from '@/minigames/mosaic/MosaicGame';
+import FireflyFlowGame from '@/minigames/firefly-flow/FireflyFlowGame';
+import CipherStonesGame from '@/minigames/cipher-stones/CipherStonesGame';
+import NumberGroveGame from '@/minigames/number-grove/NumberGroveGame';
+import PotionLogicGame from '@/minigames/potion-logic/PotionLogicGame';
+import PathWeaverGame from '@/minigames/path-weaver/PathWeaverGame';
+import LeafSortGame from '@/minigames/leaf-sort/LeafSortGame';
+import GroveEquationsGame from '@/minigames/grove-equations/GroveEquationsGame';
+import BloomSequenceGame from '@/minigames/bloom-sequence/BloomSequenceGame';
+import ShiftSlideGame from '@/minigames/shift-slide/ShiftSlideGame';
+import KindredCoopGame from '@/minigames/kindred-coop/KindredCoopGame';
+import CipherStonesCoopGame from '@/minigames/cipher-stones-coop/CipherStonesCoopGame';
+import PipsCoopGame from '@/minigames/pips-coop/PipsCoopGame';
+import StonePairsCoopGame from '@/minigames/stone-pairs-coop/StonePairsCoopGame';
+import PotionLogicCoopGame from '@/minigames/potion-logic-coop/PotionLogicCoopGame';
+import VineTrailCoopGame from '@/minigames/vine-trail-coop/VineTrailCoopGame';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type PlayRoute = RouteProp<MainModalParamList, 'MinigamePlay'>;
@@ -26,19 +44,46 @@ const MINIGAME_NAMES: Record<string, string> = {
   'pips': 'Pips',
   'vine-trail': 'Vine Trail',
   'mosaic': 'Mosaic',
-  'crossvine': 'Crossvine',
   'number-grove': 'Number Grove',
   'stone-pairs': 'Stone Pairs',
   'potion-logic': 'Potion Logic',
   'leaf-sort': 'Leaf Sort',
   'cipher-stones': 'Cipher Stones',
   'path-weaver': 'Path Weaver',
+  'firefly-flow': 'Firefly Flow',
+  'grove-equations': 'Grove Equations',
+  'bloom-sequence': 'Bloom Sequence',
+  'shift-slide': 'Shift & Slide',
+  'kindred-coop': 'Kindred Co-op',
+  'cipher-stones-coop': 'Cipher Stones Co-op',
+  'pips-coop': 'Pips Co-op',
+  'stone-pairs-coop': 'Stone Pairs Co-op',
+  'potion-logic-coop': 'Potion Logic Co-op',
+  'vine-trail-coop': 'Vine Trail Co-op',
 };
 
 const IMPLEMENTED_MINIGAMES: Record<string, React.ComponentType<MinigamePlayProps>> = {
   'grove-words': GroveWordsGame,
   'kindred': KindredGame,
   'stone-pairs': StonePairsGame,
+  'pips': PipsGame,
+  'vine-trail': VineTrailGame,
+  'mosaic': MosaicGame,
+  'firefly-flow': FireflyFlowGame,
+  'cipher-stones': CipherStonesGame,
+  'number-grove': NumberGroveGame,
+  'potion-logic': PotionLogicGame,
+  'path-weaver': PathWeaverGame,
+  'leaf-sort': LeafSortGame,
+  'grove-equations': GroveEquationsGame,
+  'bloom-sequence': BloomSequenceGame,
+  'shift-slide': ShiftSlideGame,
+  'kindred-coop': KindredCoopGame,
+  'cipher-stones-coop': CipherStonesCoopGame,
+  'pips-coop': PipsCoopGame,
+  'stone-pairs-coop': StonePairsCoopGame,
+  'potion-logic-coop': PotionLogicCoopGame,
+  'vine-trail-coop': VineTrailCoopGame,
 };
 
 interface MinigameCompleteData {
@@ -48,7 +93,7 @@ interface MinigameCompleteData {
   solutionData: Record<string, unknown>;
 }
 
-const LANDSCAPE_MINIGAMES = new Set(['vine-trail', 'crossvine', 'leaf-sort']);
+const LANDSCAPE_MINIGAMES = new Set<string>([]);
 
 function MinigamePlaceholder({
   minigameId,
@@ -124,7 +169,7 @@ const placeholderStyles = StyleSheet.create({
 export default function MinigamePlayScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<PlayRoute>();
-  const { sessionId, minigameId, timeLimit, salt, locationId, locationName, xpAvailable } = route.params;
+  const { sessionId, minigameId, timeLimit, salt, locationId, locationName, xpAvailable, puzzleData } = route.params;
 
   // Lock landscape for the 4 landscape minigames, restore portrait on unmount
   useEffect(() => {
@@ -145,7 +190,7 @@ export default function MinigamePlayScreen() {
 
   const handleComplete = useCallback(
     async (data: MinigameCompleteData) => {
-      if (hasCompletedRef.current || submitting) return;
+      if (hasCompletedRef.current) return;
       hasCompletedRef.current = true;
       setSubmitting(true);
 
@@ -161,6 +206,33 @@ export default function MinigamePlayScreen() {
         completionHash = generateCompletionHash(sessionId, userId, finalResult, salt);
       }
 
+      const isPractice = locationId === 'practice';
+
+      // Fallback result params — used when the API call fails or is skipped
+      const fallbackParams = {
+        result: finalResult === 'win' ? 'win' as const : 'lose' as const,
+        xpEarned: 0,
+        xpAwarded: false,
+        newTodayXp: todayXp,
+        clanTodayXp: 0,
+        chestDrop: undefined,
+        locationLocked: finalResult !== 'win',
+        locationId,
+        locationName,
+        minigameId,
+        sessionId,
+        practiceMode: isPractice,
+      };
+
+      // For losses/timeouts: fire-and-forget, navigate immediately
+      if (finalResult !== 'win') {
+        gameApi.completeMinigame(sessionId, finalResult, completionHash, timeTaken, data.solutionData)
+          .catch((err) => console.warn('Loss submission failed (non-blocking):', err));
+        navigation.replace('Result', fallbackParams);
+        return;
+      }
+
+      // For wins: attempt submission, but always navigate
       try {
         const result = await gameApi.completeMinigame(
           sessionId,
@@ -171,7 +243,7 @@ export default function MinigamePlayScreen() {
         );
 
         if (result.success && result.data) {
-          if (result.data.result === 'win') {
+          if (result.data.result === 'win' && !isPractice) {
             recordWin();
           }
           navigation.replace('Result', {
@@ -185,19 +257,21 @@ export default function MinigamePlayScreen() {
             locationId,
             locationName,
             minigameId,
+            sessionId,
+            practiceMode: isPractice,
+            bonusXpTriggered: result.data.bonusXpTriggered,
+            linkedLocation: result.data.linkedLocation,
           });
         } else {
-          Alert.alert('Error', result.error?.message || 'Failed to submit result.');
-          hasCompletedRef.current = false;
-          setSubmitting(false);
+          console.warn('Win submission rejected:', result.error?.message);
+          navigation.replace('Result', fallbackParams);
         }
-      } catch {
-        Alert.alert('Error', 'Network error. Please try again.');
-        hasCompletedRef.current = false;
-        setSubmitting(false);
+      } catch (err) {
+        console.warn('Win submission failed (network):', err);
+        navigation.replace('Result', fallbackParams);
       }
     },
-    [sessionId, userId, submitting, navigation, recordWin, salt],
+    [sessionId, userId, navigation, recordWin, salt, todayXp, locationId, locationName, minigameId],
   );
 
   const handleMinigameComplete = useCallback(
@@ -253,17 +327,19 @@ export default function MinigamePlayScreen() {
     pendingNavActionRef.current = null;
   }, []);
 
-  // Auto-lose on timer expiry
+  const gameName = MINIGAME_NAMES[minigameId] || minigameId;
+  const MinigameComponent = IMPLEMENTED_MINIGAMES[minigameId];
+
+  // Auto-lose on timer expiry — only for placeholder minigames.
+  // Implemented minigames handle their own timeout internally and show
+  // a GameCompleteOverlay before calling onComplete.
   React.useEffect(() => {
-    if (countdown.isExpired && !hasCompletedRef.current) {
+    if (countdown.isExpired && !hasCompletedRef.current && !MinigameComponent) {
       const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
       const hash = generateClientCompletionHash(sessionId, 'timeout', elapsed);
       handleComplete({ result: 'timeout', completionHash: hash, timeTaken: elapsed, solutionData: {} });
     }
-  }, [countdown.isExpired, handleComplete, sessionId]);
-
-  const gameName = MINIGAME_NAMES[minigameId] || minigameId;
-  const MinigameComponent = IMPLEMENTED_MINIGAMES[minigameId];
+  }, [countdown.isExpired, handleComplete, sessionId, MinigameComponent]);
 
   return (
     <View style={styles.container}>
@@ -284,9 +360,11 @@ export default function MinigamePlayScreen() {
       <View style={styles.gameArea}>
         {MinigameComponent ? (
           <MinigameComponent
+            key={sessionId}
             sessionId={sessionId}
             timeLimit={timeLimit}
             onComplete={handleMinigameComplete}
+            puzzleData={puzzleData}
           />
         ) : (
           <MinigamePlaceholder

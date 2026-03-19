@@ -16,6 +16,8 @@ import { NotificationsPage } from '@/pages/NotificationsPage';
 import { UsersPage } from '@/pages/UsersPage';
 import { SeasonPage } from '@/pages/SeasonPage';
 import { CaptureHistoryPage } from '@/pages/CaptureHistoryPage';
+import { ClusterConfigPage } from '@/pages/ClusterConfigPage';
+import { Phase1ImportPage } from '@/pages/Phase1ImportPage';
 
 const GOOGLE_CLIENT_ID =
   '425457815141-c7qp4l9sjkn5fgcv9t3odnu83j4nd3nh.apps.googleusercontent.com';
@@ -182,6 +184,22 @@ export function App() {
               element={
                 <ProtectedLayout>
                   <CaptureHistoryPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/cluster-config"
+              element={
+                <ProtectedLayout>
+                  <ClusterConfigPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/phase1-import"
+              element={
+                <ProtectedLayout>
+                  <Phase1ImportPage />
                 </ProtectedLayout>
               }
             />

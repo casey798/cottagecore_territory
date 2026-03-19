@@ -1,4 +1,4 @@
-import { getAuth, signInWithCredential, signOut as firebaseSignOut, GoogleAuthProvider } from '@react-native-firebase/auth';
+import { getAuth, getIdToken, signInWithCredential, signOut as firebaseSignOut, GoogleAuthProvider } from '@react-native-firebase/auth';
 import { GoogleSignin } from '@react-native-google-signin/google-signin';
 import { BASE_URL, ENDPOINTS } from '@/constants/api';
 import { ApiResponse, ClanId } from '@/types';
@@ -57,7 +57,7 @@ export async function googleSignIn(): Promise<ApiResponse<AuthResult>> {
       };
     }
 
-    const firebaseIdToken = await firebaseUser.getIdToken();
+    const firebaseIdToken = await getIdToken(firebaseUser);
 
     // Send Firebase ID token to backend
     const response = await fetch(`${BASE_URL}${ENDPOINTS.AUTH_GOOGLE_LOGIN}`, {
@@ -105,7 +105,7 @@ export async function refreshFirebaseToken(): Promise<string | null> {
   try {
     const user = getAuth().currentUser;
     if (!user) return null;
-    return await user.getIdToken(true);
+    return await getIdToken(user, true);
   } catch {
     return null;
   }

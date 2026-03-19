@@ -3,7 +3,7 @@ import { getItem, putItem, scan, updateItem, batchWrite, deleteItem } from '../.
 import { getTodayISTString, toISTString } from '../../shared/time';
 import { sendToAll } from '../../shared/notifications';
 import { assignLocationsForAllPlayers } from '../../shared/locationAssignment';
-import { User, DailyConfig, Clan, ClanId, DailyConfigStatus, PlayerAssignment, PlayerLock, WsConnection } from '../../shared/types';
+import { User, DailyConfig, Clan, ClanId, DailyConfigStatus, GameSession, LocationMasterConfig, PlayerAssignment, PlayerLock, WsConnection } from '../../shared/types';
 import { addDays } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
@@ -48,13 +48,29 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     );
   }
 
+  // Step 2b: Reset streaks for users who missed yesterday
+  const yesterdayIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000 - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  let streaksReset = 0;
+  for (const user of allUsers) {
+    if (user.lastActiveDate && user.lastActiveDate !== yesterdayIST) {
+      await updateItem(
+        'users',
+        { userId: user.userId },
+        'SET currentStreak = :zero',
+        { ':zero': 0 }
+      );
+      streaksReset++;
+    }
+  }
+  console.log(`Reset ${streaksReset} user streaks (missed ${yesterdayIST})`);
+
   // Step 3: Reset all 5 clans: todayXp = 0, clear todayXpTimestamp
   const clanIds = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
   for (const clanId of clanIds) {
     await updateItem(
       'clans',
       { clanId },
-      'SET todayXp = :zero REMOVE todayXpTimestamp',
+      'SET todayXp = :zero, todayParticipants = :zero REMOVE todayXpTimestamp',
       { ':zero': 0 }
     );
   }
@@ -144,6 +160,102 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     }
   } catch (broadcastErr) {
     console.error('WebSocket broadcast failed (non-fatal):', broadcastErr);
+  }
+
+  // Step 8: Revert bonusXP on all LocationMasterConfig records (Dead Zone Revival auto-clear)
+  try {
+    const boostedLocations: LocationMasterConfig[] = [];
+    let bmLastKey: Record<string, unknown> | undefined;
+    do {
+      const result = await scan<LocationMasterConfig>('location-master-config', {
+        filterExpression: 'bonusXP = :true',
+        expressionValues: { ':true': true },
+        exclusiveStartKey: bmLastKey,
+      });
+      boostedLocations.push(...result.items);
+      bmLastKey = result.lastEvaluatedKey;
+    } while (bmLastKey);
+
+    if (boostedLocations.length > 0) {
+      for (const loc of boostedLocations) {
+        await updateItem(
+          'location-master-config',
+          { locationId: loc.locationId },
+          'SET bonusXP = :false',
+          { ':false': false }
+        );
+      }
+      console.log(`bonusXP reverted on ${boostedLocations.length} locations`);
+    } else {
+      console.log('No locations with bonusXP to revert');
+    }
+  } catch (bonusErr) {
+    console.error('bonusXP revert failed (non-fatal):', bonusErr);
+  }
+
+  // Step 9: Update rolling 3-day visit counts for all locations
+  try {
+    // Fetch all LocationMasterConfig records
+    const allMasterLocations: LocationMasterConfig[] = [];
+    let mlLastKey: Record<string, unknown> | undefined;
+    do {
+      const result = await scan<LocationMasterConfig>('location-master-config', {
+        exclusiveStartKey: mlLastKey,
+      });
+      allMasterLocations.push(...result.items);
+      mlLastKey = result.lastEvaluatedKey;
+    } while (mlLastKey);
+
+    // Query yesterday's game sessions (scan with filter — 30 locations × small count is acceptable)
+    const allYesterdaySessions: GameSession[] = [];
+    let gsLastKey: Record<string, unknown> | undefined;
+    do {
+      const result = await scan<GameSession>('game-sessions', {
+        filterExpression: '#d = :yesterday',
+        expressionValues: { ':yesterday': yesterdayDate },
+        expressionNames: { '#d': 'date' },
+        exclusiveStartKey: gsLastKey,
+      });
+      allYesterdaySessions.push(...result.items);
+      gsLastKey = result.lastEvaluatedKey;
+    } while (gsLastKey);
+
+    // Count sessions per locationId
+    const visitCounts = new Map<string, number>();
+    for (const session of allYesterdaySessions) {
+      visitCounts.set(session.locationId, (visitCounts.get(session.locationId) ?? 0) + 1);
+    }
+
+    // Update all locations in parallel
+    const visitSummary: string[] = [];
+    await Promise.all(
+      allMasterLocations.map(async (loc) => {
+        const yesterdayVisits = visitCounts.get(loc.locationId) ?? 0;
+        const oldVisits = loc.last3DaysVisits ?? [0, 0, 0];
+        const newVisits: [number, number, number] = [
+          yesterdayVisits,
+          oldVisits[0],
+          oldVisits[1],
+        ];
+
+        await updateItem(
+          'location-master-config',
+          { locationId: loc.locationId },
+          'SET last3DaysVisits = :visits',
+          { ':visits': newVisits }
+        );
+
+        if (yesterdayVisits > 0) {
+          visitSummary.push(`#${loc.qrNumber}: ${yesterdayVisits}`);
+        }
+      })
+    );
+
+    console.log(
+      `Visit counts updated for ${allMasterLocations.length} locations. Yesterday's totals: [${visitSummary.join(', ') || 'none'}]`
+    );
+  } catch (visitErr) {
+    console.error('Visit count update failed (non-fatal):', visitErr);
   }
 
   console.log('Daily reset complete');

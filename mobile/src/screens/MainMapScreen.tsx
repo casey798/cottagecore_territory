@@ -31,7 +31,12 @@ import { MapMinimap } from '@/components/map/MapMinimap';
 import { DebugPanel } from '@/components/common/DebugPanel';
 import { useImage } from '@shopify/react-native-skia';
 import * as mapApi from '@/api/map';
-import { ClanId, Location } from '@/types';
+import * as playerApi from '@/api/player';
+import { ClanId, CapturedSpace, Location } from '@/types';
+import { useAssetStore } from '@/store/useAssetStore';
+import { useCheckin } from '@/hooks/useCheckin';
+import { useDwellTracking } from '@/hooks/useDwellTracking';
+import { FreeRoamCheckInModal } from '@/components/common/FreeRoamCheckInModal';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 
@@ -44,10 +49,12 @@ interface LocationProximity {
 export default function MainMapScreen() {
 
   const navigation = useNavigation<Nav>();
+  useDwellTracking();
   const { clans: scores } = useClanScores();
   const gps = useGPS();
   const clan = useAuthStore((s) => s.clan);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
+  const showAllMinigames = useDebugStore((s) => s.showAllMinigames);
   const loadMapConfig = useMapStore((s) => s.loadMapConfig);
   const loadTodayLocations = useMapStore((s) => s.loadTodayLocations);
   const loadCapturedSpaces = useMapStore((s) => s.loadCapturedSpaces);
@@ -60,10 +67,18 @@ export default function MainMapScreen() {
   const xpEarnedAtLocations = useGameStore((s) => s.xpEarnedAtLocations);
   const todayXp = useGameStore((s) => s.todayXp);
   const captureResult = useGameStore((s) => s.captureResult);
+  const quietMode = useGameStore((s) => s.quietMode);
+  const setQuietMode = useGameStore((s) => s.setQuietMode);
+  const { checkinStatus, nearbyLocationName, triggerCheckin } = useCheckin();
 
   const [selectedPin, setSelectedPin] = useState<Location | null>(null);
+  const [checkInVisible, setCheckInVisible] = useState(false);
   const sheetAnim = useRef(new Animated.Value(0)).current;
   const capturedSpaces = useMapStore((s) => s.capturedSpaces);
+
+  // Selected captured space for decoration flow
+  const [selectedSpace, setSelectedSpace] = useState<CapturedSpace | null>(null);
+  const [decorateBtnPos, setDecorateBtnPos] = useState<{ x: number; y: number } | null>(null);
 
   // Follow-player (re-centre) mode
   const [followPlayer, setFollowPlayer] = useState(true);
@@ -110,6 +125,19 @@ export default function MainMapScreen() {
     loadMapConfig();
     loadTodayLocations();
     loadCapturedSpaces();
+
+    // Silent prefetch: warm the unplaced assets badge count
+    playerApi.getAssets().then((result) => {
+      if (result.success && result.data) {
+        const now = Date.now();
+        const active = result.data.assets.filter(
+          (a) => !a.expiresAt || new Date(a.expiresAt).getTime() > now,
+        );
+        useAssetStore.getState().setUnplacedCount(
+          active.filter((a) => !a.placed).length,
+        );
+      }
+    }).catch(() => {});
   }, [loadMapConfig, loadTodayLocations, loadCapturedSpaces]);
 
   // Navigate to capture celebration when WebSocket CAPTURE event arrives
@@ -129,13 +157,14 @@ export default function MainMapScreen() {
         const result = await mapApi.getDailyInfo();
         if (result.success && result.data) {
           setDailyInfo(result.data);
+          setQuietMode(result.data.quietMode ?? false);
         }
       } catch (err) {
         console.warn('[daily/info] exception:', err);
       }
     }
     loadDailyData();
-  }, [setDailyInfo]);
+  }, [setDailyInfo, setQuietMode]);
 
   // Sync map store locations to game store
   useEffect(() => {
@@ -225,6 +254,8 @@ export default function MainMapScreen() {
 
   const handlePinPress = useCallback(
     (location: Location) => {
+      setSelectedSpace(null);
+      setDecorateBtnPos(null);
       openSheet(location);
     },
     [openSheet],
@@ -239,6 +270,30 @@ export default function MainMapScreen() {
       locationName: selectedPin.name,
     });
   }, [selectedPin, navigation, setSelectedLocation, closeSheet]);
+
+  const handleSpaceTap = useCallback((space: CapturedSpace | null, screenX: number, screenY: number) => {
+    if (space && space.clan === clan) {
+      setSelectedSpace(space);
+      setDecorateBtnPos({ x: screenX, y: screenY - 50 });
+    } else {
+      setSelectedSpace(null);
+      setDecorateBtnPos(null);
+    }
+  }, [clan]);
+
+  const handleDecorate = useCallback(() => {
+    if (!selectedSpace) return;
+    const navParams = {
+      spaceId: selectedSpace.spaceId,
+      spaceName: selectedSpace.spaceName,
+      clan: selectedSpace.clan as ClanId,
+      gridCells: selectedSpace.gridCells ?? [],
+      polygonPoints: selectedSpace.polygonPoints ?? [],
+    };
+    setSelectedSpace(null);
+    setDecorateBtnPos(null);
+    navigation.navigate('SpaceDecoration', navParams);
+  }, [selectedSpace, navigation]);
 
   const handleOpenSettings = () => {
     Linking.openSettings();
@@ -266,35 +321,46 @@ export default function MainMapScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.mapContainer}>
-        {/* Floating HUD overlays */}
-        <View style={styles.hudTop}>
-          <ClanScoreBar scores={scores} />
-        </View>
-        <View style={styles.hudSecondRow}>
-          {!gameActive ? (
-            <View style={styles.inactiveBadge}>
-              <Text style={styles.inactiveBadgeText}>
-                Starts at {GAME_START_HOUR}:00 AM
+        {/* Floating HUD overlays — hidden in quiet mode */}
+        {!quietMode && (
+          <View style={styles.hudTop}>
+            <ClanScoreBar scores={scores} />
+          </View>
+        )}
+        {!quietMode && (
+          <View style={styles.hudSecondRow}>
+            {!gameActive ? (
+              <View style={styles.inactiveBadge}>
+                <Text style={styles.inactiveBadgeText}>
+                  Starts at {GAME_START_HOUR}:00 AM
+                </Text>
+              </View>
+            ) : (
+              <CountdownTimer
+                label="Scoring at"
+                formatted={countdown.formatted}
+                isExpired={countdown.isExpired}
+              />
+            )}
+            <View style={styles.xpBadge}>
+              <Text style={styles.xpBadgeText}>
+                {todayXp}/{DAILY_XP_CAP} XP
               </Text>
             </View>
-          ) : (
-            <CountdownTimer
-              label="Scoring at"
-              formatted={countdown.formatted}
-              isExpired={countdown.isExpired}
-            />
-          )}
-          <View style={styles.xpBadge}>
-            <Text style={styles.xpBadgeText}>
-              {todayXp}/{DAILY_XP_CAP} XP
+          </View>
+        )}
+        {quietMode && (
+          <View style={styles.quietBanner}>
+            <Text style={styles.quietBannerText}>
+              Free roam — no challenges today
             </Text>
           </View>
-        </View>
+        )}
         <MapCanvas
           playerX={showPlayer && playerPixel ? playerPixel.x : null}
           playerY={showPlayer && playerPixel ? playerPixel.y : null}
           clan={clan}
-          locations={todayLocations}
+          locations={quietMode ? [] : todayLocations}
           capturedSpaces={capturedSpaces}
           onPinPress={handlePinPress}
           inRangeIds={inRangeIds}
@@ -303,6 +369,8 @@ export default function MainMapScreen() {
           registerNavigate={handleRegisterNavigate}
           followPlayer={followPlayer}
           onFollowChange={handleFollowChange}
+          selectedSpaceId={selectedSpace?.spaceId ?? null}
+          onSpaceTap={handleSpaceTap}
         />
         {mapConfig && (
           <MapMinimap
@@ -368,10 +436,112 @@ export default function MainMapScreen() {
           </View>
         )}
         {__DEV__ && <DebugPanel />}
+        {__DEV__ && showAllMinigames && (
+          <Pressable
+            style={styles.debugSkipQrBtn}
+            onPress={() =>
+              navigation.navigate('MinigameSelect', {
+                locationId: '00000000-0000-0000-0000-000000000001',
+                locationName: 'Debug Location',
+              })
+            }
+          >
+            <Text style={styles.debugSkipQrText}>Debug: Skip QR</Text>
+          </Pressable>
+        )}
         {__DEV__ && (
           <View style={styles.devBadge}>
             <Text style={styles.devBadgeText}>DEV</Text>
           </View>
+        )}
+
+        {/* Check-In floating button — hidden in quiet mode (replaced by quiet mode checkin) */}
+        {!quietMode && (
+          <>
+            <Pressable
+              style={({ pressed }) => [
+                styles.checkInBtn,
+                pressed && styles.checkInBtnPressed,
+              ]}
+              onPress={() => setCheckInVisible(true)}
+            >
+              <Text style={styles.checkInBtnIcon}>{'\u{1F4CD}'}</Text>
+              <Text style={styles.checkInBtnLabel}>Check In</Text>
+            </Pressable>
+            <FreeRoamCheckInModal
+              visible={checkInVisible}
+              onClose={() => setCheckInVisible(false)}
+              currentGpsLat={gps.latitude}
+              currentGpsLng={gps.longitude}
+              currentPixelX={playerPixel?.x ?? null}
+              currentPixelY={playerPixel?.y ?? null}
+            />
+          </>
+        )}
+
+        {/* Quiet mode: checkin card */}
+        {quietMode && checkinStatus === 'in_range' && nearbyLocationName && (
+          <View style={styles.quietCheckinCard}>
+            <Text style={styles.quietCheckinText}>
+              You're near {nearbyLocationName}
+            </Text>
+            <Pressable
+              style={({ pressed }) => [
+                styles.quietCheckinBtn,
+                pressed && styles.quietCheckinBtnPressed,
+              ]}
+              onPress={triggerCheckin}
+            >
+              <Text style={styles.quietCheckinBtnText}>Check in</Text>
+            </Pressable>
+          </View>
+        )}
+        {quietMode && checkinStatus === 'checking_in' && (
+          <View style={styles.quietCheckinCard}>
+            <Text style={styles.quietCheckinText}>Checking in...</Text>
+          </View>
+        )}
+        {quietMode && checkinStatus === 'done' && nearbyLocationName && (
+          <View style={styles.quietCheckinCardDone}>
+            <Text style={styles.quietCheckinDoneText}>
+              Checked in to {nearbyLocationName} {'\u2713'}
+            </Text>
+          </View>
+        )}
+
+        {/* Quiet mode: play minigame button */}
+        {quietMode && (
+          <Pressable
+            style={({ pressed }) => [
+              styles.quietPlayBtn,
+              pressed && styles.quietPlayBtnPressed,
+            ]}
+            onPress={() =>
+              navigation.navigate('MinigameSelect', {
+                locationId: 'practice',
+                locationName: 'Practice mode',
+                practiceMode: true,
+              })
+            }
+          >
+            <Text style={styles.quietPlayBtnText}>Play a minigame</Text>
+          </Pressable>
+        )}
+
+        {/* Decorate button for selected captured space */}
+        {selectedSpace && decorateBtnPos && (
+          <Pressable
+            style={[
+              styles.decorateBtn,
+              {
+                left: Math.max(8, Math.min(decorateBtnPos.x - 52, 300)),
+                top: Math.max(60, decorateBtnPos.y),
+              },
+            ]}
+            onPress={handleDecorate}
+          >
+            <Text style={styles.decorateBtnText}>{`Decorate \u2726`}</Text>
+          </Pressable>
         )}
 
         {/* Bottom sheet backdrop */}
@@ -630,6 +800,39 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontFamily: FONTS.bodyRegular,
   },
+  // Check-In button
+  checkInBtn: {
+    position: 'absolute',
+    bottom: 20,
+    left: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: PALETTE.parchmentBg,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 22,
+    zIndex: 18,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: PALETTE.stoneGrey + '40',
+    gap: 6,
+  },
+  checkInBtnPressed: {
+    backgroundColor: PALETTE.cream,
+    transform: [{ scale: 0.95 }],
+  },
+  checkInBtnIcon: {
+    fontSize: 16,
+  },
+  checkInBtnLabel: {
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.darkBrown,
+  },
   // Bottom sheet
   backdrop: {
     ...StyleSheet.absoluteFillObject,
@@ -750,6 +953,44 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 6,
   },
+  decorateBtn: {
+    position: 'absolute',
+    zIndex: 19,
+    backgroundColor: PALETTE.parchmentBg,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 14,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    borderWidth: 1.5,
+    borderColor: PALETTE.honeyGold,
+  },
+  decorateBtnText: {
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.warmBrown,
+    textAlign: 'center',
+  },
+  debugSkipQrBtn: {
+    position: 'absolute',
+    bottom: 8,
+    right: 8,
+    backgroundColor: 'rgba(192, 57, 43, 0.85)',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 6,
+    zIndex: 100,
+    borderWidth: 1,
+    borderColor: '#FFD700',
+  },
+  debugSkipQrText: {
+    color: '#FFD700',
+    fontSize: 10,
+    fontFamily: FONTS.bodySemiBold,
+  },
   devBadge: {
     position: 'absolute',
     top: 8,
@@ -765,5 +1006,112 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontFamily: FONTS.bodySemiBold,
     letterSpacing: 1,
+  },
+  // ── Quiet mode ──
+  quietBanner: {
+    position: 'absolute',
+    top: 12,
+    alignSelf: 'center',
+    backgroundColor: PALETTE.cream,
+    paddingHorizontal: 18,
+    paddingVertical: 8,
+    borderRadius: 20,
+    zIndex: 16,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 3,
+    borderWidth: 1,
+    borderColor: PALETTE.warmBrown + '30',
+  },
+  quietBannerText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.warmBrown,
+  },
+  quietPlayBtn: {
+    position: 'absolute',
+    bottom: 20,
+    alignSelf: 'center',
+    backgroundColor: PALETTE.honeyGold,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    borderRadius: 14,
+    zIndex: 18,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    borderBottomWidth: 2,
+    borderBottomColor: PALETTE.warmBrown,
+  },
+  quietPlayBtnPressed: {
+    borderBottomWidth: 0,
+    transform: [{ translateY: 2 }],
+  },
+  quietPlayBtnText: {
+    fontSize: 16,
+    fontFamily: FONTS.bodyBold,
+    color: PALETTE.darkBrown,
+  },
+  quietCheckinCard: {
+    position: 'absolute',
+    bottom: 72,
+    alignSelf: 'center',
+    backgroundColor: PALETTE.cream,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+    zIndex: 18,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: PALETTE.softGreen + '50',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  quietCheckinText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.darkBrown,
+    flexShrink: 1,
+  },
+  quietCheckinBtn: {
+    backgroundColor: PALETTE.softGreen,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  quietCheckinBtnPressed: {
+    opacity: 0.8,
+  },
+  quietCheckinBtnText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodyBold,
+    color: PALETTE.cream,
+  },
+  quietCheckinCardDone: {
+    position: 'absolute',
+    bottom: 72,
+    alignSelf: 'center',
+    backgroundColor: PALETTE.softGreen + '20',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderRadius: 14,
+    zIndex: 18,
+    elevation: 4,
+    borderWidth: 1,
+    borderColor: PALETTE.softGreen + '40',
+  },
+  quietCheckinDoneText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.softGreen,
   },
 });

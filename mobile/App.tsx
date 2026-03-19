@@ -1,7 +1,12 @@
 import React, { useEffect } from 'react';
 import { StatusBar } from 'react-native';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import messaging from '@react-native-firebase/messaging';
+import {
+  getMessaging,
+  onTokenRefresh,
+  onMessage,
+  getInitialNotification,
+} from '@react-native-firebase/messaging';
 import { lockPortrait } from './src/hooks/useScreenOrientation';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { registerFcmToken } from './src/utils/notifications';
@@ -11,7 +16,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     lockPortrait();
 
-    const unsubscribe = messaging().onTokenRefresh((token) => {
+    const msg = getMessaging();
+    const unsubscribe = onTokenRefresh(msg, (token) => {
       console.log('[FCM] Token refreshed');
       registerFcmToken(token);
     });
@@ -21,7 +27,8 @@ function App(): React.JSX.Element {
 
   // FCM foreground message handler
   useEffect(() => {
-    const unsubscribe = messaging().onMessage(async (remoteMessage) => {
+    const msg = getMessaging();
+    const unsubscribe = onMessage(msg, async (remoteMessage) => {
       if (remoteMessage.data?.type === 'CAPTURE_RESULT') {
         const clan = remoteMessage.data.winnerClan as string;
         const spaceName = remoteMessage.data.spaceName as string;
@@ -35,17 +42,16 @@ function App(): React.JSX.Element {
 
   // FCM quit-state: user tapped notification to open the app
   useEffect(() => {
-    messaging()
-      .getInitialNotification()
-      .then((remoteMessage) => {
-        if (remoteMessage?.data?.type === 'CAPTURE_RESULT') {
-          const clan = remoteMessage.data.winnerClan as string;
-          const spaceName = remoteMessage.data.spaceName as string;
-          if (clan && spaceName) {
-            useGameStore.getState().setCelebrationPending(clan, spaceName);
-          }
+    const msg = getMessaging();
+    getInitialNotification(msg).then((remoteMessage) => {
+      if (remoteMessage?.data?.type === 'CAPTURE_RESULT') {
+        const clan = remoteMessage.data.winnerClan as string;
+        const spaceName = remoteMessage.data.spaceName as string;
+        if (clan && spaceName) {
+          useGameStore.getState().setCelebrationPending(clan, spaceName);
         }
-      });
+      }
+    });
   }, []);
 
   return (

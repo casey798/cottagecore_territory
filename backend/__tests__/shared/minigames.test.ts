@@ -1,8 +1,8 @@
 import { MINIGAME_POOL, MINIGAME_IDS } from '../../shared/minigames';
 
 describe('minigames metadata', () => {
-  it('exports all 12 minigame IDs', () => {
-    expect(MINIGAME_IDS).toHaveLength(12);
+  it('exports all 21 minigame IDs (15 solo + 6 co-op)', () => {
+    expect(MINIGAME_IDS).toHaveLength(21);
   });
 
   it('every minigame has a name, timeLimit > 0, and description', () => {

@@ -22,4 +22,13 @@ export const ENDPOINTS = {
   SPACES_CAPTURED: '/spaces/captured',
   SPACES_DECORATION: '/spaces',
   PLAYER_FCM_TOKEN: '/player/fcm-token',
+  CHECKIN_SUBMIT: '/checkin/submit',
+  GAME_START_PRACTICE: '/game/startPractice',
+  GAME_CHECKIN: '/game/checkin',
+  SUBMIT_LEAVE: '/game/session/leave',
+  SEASON_SUMMARY: '/season/summary',
 } as const;
+
+export function SUBMIT_SENTIMENT(sessionId: string): string {
+  return `/game/session/${sessionId}/sentiment`;
+}

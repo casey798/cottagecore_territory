@@ -26,11 +26,40 @@ export async function handler(
     const target = targetRaw as ClanId | 'all';
     const notificationType = notifTypeRaw as NotificationType;
 
-    // Collect FCM tokens
+    // Check for scheduling
+    const scheduledFor = typeof body.scheduledFor === 'string' ? body.scheduledFor : null;
+    const notificationId = randomUUID();
+    const sentBy = (event.requestContext.authorizer?.sub as string) || 'admin';
+
+    if (scheduledFor && new Date(scheduledFor).getTime() > Date.now()) {
+      // Schedule for later — store without sending
+      await putItem<Record<string, unknown>>(
+        'admin-notifications',
+        {
+          notificationId,
+          message,
+          target,
+          notificationType,
+          sentAt: new Date().toISOString(),
+          sentBy,
+          deliveryCount: 0,
+          scheduledFor,
+          status: 'scheduled',
+        } as unknown as Record<string, unknown>
+      );
+
+      return success({
+        notificationId,
+        status: 'scheduled',
+        scheduledFor,
+        deliveryCount: 0,
+      });
+    }
+
+    // Send immediately
     const tokens: string[] = [];
 
     if (target === 'all') {
-      // Scan all users
       let lastKey: Record<string, unknown> | undefined;
       do {
         const result = await scan<User>('users', {
@@ -39,14 +68,11 @@ export async function handler(
           exclusiveStartKey: lastKey,
         });
         for (const user of result.items) {
-          if (user.fcmToken) {
-            tokens.push(user.fcmToken);
-          }
+          if (user.fcmToken) tokens.push(user.fcmToken);
         }
         lastKey = result.lastEvaluatedKey;
       } while (lastKey);
     } else {
-      // Query by clan using ClanIndex
       let lastKey: Record<string, unknown> | undefined;
       do {
         const result = await query<User>(
@@ -61,35 +87,30 @@ export async function handler(
           }
         );
         for (const user of result.items) {
-          if (user.fcmToken) {
-            tokens.push(user.fcmToken);
-          }
+          if (user.fcmToken) tokens.push(user.fcmToken);
         }
         lastKey = result.lastEvaluatedKey;
       } while (lastKey);
     }
 
-    // Send notifications
     const sent = await sendToTokens(tokens, {
       notification: { title: 'GroveWars', body: message },
       data: { type: 'ADMIN_CUSTOM', notificationType, target },
     });
 
-    // Create admin notification record
-    const notificationId = randomUUID();
     const notification: AdminNotification = {
       notificationId,
       message,
       target,
       notificationType: notificationType as AdminNotification['notificationType'],
       sentAt: new Date().toISOString(),
-      sentBy: (event.requestContext.authorizer?.sub as string) || 'admin',
+      sentBy,
       deliveryCount: sent,
     };
 
     await putItem<Record<string, unknown>>(
       'admin-notifications',
-      notification as unknown as Record<string, unknown>
+      { ...notification, status: 'sent' } as unknown as Record<string, unknown>
     );
 
     return success({

@@ -1,11 +1,14 @@
 import { apiRequest } from './client';
-import { ENDPOINTS } from '@/constants/api';
+import { ENDPOINTS, SUBMIT_SENTIMENT } from '@/constants/api';
 import {
   QrData,
   ScanQRResponse,
   StartGameResponse,
   CompleteGameResponse,
   GameResult,
+  SpaceSentiment,
+  LeaveReason,
+  CheckinResponse,
 } from '@/types';
 
 export function scanQR(qrData: QrData, gpsLat: number, gpsLng: number) {
@@ -36,5 +39,47 @@ export function completeMinigame(
   return apiRequest<CompleteGameResponse>(ENDPOINTS.GAME_COMPLETE, {
     method: 'POST',
     body: JSON.stringify({ sessionId, result, completionHash, timeTaken, solutionData }),
+  });
+}
+
+export function startPractice(minigameId: string) {
+  return apiRequest<StartGameResponse>(ENDPOINTS.GAME_START_PRACTICE, {
+    method: 'POST',
+    body: JSON.stringify({ minigameId }),
+  });
+}
+
+export function submitCheckin(gpsLat: number, gpsLng: number) {
+  return apiRequest<CheckinResponse>(ENDPOINTS.GAME_CHECKIN, {
+    method: 'POST',
+    body: JSON.stringify({ gpsLat, gpsLng }),
+  });
+}
+
+export function submitLeave(
+  sessionId: string,
+  reason: LeaveReason,
+): void {
+  apiRequest(ENDPOINTS.SUBMIT_LEAVE, {
+    method: 'POST',
+    body: JSON.stringify({
+      sessionId,
+      leftAt: new Date().toISOString(),
+      reason,
+    }),
+  }).catch((err) => {
+    console.warn('[submitLeave] Failed (non-blocking):', err);
+  });
+}
+
+export function submitSpaceSentiment(
+  sessionId: string,
+  sentiment: SpaceSentiment,
+): void {
+  apiRequest(SUBMIT_SENTIMENT(sessionId), {
+    method: 'PATCH',
+    body: JSON.stringify({ spaceSentiment: sentiment }),
+  }).catch((err) => {
+    console.warn('[submitSpaceSentiment] Failed (non-blocking):', err);
   });
 }

@@ -9,4 +9,5 @@ export interface MinigamePlayProps {
   sessionId: string;
   timeLimit: number;
   onComplete: (result: MinigameResult) => void;
+  puzzleData?: Record<string, unknown>;
 }

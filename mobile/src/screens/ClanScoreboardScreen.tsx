@@ -84,6 +84,11 @@ function ClanRow({ item, rank, isOwnClan, previousXp }: ClanRowProps) {
       />
       <View style={styles.clanInfo}>
         <Text style={styles.clanName}>{CLAN_LABELS[item.clanId]}</Text>
+        {item.rosterSize > 0 && (
+          <Text style={styles.participationText}>
+            ({Math.round((item.todayParticipants / item.rosterSize) * 100)}% played today)
+          </Text>
+        )}
       </View>
       <View style={styles.statCol}>
         <Text style={styles.statLabel}>Today</Text>
@@ -262,6 +267,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.darkBrown,
+  },
+  participationText: {
+    fontSize: 11,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    marginTop: 1,
   },
   statCol: {
     alignItems: 'center',

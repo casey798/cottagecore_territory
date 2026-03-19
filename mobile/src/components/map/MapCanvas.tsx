@@ -54,9 +54,26 @@ interface Props {
   capturedSpaces?: CapturedSpace[];
   followPlayer?: boolean;
   onFollowChange?: (following: boolean) => void;
+  selectedSpaceId?: string | null;
+  onSpaceTap?: (space: CapturedSpace | null, screenX: number, screenY: number) => void;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange }: Props) {
+function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x, yi = polygon[i].y;
+    const xj = polygon[j].x, yj = polygon[j].y;
+    if (
+      yi > py !== yj > py &&
+      px < ((xj - xi) * (py - yi)) / (yj - yi) + xi
+    ) {
+      inside = !inside;
+    }
+  }
+  return inside;
+}
+
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
   const tapToSetMode = useDebugStore((s) => s.tapToSetMode);
@@ -381,11 +398,36 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       runOnJS(handleTapToSet)(e.x, e.y);
     });
 
-  // Pan + Pinch simultaneous; debug tap or double-tap exclusive
+  // --- Space tap: detect taps on captured space polygons ---
+  const handleSpaceTap = useCallback((screenX: number, screenY: number) => {
+    if (!onSpaceTap) return;
+    const mapPixelX = (screenX - translateX.value) / scale.value;
+    const mapPixelY = (screenY - translateY.value) / scale.value;
+
+    if (capturedSpaces) {
+      for (const space of capturedSpaces) {
+        if (!space.polygonPoints || space.polygonPoints.length < 3) continue;
+        if (pointInPolygon(mapPixelX, mapPixelY, space.polygonPoints)) {
+          onSpaceTap(space, screenX, screenY);
+          return;
+        }
+      }
+    }
+    onSpaceTap(null, screenX, screenY);
+  }, [capturedSpaces, onSpaceTap, translateX, translateY, scale]);
+
+  const spaceTapGesture = Gesture.Tap()
+    .numberOfTaps(1)
+    .onEnd((e) => {
+      'worklet';
+      runOnJS(handleSpaceTap)(e.x, e.y);
+    });
+
+  // Pan + Pinch simultaneous; debug tap, double-tap, or space tap
   const composedGesture = Gesture.Race(
     debugTapGesture,
     Gesture.Simultaneous(pinchGesture, panGesture),
-    doubleTapGesture,
+    Gesture.Exclusive(doubleTapGesture, spaceTapGesture),
   );
 
   // Animated style for the canvas wrapper — applies transform
@@ -520,9 +562,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
               {capturedSpaces && capturedSpaces.length > 0 && (
                 <MapOverlay
                   capturedSpaces={capturedSpaces}
-                  scale={1}
-                  translateX={0}
-                  translateY={0}
+                  selectedSpaceId={selectedSpaceId}
                 />
               )}
               {playerX != null && playerY != null && dotColor && inBounds && (

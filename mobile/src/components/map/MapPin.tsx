@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef } from 'react';
 import { Animated, Pressable, StyleSheet, View, Text, Alert } from 'react-native';
 import { PALETTE } from '@/constants/colors';
+import { FONTS } from '@/constants/fonts';
 import { MAP_TILE_SIZE } from '@/constants/config';
 import { Location } from '@/types';
 
@@ -21,9 +22,10 @@ interface Props {
   onPress: () => void;
   inRange?: boolean;
   xpExhausted?: boolean;
+  bonusXP?: boolean;
 }
 
-export function MapPin({ location, pixelX, pixelY, onPress, inRange, xpExhausted }: Props) {
+export function MapPin({ location, pixelX, pixelY, onPress, inRange, xpExhausted, bonusXP }: Props) {
   const snappedX = Math.round(pixelX / MAP_TILE_SIZE) * MAP_TILE_SIZE;
   const snappedY = Math.round(pixelY / MAP_TILE_SIZE) * MAP_TILE_SIZE;
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -74,6 +76,33 @@ export function MapPin({ location, pixelX, pixelY, onPress, inRange, xpExhausted
     loop.start();
     return () => loop.stop();
   }, [isInRange, sparkleAnim]);
+
+  // BonusXP golden ring pulse (only for active, non-locked pins with bonusXP)
+  const bonusRingAnim = useRef(new Animated.Value(1)).current;
+  const isBoosted = !isLocked && !isXpExhausted && bonusXP;
+
+  useEffect(() => {
+    if (!isBoosted) {
+      bonusRingAnim.setValue(1);
+      return undefined;
+    }
+    const loop = Animated.loop(
+      Animated.sequence([
+        Animated.timing(bonusRingAnim, {
+          toValue: 1.4,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+        Animated.timing(bonusRingAnim, {
+          toValue: 1.0,
+          duration: 600,
+          useNativeDriver: true,
+        }),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isBoosted, bonusRingAnim]);
 
   const pinIcon = PIN_ICONS[hashCode(location.locationId) % PIN_ICONS.length];
 
@@ -134,6 +163,17 @@ export function MapPin({ location, pixelX, pixelY, onPress, inRange, xpExhausted
       )}
       {isInRange && (
         <View style={styles.glowRing} />
+      )}
+      {isBoosted && (
+        <>
+          <Animated.View
+            style={[
+              styles.bonusRing,
+              { transform: [{ scale: bonusRingAnim }] },
+            ]}
+          />
+          <Text style={styles.bonusLabel}>2×</Text>
+        </>
       )}
     </Pressable>
   );
@@ -221,5 +261,20 @@ const styles = StyleSheet.create({
     top: undefined,
     right: 0,
     alignSelf: undefined,
+  },
+  bonusRing: {
+    position: 'absolute',
+    width: MAP_TILE_SIZE + 14,
+    height: MAP_TILE_SIZE + 14,
+    borderRadius: (MAP_TILE_SIZE + 14) / 2,
+    borderWidth: 2,
+    borderColor: PALETTE.honeyGold,
+  },
+  bonusLabel: {
+    position: 'absolute',
+    top: -12,
+    fontSize: 10,
+    fontFamily: FONTS.headerBold,
+    color: PALETTE.honeyGold,
   },
 });

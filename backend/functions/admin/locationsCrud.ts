@@ -101,6 +101,10 @@ async function updateLocationHandler(event: APIGatewayProxyEvent): Promise<APIGa
     updates.push('notes = :notes');
     values[':notes'] = body.notes;
   }
+  if (typeof body.coopOnly === 'boolean') {
+    updates.push('coopOnly = :coopOnly');
+    values[':coopOnly'] = body.coopOnly;
+  }
 
   if (updates.length === 0) {
     return error(ErrorCode.VALIDATION_ERROR, 'No fields to update', 400);
