@@ -22,6 +22,7 @@ describe('minigames metadata', () => {
       name: 'Grove Words',
       timeLimit: 120,
       description: 'Guess the word in 6 tries',
+      difficulty: 'medium',
     });
   });
 
@@ -30,6 +31,7 @@ describe('minigames metadata', () => {
       name: 'Kindred',
       timeLimit: 150,
       description: 'Group 16 words into 4 groups',
+      difficulty: 'medium',
     });
   });
 
@@ -38,6 +40,15 @@ describe('minigames metadata', () => {
       name: 'Stone Pairs',
       timeLimit: 60,
       description: 'Find matching pairs',
+      difficulty: 'easy',
     });
+  });
+
+  it('every minigame has a valid difficulty', () => {
+    const validDifficulties = new Set(['easy', 'medium', 'hard']);
+    for (const id of MINIGAME_IDS) {
+      const meta = MINIGAME_POOL[id];
+      expect(validDifficulties.has(meta.difficulty)).toBe(true);
+    }
   });
 });

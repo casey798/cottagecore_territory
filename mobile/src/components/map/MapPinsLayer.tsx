@@ -47,6 +47,7 @@ export function MapPinsLayer({
           inRange={inRangeIds?.has(location.locationId)}
           xpExhausted={xpExhaustedIds?.has(location.locationId)}
           bonusXP={location.bonusXP}
+          isCoop={location.isCoop}
         />
       ))}
     </View>

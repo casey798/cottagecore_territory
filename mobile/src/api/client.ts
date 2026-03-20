@@ -62,7 +62,7 @@ export async function apiRequest<T>(
   }
 
   try {
-    console.log(`[apiRequest] ${options.method || 'GET'} ${endpoint} | token: ${token ? token.substring(0, 20) + '...' : 'NONE'}`);
+    if (__DEV__) { console.log(`[apiRequest] ${options.method || 'GET'} ${endpoint} | token: ${token ? token.substring(0, 20) + '...' : 'NONE'}`); }
     let response = await fetch(`${BASE_URL}${endpoint}`, {
       ...options,
       headers,

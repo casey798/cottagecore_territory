@@ -6,8 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Alert,
-  Switch,
-  TextInput,
   Modal,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -20,8 +18,6 @@ import { useGameStore } from '@/store/useGameStore';
 import { useDebugStore } from '@/store/useDebugStore';
 import * as gameApi from '@/api/game';
 import { MinigameInfo } from '@/types';
-import { selectMinigamesByDifficulty } from '@/utils/minigameSelection';
-import { MINIGAME_DIFFICULTY, MinigameDifficulty } from '@/constants/minigames';
 
 const COOP_MINIGAME_IDS: readonly string[] = [
   'kindred-coop',
@@ -71,6 +67,8 @@ const MINIGAME_ICONS: Record<string, string> = {
   'shift-slide': '🧩',
 };
 
+type MinigameDifficulty = 'easy' | 'medium' | 'hard';
+
 const DIFFICULTY_BADGE: Record<MinigameDifficulty, { label: string; bg: string; text: string }> = {
   easy:   { label: 'Easy',   bg: PALETTE.softGreen, text: PALETTE.cream },
   medium: { label: 'Medium', bg: PALETTE.honeyGold, text: PALETTE.darkBrown },
@@ -80,22 +78,22 @@ const DIFFICULTY_BADGE: Record<MinigameDifficulty, { label: string; bg: string; 
 export default function MinigameSelectScreen() {
   const navigation = useNavigation<Nav>();
   const route = useRoute<SelectRoute>();
-  const { locationId, locationName, practiceMode } = route.params;
+  const { locationId, locationName, practiceMode, isCoopSession, coopPartnerId, coopPartnerDisplayName } = route.params;
   const lastScanResult = useGameStore((s) => s.lastScanResult);
   const setSessionId = useGameStore((s) => s.setSessionId);
   const setActiveLocationSession = useGameStore((s) => s.setActiveLocationSession);
   const clearActiveLocationSession = useGameStore((s) => s.clearActiveLocationSession);
   const todayXp = useGameStore((s) => s.todayXp);
   const showAllMinigames = useDebugStore((s) => s.showAllMinigames);
-  const [coopEnabled, setCoopEnabled] = useState(false);
-  const [partnerId, setPartnerId] = useState('');
   const [loading, setLoading] = useState(false);
   const navigatedForwardRef = useRef(false);
   const [spaceFactDismissed, setSpaceFactDismissed] = useState(false);
 
-  const locationModifiers = lastScanResult?.locationModifiers;
+  const locationModifiers = lastScanResult && 'locationModifiers' in lastScanResult
+    ? lastScanResult.locationModifiers
+    : undefined;
   const spaceFact = locationModifiers?.spaceFact ?? null;
-  const isCoopOnly = locationModifiers?.coopOnly ?? false;
+  const isCoopOnly = locationModifiers?.coopOnly ?? isCoopSession ?? false;
 
   // Fire leave event when navigating back (not forward into a minigame)
   useEffect(() => {
@@ -119,12 +117,14 @@ export default function MinigameSelectScreen() {
   }, [lastScanResult, navigation, showAllMinigames, practiceMode]);
 
   // Server is sole source of truth for XP availability
-  const xpAvailable = practiceMode ? false : (lastScanResult?.xpAvailable ?? true);
+  const xpAvailable = practiceMode
+    ? false
+    : (lastScanResult && 'xpAvailable' in lastScanResult ? lastScanResult.xpAvailable ?? true : true);
   const fullPool = practiceMode
     ? ALL_MINIGAMES
     : __DEV__ && showAllMinigames
       ? ALL_MINIGAMES
-      : (lastScanResult?.availableMinigames || []);
+      : (lastScanResult && 'availableMinigames' in lastScanResult ? lastScanResult.availableMinigames : []);
 
   // Belt-and-suspenders: client-side filter co-op IDs based on location mode
   const coopSet = new Set(COOP_MINIGAME_IDS);
@@ -132,10 +132,8 @@ export default function MinigameSelectScreen() {
     isCoopOnly ? coopSet.has(m.minigameId) : !coopSet.has(m.minigameId),
   );
 
-  // Select once per mount / pool change: 2 Easy + 3 Medium + 1 Hard, shuffled
-  const [minigames] = useState(() =>
-    practiceMode ? ALL_MINIGAMES : selectMinigamesByDifficulty(filteredPool),
-  );
+  // Server sends pre-bucketed minigames; use them directly (practice shows all)
+  const minigames = practiceMode ? ALL_MINIGAMES : filteredPool;
   const allExhausted = minigames.length > 0 && minigames.every((m) => m.completed);
 
   const handleSelect = async (minigame: MinigameInfo) => {
@@ -162,17 +160,11 @@ export default function MinigameSelectScreen() {
           Alert.alert('Error', result.error?.message || 'Failed to start practice.');
         }
       } else {
-        // At co-op-only locations, partner ID is mandatory
-        if (isCoopOnly && !partnerId.trim()) {
-          Alert.alert('Partner Required', 'Enter your grove companion\'s player ID to continue.');
-          setLoading(false);
-          return;
-        }
-        const coopPartnerId = (isCoopOnly || coopEnabled) && partnerId.trim() ? partnerId.trim() : null;
+        const partnerIdToSend = isCoopSession && coopPartnerId ? coopPartnerId : null;
         const result = await gameApi.startMinigame(
           locationId,
           minigame.minigameId,
-          coopPartnerId,
+          partnerIdToSend,
         );
         if (result.success && result.data) {
           setSessionId(result.data.sessionId);
@@ -189,7 +181,13 @@ export default function MinigameSelectScreen() {
             xpAvailable,
           });
         } else {
-          Alert.alert('Error', result.error?.message || 'Failed to start minigame.');
+          const code = result.error?.code || '';
+          const friendlyMessage: Record<string, string> = {
+            PARTNER_CAP_REACHED: "Your partner has already reached today's XP limit (100 XP)",
+            PARTNER_LOCATION_LOCKED: 'Your partner is locked at this location from an earlier loss',
+            PARTNER_ALREADY_WON: 'Your partner has already completed this minigame today',
+          };
+          Alert.alert('Error', friendlyMessage[code] || result.error?.message || 'Failed to start minigame.');
         }
       }
     } catch {
@@ -253,9 +251,16 @@ export default function MinigameSelectScreen() {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {isCoopOnly && !practiceMode && (
+        {isCoopSession && coopPartnerDisplayName && !practiceMode && (
+          <View style={styles.coopSessionBanner}>
+            <Text style={styles.coopSessionText}>
+              Co-op Session — You & {coopPartnerDisplayName}
+            </Text>
+          </View>
+        )}
+        {isCoopOnly && !isCoopSession && !practiceMode && (
           <View style={styles.coopOnlyBanner}>
-            <Text style={styles.coopOnlyText}>🤝 Co-op only at this location</Text>
+            <Text style={styles.coopOnlyText}>Co-op only at this location</Text>
           </View>
         )}
         <View style={styles.grid}>
@@ -287,7 +292,7 @@ export default function MinigameSelectScreen() {
                 <Text style={styles.cardTime}>⏱ {item.timeLimit}s</Text>
               )}
               {(() => {
-                const diff = MINIGAME_DIFFICULTY[item.minigameId];
+                const diff = item.difficulty;
                 if (!diff) return null;
                 const badge = DIFFICULTY_BADGE[diff];
                 return (
@@ -309,47 +314,6 @@ export default function MinigameSelectScreen() {
         )}
       </ScrollView>
       <View style={styles.bottomBar}>
-        {!allExhausted && !practiceMode && (
-          <>
-            {isCoopOnly ? (
-              <>
-                <Text style={styles.coopRequiredLabel}>
-                  This location requires a grove companion 🤝
-                </Text>
-                <TextInput
-                  style={styles.partnerInput}
-                  placeholder="Partner's player ID"
-                  placeholderTextColor={PALETTE.stoneGrey}
-                  value={partnerId}
-                  onChangeText={setPartnerId}
-                  autoCapitalize="none"
-                />
-              </>
-            ) : (
-              <>
-                <View style={styles.coopRow}>
-                  <Text style={styles.coopLabel}>Co-op Mode</Text>
-                  <Switch
-                    value={coopEnabled}
-                    onValueChange={setCoopEnabled}
-                    trackColor={{ false: PALETTE.stoneGrey, true: PALETTE.softGreen }}
-                    thumbColor={coopEnabled ? PALETTE.honeyGold : PALETTE.cream}
-                  />
-                </View>
-                {coopEnabled && (
-                  <TextInput
-                    style={styles.partnerInput}
-                    placeholder="Partner's player ID"
-                    placeholderTextColor={PALETTE.stoneGrey}
-                    value={partnerId}
-                    onChangeText={setPartnerId}
-                    autoCapitalize="none"
-                  />
-                )}
-              </>
-            )}
-          </>
-        )}
         <TouchableOpacity
           style={allExhausted ? styles.backBtnFull : styles.backBtn}
           onPress={() => allExhausted ? navigation.popToTop() : navigation.goBack()}
@@ -536,35 +500,6 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: PALETTE.warmBrown + '30',
   },
-  coopRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  coopLabel: {
-    color: PALETTE.darkBrown,
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-  },
-  coopRequiredLabel: {
-    color: PALETTE.warmBrown,
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  partnerInput: {
-    backgroundColor: PALETTE.cream,
-    borderWidth: 1,
-    borderColor: PALETTE.warmBrown,
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    marginTop: 8,
-    fontSize: 13,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.darkBrown,
-  },
   backBtn: {
     marginTop: 12,
     alignSelf: 'center',
@@ -632,7 +567,20 @@ const styles = StyleSheet.create({
     color: PALETTE.cream,
   },
 
-  // ── Co-op only banner ──
+  // ── Co-op banners ──
+  coopSessionBanner: {
+    backgroundColor: PALETTE.honeyGold,
+    borderRadius: 8,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 10,
+    alignItems: 'center',
+  },
+  coopSessionText: {
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.darkBrown,
+  },
   coopOnlyBanner: {
     backgroundColor: PALETTE.honeyGold,
     borderRadius: 8,

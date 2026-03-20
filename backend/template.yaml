@@ -57,6 +57,7 @@ Globals:
         ADMIN_AUDIT_TABLE: !Ref AdminAuditTable
         LOCATION_MASTER_CONFIG_TABLE: !Ref LocationMasterConfigTable
         CLUSTER_WEIGHT_CONFIG_TABLE: !Ref ClusterWeightConfigTable
+        CLUSTERING_RUNS_TABLE: !Ref ClusteringRunsTable
 
 # ---------------------------------------------------------------------------
 # Resources
@@ -260,6 +261,8 @@ Resources:
           AttributeType: N
         - AttributeName: email
           AttributeType: S
+        - AttributeName: playerCode
+          AttributeType: S
       KeySchema:
         - AttributeName: userId
           KeyType: HASH
@@ -275,6 +278,12 @@ Resources:
         - IndexName: EmailIndex
           KeySchema:
             - AttributeName: email
+              KeyType: HASH
+          Projection:
+            ProjectionType: ALL
+        - IndexName: PlayerCodeIndex
+          KeySchema:
+            - AttributeName: playerCode
               KeyType: HASH
           Projection:
             ProjectionType: ALL
@@ -581,6 +590,21 @@ Resources:
         - AttributeName: configId
           KeyType: HASH
 
+  ClusteringRunsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-clustering-runs
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: date
+          KeyType: HASH
+      TimeToLiveSpecification:
+        AttributeName: expiresAt
+        Enabled: true
+
   # =========================================================================
   # Lambda Authorizer
   # =========================================================================
@@ -717,6 +741,33 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - getProfile.ts
+        External:
+          - '@aws-sdk/*'
+
+  SearchPlayerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-searchPlayer
+      CodeUri: functions/player/
+      Handler: searchPlayer.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/search
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - searchPlayer.ts
         External:
           - '@aws-sdk/*'
 
@@ -1477,6 +1528,35 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  CreateMasterLocationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-createMasterLocation
+      CodeUri: functions/admin/
+      Handler: createMasterLocation.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations/master
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - createMasterLocation.ts
+        External:
+          - '@aws-sdk/*'
+
   GetLocationsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -1528,6 +1608,62 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - updateLocation.ts
+        External:
+          - '@aws-sdk/*'
+
+  DeleteMasterLocationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-deleteMasterLocation
+      CodeUri: functions/admin/
+      Handler: deleteMasterLocation.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations/master/{locationId}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - deleteMasterLocation.ts
+        External:
+          - '@aws-sdk/*'
+
+  ImportPhase1DataFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-importPhase1Data
+      CodeUri: functions/admin/
+      Handler: importPhase1Data.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/locations/phase1-import
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - importPhase1Data.ts
         External:
           - '@aws-sdk/*'
 
@@ -1931,38 +2067,6 @@ Resources:
         External:
           - '@aws-sdk/*'
 
-  ApplyDailyConfigFunction:
-    Type: AWS::Serverless::Function
-    Properties:
-      FunctionName: !Sub grovewars-${Stage}-applyDailyConfig
-      CodeUri: functions/admin/
-      Handler: applyDailyConfig.handler
-      Timeout: 30
-      Policies:
-        - DynamoDBCrudPolicy:
-            TableName: !Ref DailyConfigTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref UsersTable
-        - DynamoDBCrudPolicy:
-            TableName: !Ref PlayerAssignmentsTable
-      Events:
-        Api:
-          Type: Api
-          Properties:
-            RestApiId: !Ref RestApi
-            Path: /admin/daily/apply
-            Method: POST
-    Metadata:
-      BuildMethod: esbuild
-      BuildProperties:
-        Minify: false
-        Target: es2020
-        Sourcemap: true
-        EntryPoints:
-          - applyDailyConfig.ts
-        External:
-          - '@aws-sdk/*'
-
   DeployAssignmentsFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -2010,6 +2114,10 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusteringRunsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterWeightConfigTable
       Events:
         Api:
           Type: Api
@@ -2039,6 +2147,8 @@ Resources:
             TableName: !Ref LocationsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
         - S3CrudPolicy:
             BucketName: !Ref AssetsBucket
       Events:
@@ -2068,6 +2178,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
       Events:
         Api:
           Type: Api
@@ -2257,6 +2369,10 @@ Resources:
             TableName: !Ref SpaceDecorationsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref WsConnectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterWeightConfigTable
         - Statement:
             - Effect: Allow
               Action:
@@ -2283,6 +2399,36 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - triggerScheduled.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetPlayerAssignmentFunction:
+    Type: AWS::Serverless::Function
+    Condition: IsNotProd
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getPlayerAssignment
+      CodeUri: functions/admin/
+      Handler: getPlayerAssignment.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/debug/assignment
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getPlayerAssignment.ts
         External:
           - '@aws-sdk/*'
 
@@ -2455,6 +2601,8 @@ Resources:
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref RosterTable
       Events:
         Api:
           Type: Api
@@ -2900,6 +3048,8 @@ Resources:
             TableName: !Ref LocationMasterConfigTable
         - DynamoDBCrudPolicy:
             TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterWeightConfigTable
         - Statement:
             - Effect: Allow
               Action:
@@ -3124,8 +3274,107 @@ Resources:
           - '@aws-sdk/*'
 
   # =========================================================================
+  # Daily Clustering — 7:45 AM IST (2:15 UTC), runs BEFORE dailyReset
+  # =========================================================================
+  DailyClusteringFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-dailyClustering
+      CodeUri: functions/scheduled/
+      Handler: dailyClustering.handler
+      Timeout: 180
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusteringRunsTable
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - dailyClustering.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Manual Clustering Trigger (admin endpoint)
+  # =========================================================================
+  TriggerClusteringFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-triggerClustering
+      CodeUri: functions/admin/
+      Handler: triggerClustering.handler
+      Timeout: 180
+      MemorySize: 512
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusteringRunsTable
+      Events:
+        PostApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/clustering/run
+            Method: POST
+        GetApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/clustering/run
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - triggerClustering.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
   # EventBridge Rules (separate resources — Lambda first, then rule, then permission)
   # =========================================================================
+
+  # Daily Clustering — 7:45 AM IST (2:15 UTC), before dailyReset
+  DailyClusteringRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-daily-clustering
+      Description: Daily clustering at 7:45 AM IST (2:15 UTC)
+      ScheduleExpression: cron(15 2 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt DailyClusteringFunction.Arn
+          Id: DailyClusteringTarget
+
+  DailyClusteringPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref DailyClusteringFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyClusteringRule.Arn
 
   # Daily Reset — 8:00 AM IST (2:30 UTC)
   DailyResetRule:

@@ -14,7 +14,8 @@ import { PALETTE, CLAN_COLORS, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
 import * as playerApi from '@/api/player';
-import { CHARACTER_PRESETS } from '@/utils/characterPresets';
+import PresetPicker from '@/components/tutorial/PresetPicker';
+import type { CharacterPreset } from '@/utils/characterPresets';
 import { MainModalParamList } from '@/navigation/MainStack';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
@@ -37,31 +38,39 @@ function validateName(name: string): string | null {
 export default function CharacterCreationScreen() {
   const navigation = useNavigation<Nav>();
   const clan = useAuthStore((s) => s.clan);
+  const savedPresetId = useAuthStore((s) => s.selectedPresetId);
+  const savedDisplayName = useAuthStore((s) => s.displayName);
+  const setSelectedPresetId = useAuthStore((s) => s.setSelectedPresetId);
   const clanColor = clan ? CLAN_COLORS[clan] : PALETTE.honeyGold;
 
-  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
-  const [displayName, setDisplayName] = useState('');
+  const [selectedPreset, setSelectedPreset] = useState<CharacterPreset | null>(null);
+  const [presetId, setPresetId] = useState<number | null>(savedPresetId);
+  const [displayName, setDisplayName] = useState(savedDisplayName ?? '');
   const [touched, setTouched] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const handlePresetSelect = (preset: CharacterPreset) => {
+    setSelectedPreset(preset);
+    setPresetId(preset.id);
+  };
+
   const nameError = touched ? validateName(displayName) : null;
-  const isValid = selectedIndex !== null && validateName(displayName) === null;
+  const isValid = presetId !== null && validateName(displayName) === null;
 
   const handleSubmit = async () => {
-    if (!isValid || submitting || selectedIndex === null) return;
+    if (!isValid || submitting || presetId === null) return;
+
+    // Find the config from the selected preset or the previously set one
+    const preset = selectedPreset;
+    if (!preset) return;
+
     setSubmitting(true);
     setErrorMsg(null);
     try {
-      const result = await playerApi.updateAvatar(displayName.trim(), {
-        hairStyle: 0,
-        hairColor: 0,
-        skinTone: 0,
-        outfit: 0,
-        accessory: 0,
-        characterPreset: selectedIndex,
-      });
+      const result = await playerApi.updateAvatar(displayName.trim(), preset.avatarConfig);
       if (result.success) {
+        setSelectedPresetId(preset.id);
         if (navigation.canGoBack()) {
           navigation.goBack();
         }
@@ -83,31 +92,17 @@ export default function CharacterCreationScreen() {
       keyboardShouldPersistTaps="handled"
     >
       {/* HEADER */}
-      <Text style={styles.title}>Who are you?</Text>
+      <Text style={styles.title}>Change your look</Text>
       <Text style={styles.subtitle}>
-        Choose your character and enter your name
+        Choose your character and update your name
       </Text>
 
-      {/* CHARACTER GRID */}
-      <View style={styles.grid}>
-        {CHARACTER_PRESETS.map((preset) => {
-          const isSelected = selectedIndex === preset.index;
-          return (
-            <Pressable
-              key={preset.index}
-              style={[
-                styles.card,
-                { backgroundColor: preset.color },
-                isSelected && styles.cardSelected,
-                isSelected && { borderColor: clanColor },
-              ]}
-              onPress={() => setSelectedIndex(preset.index)}
-            >
-              <Text style={styles.cardEmoji}>{preset.emoji}</Text>
-            </Pressable>
-          );
-        })}
-      </View>
+      {/* PRESET PICKER */}
+      <PresetPicker
+        selectedPresetId={presetId}
+        onSelect={handlePresetSelect}
+        style={styles.pickerArea}
+      />
 
       {/* NAME INPUT */}
       <Text style={styles.inputLabel}>Display Name</Text>
@@ -153,9 +148,9 @@ export default function CharacterCreationScreen() {
         disabled={!isValid || submitting}
       >
         {submitting ? (
-          <ActivityIndicator size="small" color="#FFFFFF" />
+          <ActivityIndicator size="small" color={PALETTE.cream} />
         ) : (
-          <Text style={styles.confirmBtnText}>Enter the Grove</Text>
+          <Text style={styles.confirmBtnText}>Save Changes</Text>
         )}
       </Pressable>
     </ScrollView>
@@ -188,29 +183,9 @@ const styles = StyleSheet.create({
     marginBottom: 28,
   },
 
-  // Grid
-  grid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'center',
-    gap: 12,
+  // Preset picker
+  pickerArea: {
     marginBottom: 28,
-  },
-  card: {
-    width: 80,
-    height: 80,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 3,
-    borderColor: 'transparent',
-  },
-  cardSelected: {
-    borderWidth: 3,
-    transform: [{ scale: 1.06 }],
-  },
-  cardEmoji: {
-    fontSize: 36,
   },
 
   // Name input
@@ -276,6 +251,6 @@ const styles = StyleSheet.create({
   confirmBtnText: {
     fontSize: 20,
     fontFamily: FONTS.headerBold,
-    color: '#FFFFFF',
+    color: PALETTE.cream,
   },
 });

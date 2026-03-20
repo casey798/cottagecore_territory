@@ -1,14 +1,18 @@
 import React, { useState } from 'react';
-import { View, Text, Pressable, StyleSheet } from 'react-native';
+import { View, Text, TextInput, Pressable, StyleSheet } from 'react-native';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import type { AvatarConfig } from '@/types';
 import MossPortrait from '../MossPortrait';
-import CharacterCreationPane from '../CharacterCreationPane';
+import PresetPicker from '../PresetPicker';
+import type { CharacterPreset } from '@/utils/characterPresets';
 
 interface Scene8CharacterCreationProps {
-  onComplete: (displayName: string, avatarConfig: AvatarConfig) => void;
+  onComplete: (displayName: string, avatarConfig: AvatarConfig, presetId: number) => void;
 }
+
+const MIN_NAME_LENGTH = 3;
+const MAX_NAME_LENGTH = 20;
 
 function StaticMossLine({ text }: { text: string }) {
   return (
@@ -28,34 +32,47 @@ export default function Scene8CharacterCreation({
   onComplete,
 }: Scene8CharacterCreationProps) {
   const [displayName, setDisplayName] = useState('');
-  const [avatarConfig, setAvatarConfig] = useState<AvatarConfig>({
-    hairStyle: 1,
-    hairColor: 1,
-    skinTone: 1,
-    outfit: 1,
-    accessory: 0,
-  });
+  const [selectedPreset, setSelectedPreset] = useState<CharacterPreset | null>(null);
 
-  const isValid = displayName.trim().length >= 3;
+  const isValid =
+    displayName.trim().length >= MIN_NAME_LENGTH &&
+    displayName.trim().length <= MAX_NAME_LENGTH &&
+    selectedPreset !== null;
 
   const handleEnter = () => {
-    if (isValid) {
-      onComplete(displayName.trim(), avatarConfig);
+    if (isValid && selectedPreset) {
+      onComplete(displayName.trim(), selectedPreset.avatarConfig, selectedPreset.id);
     }
   };
 
   return (
     <View style={styles.container}>
       <View style={styles.bannerArea}>
-        <StaticMossLine text="But first… the grove must know who you are. Every wanderer leaves their own mark." />
+        <StaticMossLine text="But first\u2026 the grove must know who you are. Every wanderer leaves their own mark." />
       </View>
       <View style={styles.creationArea}>
-        <CharacterCreationPane
-          value={avatarConfig}
-          onChange={setAvatarConfig}
-          displayName={displayName}
-          onDisplayNameChange={setDisplayName}
+        <Text style={styles.heading}>Choose your look</Text>
+        <PresetPicker
+          selectedPresetId={selectedPreset?.id ?? null}
+          onSelect={setSelectedPreset}
+          style={styles.picker}
         />
+        <View style={styles.nameRow}>
+          <Text style={styles.inputLabel}>Display Name</Text>
+          <TextInput
+            style={styles.nameInput}
+            value={displayName}
+            onChangeText={setDisplayName}
+            maxLength={MAX_NAME_LENGTH}
+            placeholder="Enter name..."
+            placeholderTextColor={PALETTE.stoneGrey}
+            autoCapitalize="words"
+            autoCorrect={false}
+          />
+          <Text style={styles.charHint}>
+            {displayName.length} / {MAX_NAME_LENGTH}
+          </Text>
+        </View>
       </View>
       <View style={styles.buttonArea}>
         <Pressable
@@ -64,7 +81,7 @@ export default function Scene8CharacterCreation({
           disabled={!isValid}
         >
           <Text style={[styles.enterButtonText, !isValid && styles.enterButtonTextDisabled]}>
-            Enter the Grove →
+            Enter the Grove \u2192
           </Text>
         </Pressable>
       </View>
@@ -82,6 +99,43 @@ const styles = StyleSheet.create({
   },
   creationArea: {
     flex: 75,
+    paddingHorizontal: 16,
+  },
+  heading: {
+    fontFamily: FONTS.headerBold,
+    fontSize: 28,
+    color: PALETTE.cream,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+  picker: {
+    marginBottom: 16,
+  },
+  nameRow: {
+    marginTop: 4,
+  },
+  inputLabel: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 12,
+    color: PALETTE.stoneGrey,
+    marginBottom: 4,
+  },
+  nameInput: {
+    borderWidth: 1,
+    borderColor: PALETTE.stoneGrey,
+    borderRadius: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.cream,
+  },
+  charHint: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 10,
+    color: PALETTE.stoneGrey,
+    marginTop: 2,
+    textAlign: 'right',
   },
   buttonArea: {
     flex: 10,

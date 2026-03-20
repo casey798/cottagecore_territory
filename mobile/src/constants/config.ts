@@ -11,6 +11,8 @@ export const MAP_HEIGHT = 1080;
 export const MIN_ASSIGNED_LOCATIONS = 3;
 export const MAX_ASSIGNED_LOCATIONS = 5;
 
+export const PLAYER_CODE_PREFIX = 'GRV';
+
 export const DEV_CONFIG = {
   enabled: __DEV__,
   forceClan: 'bloom' as const,   // set to null to disable override

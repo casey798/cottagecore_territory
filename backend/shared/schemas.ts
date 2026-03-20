@@ -32,7 +32,10 @@ export const updateAvatarSchema = z.object({
 export const qrPayloadSchema = z.object({
   v: z.number(),
   l: z.string().uuid(),
-  d: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  d: z.union([
+    z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+    z.literal('permanent'),
+  ]),
   h: z.string(),
 });
 
@@ -40,6 +43,7 @@ export const scanQrSchema = z.object({
   qrData: qrPayloadSchema,
   gpsLat: z.number().min(-90).max(90),
   gpsLng: z.number().min(-180).max(180),
+  coopPartnerId: z.string().uuid().nullable().optional(),
 });
 
 export const startMinigameSchema = z.object({
@@ -103,3 +107,37 @@ export const saveDecorationSchema = z.object({
     placedAssets: z.array(placedAssetSchema),
   }),
 });
+
+export const submitCheckinSchema = z.object({
+  gpsLat: z.number().finite(),
+  gpsLng: z.number().finite(),
+  pixelX: z.number().min(0),
+  pixelY: z.number().min(0),
+  pixelAvailable: z.boolean(),
+  activityCategory: z.enum([
+    'high_effort_personal',
+    'low_effort_personal',
+    'high_effort_social',
+    'low_effort_social',
+  ]),
+  satisfaction: z.union([
+    z.literal(0),
+    z.literal(0.25),
+    z.literal(0.5),
+    z.literal(0.75),
+    z.literal(1),
+  ]),
+  sentiment: z.enum(['yes', 'maybe', 'no']),
+  floor: z.enum(['ground', 'first']),
+  durationMinutes: z.number().int().min(1).max(600),
+  activityTime: z.string().datetime({ offset: true }).refine((val) => {
+    const date = new Date(val);
+    // Convert to IST by adding 5h30m offset
+    const istOffset = 5.5 * 60 * 60 * 1000;
+    const istDate = new Date(date.getTime() + istOffset);
+    const istHour = istDate.getUTCHours();
+    return istHour >= 8 && istHour < 18;
+  }, { message: 'Activity time must be between 8 AM and 6 PM IST' }),
+});
+
+export type SubmitCheckinPayload = z.infer<typeof submitCheckinSchema>;

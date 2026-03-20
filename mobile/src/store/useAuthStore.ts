@@ -8,6 +8,8 @@ import { storeTokens, clearTokens, getStoredTokens } from '@/api/client';
 import { DEV_CONFIG } from '@/constants/config';
 import { apiRequest } from '@/api/client';
 import { ENDPOINTS } from '@/constants/api';
+import { useGameStore } from '@/store/useGameStore';
+import { useMapStore } from '@/store/useMapStore';
 
 function maybeOverrideClan(clan: ClanId | null, email: string | null): ClanId | null {
   if (
@@ -27,6 +29,9 @@ interface AuthState {
   token: string | null;
   clan: ClanId | null;
   email: string | null;
+  playerCode: string | null;
+  displayName: string | null;
+  selectedPresetId: number | null;
   tutorialDone: boolean;
   tutorialSkipped: boolean;
   isAuthenticated: boolean;
@@ -38,6 +43,7 @@ interface AuthState {
   refreshSession: () => Promise<boolean>;
   setTutorialDone: () => void;
   setTutorialSkipped: () => void;
+  setSelectedPresetId: (id: number) => void;
   restoreSession: () => Promise<boolean>;
 }
 
@@ -48,6 +54,9 @@ export const useAuthStore = create<AuthState>()(
       token: null,
       clan: null,
       email: null,
+      playerCode: null,
+      displayName: null,
+      selectedPresetId: null,
       tutorialDone: false,
       tutorialSkipped: false,
       isAuthenticated: false,
@@ -77,6 +86,8 @@ export const useAuthStore = create<AuthState>()(
             set({
               clan: maybeOverrideClan(profile.data.clan, profileEmail),
               email: profileEmail,
+              playerCode: profile.data.playerCode ?? null,
+              displayName: profile.data.displayName ?? null,
               tutorialDone: profile.data.tutorialDone,
             });
           }
@@ -99,11 +110,16 @@ export const useAuthStore = create<AuthState>()(
           token: null,
           clan: null,
           email: null,
+          playerCode: null,
+          displayName: null,
+          selectedPresetId: null,
           tutorialDone: false,
           tutorialSkipped: false,
           isAuthenticated: false,
           isLoading: false,
         });
+        useGameStore.getState().reset();
+        useMapStore.getState().reset();
       },
 
       setClan: async (clan: ClanId) => {
@@ -131,6 +147,8 @@ export const useAuthStore = create<AuthState>()(
             userId: result.data.userId,
             token: stored.token,
             clan: maybeOverrideClan(result.data.clan, currentEmail),
+            playerCode: result.data.playerCode ?? null,
+            displayName: result.data.displayName ?? null,
             tutorialDone: result.data.tutorialDone,
             isAuthenticated: true,
           });
@@ -145,6 +163,10 @@ export const useAuthStore = create<AuthState>()(
 
       setTutorialSkipped: () => {
         set({ tutorialSkipped: true });
+      },
+
+      setSelectedPresetId: (id: number) => {
+        set({ selectedPresetId: id });
       },
 
       restoreSession: async () => {
@@ -162,6 +184,8 @@ export const useAuthStore = create<AuthState>()(
             token: stored.token,
             clan: maybeOverrideClan(result.data.clan, restoredEmail),
             email: restoredEmail,
+            playerCode: result.data.playerCode ?? null,
+            displayName: result.data.displayName ?? null,
             tutorialDone: result.data.tutorialDone,
             isAuthenticated: true,
             isLoading: false,
@@ -178,11 +202,13 @@ export const useAuthStore = create<AuthState>()(
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (state) => ({
         userId: state.userId,
-        token: state.token,
         clan: state.clan,
         tutorialDone: state.tutorialDone,
         tutorialSkipped: state.tutorialSkipped,
         email: state.email,
+        playerCode: state.playerCode,
+        displayName: state.displayName,
+        selectedPresetId: state.selectedPresetId,
         isAuthenticated: state.isAuthenticated,
       }),
       onRehydrateStorage: () => {

@@ -11,15 +11,18 @@ import { generateGame as generateBloomSequenceGame } from '../../shared/minigame
 import { success, error, ErrorCode } from '../../shared/response';
 import { startMinigameSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
+import { isQuietModeActive } from '../../shared/quietMode';
 import {
   COOP_MINIGAME_IDS,
   GameResult,
   GameSession,
   Location,
-  LocationMasterConfig,
+  PlayerAssignment,
   PlayerLock,
   User,
 } from '../../shared/types';
+
+const DAILY_XP_CAP = 100;
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
@@ -28,6 +31,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const parsed = startMinigameSchema.safeParse(JSON.parse(event.body || '{}'));
     if (!parsed.success) {
       return error(ErrorCode.VALIDATION_ERROR, parsed.error.message, 400);
+    }
+
+    // Quiet mode check — block new minigame starts
+    if (await isQuietModeActive()) {
+      return error(ErrorCode.QUIET_MODE, 'The game is currently in quiet mode. No new sessions can be started.', 403);
     }
 
     const { locationId, minigameId, coopPartnerId } = parsed.data;
@@ -76,14 +84,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.MINIGAME_ALREADY_WON, 'You have already won this challenge today', 400);
     }
 
-    // Fetch location-master-config (best-effort) for coopOnly enforcement
-    let masterConfig: LocationMasterConfig | undefined;
-    try {
-      masterConfig = await getItem<LocationMasterConfig>('location-master-config', { locationId });
-    } catch (e) {
-      console.warn('[startMinigame] Failed to fetch location-master-config (non-fatal):', e);
-    }
-    const coopOnly = masterConfig?.coopOnly ?? location.coopOnly ?? false;
+    // Resolve coopOnly from player's daily assignment record
+    const dateUserId = `${today}#${userId}`;
+    const playerAssignment = await getItem<PlayerAssignment>('player-assignments', { dateUserId });
+    const coopOnly = playerAssignment?.coopLocationIds?.includes(locationId) ?? false;
 
     // Co-op only enforcement
     if (coopOnly && !coopPartnerId) {
@@ -93,12 +97,57 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.VALIDATION_ERROR, 'Solo minigames are not available at this location.', 400);
     }
 
-    // Co-op partner validation (cross-clan allowed)
+    // Co-op partner validation
+    const stage = process.env.STAGE || 'dev';
+    const isDevPartner = stage === 'dev' && coopPartnerId === 'dev-partner';
     let partnerUser: User | undefined;
+    let partnerIsGuest = false;
     if (coopPartnerId) {
-      partnerUser = await getItem<User>('users', { userId: coopPartnerId });
-      if (!partnerUser) {
-        return error(ErrorCode.NOT_FOUND, 'Co-op partner not found', 404);
+      if (isDevPartner) {
+        console.log('[startMinigame] Dev bypass: using synthetic dev-partner');
+        partnerIsGuest = true;
+      } else {
+        partnerUser = await getItem<User>('users', { userId: coopPartnerId });
+        if (!partnerUser) {
+          return error(ErrorCode.NOT_FOUND, 'Co-op partner not found', 404);
+        }
+
+        // Check partner daily XP cap
+        if (partnerUser.todayXp >= DAILY_XP_CAP) {
+          return error(ErrorCode.PARTNER_CAP_REACHED, 'Your partner has already reached the daily XP cap', 400);
+        }
+
+        // Check partner lock at this location
+        const partnerLock = await getItem<PlayerLock>('player-locks', {
+          dateUserLocation: `${today}#${coopPartnerId}#${locationId}`,
+        });
+        if (partnerLock) {
+          return error(ErrorCode.PARTNER_LOCATION_LOCKED, 'Your partner is locked at this location today', 400);
+        }
+
+        // Check partner already won this minigame today
+        const { items: partnerSessions } = await query<GameSession>(
+          'game-sessions',
+          'userId = :uid AND #d = :date',
+          { ':uid': coopPartnerId, ':date': today },
+          {
+            indexName: 'UserDateIndex',
+            expressionNames: { '#d': 'date' },
+            scanIndexForward: false,
+            limit: 50,
+          }
+        );
+        const partnerAlreadyWon = partnerSessions.some(
+          (s) => s.minigameId === minigameId && s.result === GameResult.Win && s.completedAt !== null,
+        );
+        if (partnerAlreadyWon) {
+          return error(ErrorCode.PARTNER_ALREADY_WON, 'Your partner has already won this minigame today', 400);
+        }
+
+        // Check if partner has this location in their daily assignment
+        const partnerDateUserId = `${today}#${coopPartnerId}`;
+        const partnerAssignment = await getItem<PlayerAssignment>('player-assignments', { dateUserId: partnerDateUserId });
+        partnerIsGuest = !partnerAssignment || !partnerAssignment.assignedLocationIds.includes(locationId);
       }
     }
 
@@ -121,6 +170,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       chestAssetId: null,
       completionHash: '',
       coopPartnerId: coopPartnerId ?? null,
+      ...(coopPartnerId ? { partnerIsGuest } : {}),
       _salt: salt,
       timeLimit: meta.timeLimit,
     };
@@ -215,11 +265,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
 
     // Inject partner identity into puzzleData for co-op game components
-    if (coopPartnerId && partnerUser) {
+    if (coopPartnerId && (partnerUser || isDevPartner)) {
       puzzleData.p1Name = user.displayName;
       puzzleData.p1Clan = user.clan;
-      puzzleData.p2Name = partnerUser.displayName;
-      puzzleData.p2Clan = partnerUser.clan;
+      puzzleData.p2Name = isDevPartner ? 'Dev Partner' : partnerUser!.displayName;
+      puzzleData.p2Clan = isDevPartner ? 'ember' : partnerUser!.clan;
     }
 
     await putItem('game-sessions', session as unknown as Record<string, unknown>);

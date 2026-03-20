@@ -1,11 +1,11 @@
 import { ClanId } from '@/types';
 
 export const CLAN_COLORS: Record<ClanId, string> = {
-  ember: '#C0392B',
-  tide: '#2980B9',
-  bloom: '#F1C40F',
-  gale: '#27AE60',
-  hearth: '#7D3C98',
+  ember: '#9E5550',
+  tide: '#4E7FA3',
+  bloom: '#C4A832',
+  gale: '#4A9966',
+  hearth: '#6E5082',
 };
 
 export const PALETTE = {
@@ -31,7 +31,7 @@ export const LORE_CLANS = [
     element: 'Paths & Discovery',
     description: 'Wandered the paths and discovered hidden places.',
     emoji: '🧭',
-    color: '#27AE60',
+    color: '#4A9966',
   },
   {
     id: 'guardians',
@@ -39,7 +39,7 @@ export const LORE_CLANS = [
     element: 'Balance & Ground',
     description: 'Watched the grounds and protected the balance of the land.',
     emoji: '🛡️',
-    color: '#7D3C98',
+    color: '#6E5082',
   },
   {
     id: 'makers',
@@ -47,7 +47,7 @@ export const LORE_CLANS = [
     element: 'Craft & Wonders',
     description: 'Shaped tools, crafted wonders, turned simple things into treasures.',
     emoji: '⚒️',
-    color: '#F1C40F',
+    color: '#C4A832',
   },
   {
     id: 'wardens',
@@ -55,7 +55,7 @@ export const LORE_CLANS = [
     element: 'Wind & Trees',
     description: 'Listened to the wind and the trees, learning the quiet language of nature.',
     emoji: '🌿',
-    color: '#C0392B',
+    color: '#9E5550',
   },
   {
     id: 'chroniclers',
@@ -63,7 +63,7 @@ export const LORE_CLANS = [
     element: 'Memory & Story',
     description: 'Remembered everything — every path walked, every story told.',
     emoji: '📜',
-    color: '#2980B9',
+    color: '#4E7FA3',
   },
 ] as const;
 
@@ -92,4 +92,5 @@ export const UI = {
   textMuted: PALETTE.stoneGrey,
   border: PALETTE.warmBrown,
   overlay: 'rgba(61, 43, 31, 0.5)',
+  modalBackdrop: 'rgba(0, 0, 0, 0.55)',
 } as const;

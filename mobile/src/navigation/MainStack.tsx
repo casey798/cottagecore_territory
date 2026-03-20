@@ -1,14 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { View, Text, StyleSheet } from 'react-native';
-import { PALETTE } from '@/constants/colors';
-import { FONTS } from '@/constants/fonts';
 import { ClanId, ChestDrop } from '@/types';
-import { useAssetStore } from '@/store/useAssetStore';
-import UnplacedAssetsBadge from '@/components/common/UnplacedAssetsBadge';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useGameStore } from '@/store/useGameStore';
 import { getTodayISTString } from '@/utils/time';
@@ -27,18 +21,22 @@ import CaptureCelebrationScreen from '@/screens/CaptureCelebrationScreen';
 import SettingsScreen from '@/screens/SettingsScreen';
 import CharacterCreationScreen from '@/screens/CharacterCreationScreen';
 import SeasonSummaryScreen from '@/screens/SeasonSummaryScreen';
-
-export type MainTabParamList = {
-  Map: undefined;
-  Clan: undefined;
-  Profile: undefined;
-  Inventory: undefined;
-};
+import FreeRoamCheckInScreen from '@/screens/FreeRoamCheckInScreen';
 
 export type MainModalParamList = {
-  Tabs: undefined;
+  Map: undefined;
+  ClanScoreboard: undefined;
+  PlayerProfile: undefined;
+  AssetInventory: undefined;
   QRScanner: { locationId?: string; locationName?: string } | undefined;
-  MinigameSelect: { locationId: string; locationName: string; practiceMode?: boolean };
+  MinigameSelect: {
+    locationId: string;
+    locationName: string;
+    practiceMode?: boolean;
+    isCoopSession?: boolean;
+    coopPartnerId?: string;
+    coopPartnerDisplayName?: string;
+  };
   MinigamePlay: {
     sessionId: string;
     minigameId: string;
@@ -74,82 +72,17 @@ export type MainModalParamList = {
     spaceName: string;
     clan: ClanId;
     gridCells: Array<{ x: number; y: number }>;
-    polygonPoints: Array<{ x: number; y: number }>;
+    polygonPoints?: Array<{ x: number; y: number }>;
+    userAssetId?: string;
   };
   CaptureCelebration: { clan: ClanId; spaceName: string };
   SeasonSummary: undefined;
   Settings: undefined;
   CharacterCreation: undefined;
+  FreeRoamCheckIn: undefined;
 };
 
-const Tab = createBottomTabNavigator<MainTabParamList>();
 const ModalStack = createNativeStackNavigator<MainModalParamList>();
-
-function TabLabel({ label, focused }: { label: string; focused: boolean }) {
-  return (
-    <Text style={[styles.tabLabel, focused && styles.tabLabelActive]}>
-      {label}
-    </Text>
-  );
-}
-
-function InventoryTabLabel({ focused }: { focused: boolean }) {
-  const unplacedCount = useAssetStore((s) => s.unplacedCount);
-  return (
-    <View style={{ position: 'relative' }}>
-      <TabLabel label="Inventory" focused={focused} />
-      <UnplacedAssetsBadge count={unplacedCount} />
-    </View>
-  );
-}
-
-function TabNavigator() {
-  return (
-    <Tab.Navigator
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle: styles.tabBar,
-        tabBarActiveTintColor: PALETTE.honeyGold,
-        tabBarInactiveTintColor: PALETTE.stoneGrey,
-      }}
-    >
-      <Tab.Screen
-        name="Map"
-        component={MainMapScreen}
-        options={{
-          tabBarLabel: ({ focused }) => (
-            <TabLabel label="Map" focused={focused} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Clan"
-        component={ClanScoreboardScreen}
-        options={{
-          tabBarLabel: ({ focused }) => (
-            <TabLabel label="Clan" focused={focused} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Profile"
-        component={PlayerProfileScreen}
-        options={{
-          tabBarLabel: ({ focused }) => (
-            <TabLabel label="Profile" focused={focused} />
-          ),
-        }}
-      />
-      <Tab.Screen
-        name="Inventory"
-        component={AssetInventoryScreen}
-        options={{
-          tabBarLabel: ({ focused }) => <InventoryTabLabel focused={focused} />,
-        }}
-      />
-    </Tab.Navigator>
-  );
-}
 
 export function MainStack() {
   // Connect WebSocket at the stack level so it persists across all screens
@@ -164,7 +97,7 @@ export function MainStack() {
     checkedRef.current = true;
 
     (async () => {
-      // FIX 3: Daily info safety net — catch missed FCM + WS entirely
+      // Daily info safety net — catch missed FCM + WS entirely
       try {
         const result = await mapApi.getDailyInfo();
         if (result.success && result.data) {
@@ -184,7 +117,7 @@ export function MainStack() {
         // Non-fatal — celebration will be missed if all channels fail
       }
 
-      // FIX 4: Navigate to celebration if pending
+      // Navigate to celebration if pending
       const { celebrationPending, pendingCelebrationClan, pendingCelebrationSpace } =
         useGameStore.getState();
       if (celebrationPending && pendingCelebrationClan && pendingCelebrationSpace) {
@@ -198,7 +131,22 @@ export function MainStack() {
 
   return (
     <ModalStack.Navigator screenOptions={{ headerShown: false }}>
-      <ModalStack.Screen name="Tabs" component={TabNavigator} />
+      <ModalStack.Screen name="Map" component={MainMapScreen} />
+      <ModalStack.Screen
+        name="ClanScoreboard"
+        component={ClanScoreboardScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <ModalStack.Screen
+        name="PlayerProfile"
+        component={PlayerProfileScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <ModalStack.Screen
+        name="AssetInventory"
+        component={AssetInventoryScreen}
+        options={{ presentation: 'modal' }}
+      />
       <ModalStack.Screen
         name="QRScanner"
         component={QRScannerScreen}
@@ -249,24 +197,11 @@ export function MainStack() {
         component={CharacterCreationScreen}
         options={{ presentation: 'modal' }}
       />
+      <ModalStack.Screen
+        name="FreeRoamCheckIn"
+        component={FreeRoamCheckInScreen}
+        options={{ headerShown: false, presentation: 'fullScreenModal' }}
+      />
     </ModalStack.Navigator>
   );
 }
-
-const styles = StyleSheet.create({
-  tabBar: {
-    backgroundColor: PALETTE.parchmentBg,
-    borderTopColor: PALETTE.warmBrown,
-    borderTopWidth: 1,
-    height: 50,
-  },
-  tabLabel: {
-    fontSize: 11,
-    fontFamily: FONTS.bodySemiBold,
-    color: PALETTE.stoneGrey,
-  },
-  tabLabelActive: {
-    color: PALETTE.honeyGold,
-    fontFamily: FONTS.bodyBold,
-  },
-});

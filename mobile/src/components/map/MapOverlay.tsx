@@ -1,12 +1,12 @@
 import React, { useMemo } from 'react';
 import {
   Path as SkiaPath,
+  LinearGradient,
+  vec,
   Skia,
 } from '@shopify/react-native-skia';
 import { CLAN_COLORS } from '@/constants/colors';
 import { CapturedSpace, ClanId } from '@/types';
-
-const TILE_SIZE = 16;
 
 interface Props {
   capturedSpaces: CapturedSpace[];
@@ -32,27 +32,18 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-function buildGridBordersPath(cells: Array<{ x: number; y: number }>) {
-  const path = Skia.Path.Make();
-  for (const cell of cells) {
-    const px = cell.x * TILE_SIZE;
-    const py = cell.y * TILE_SIZE;
-    path.moveTo(px, py);
-    path.lineTo(px + TILE_SIZE, py);
-    path.lineTo(px + TILE_SIZE, py + TILE_SIZE);
-    path.lineTo(px, py + TILE_SIZE);
-    path.close();
+function getBounds(points: Array<{ x: number; y: number }>) {
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y > maxY) maxY = p.y;
   }
-  return path;
+  return { minX, minY, maxX, maxY };
 }
 
-function SpacePolygon({
-  space,
-  isSelected,
-}: {
-  space: CapturedSpace;
-  isSelected: boolean;
-}) {
+function SpacePolygon({ space }: { space: CapturedSpace }) {
   const hex = CLAN_COLORS[space.clan as ClanId] ?? '#FFFFFF';
 
   const polygonPath = useMemo(
@@ -60,31 +51,34 @@ function SpacePolygon({
     [space.polygonPoints],
   );
 
-  const gridPath = useMemo(
-    () =>
-      isSelected && space.gridCells ? buildGridBordersPath(space.gridCells) : null,
-    [isSelected, space.gridCells],
+  const bounds = useMemo(
+    () => (space.polygonPoints ? getBounds(space.polygonPoints) : null),
+    [space.polygonPoints],
   );
 
-  if (!polygonPath) return null;
+  if (!polygonPath || !bounds) return null;
 
   return (
     <>
-      {/* Clan-colored polygon fill at 20% opacity */}
+      {/* Inner glow — gradient fill from clan color to transparent */}
       <SkiaPath
         path={polygonPath}
-        color={hexToRgba(hex, 0.2)}
         style="fill"
-      />
-      {/* Selected state: grid cell outlines */}
-      {isSelected && gridPath && (
-        <SkiaPath
-          path={gridPath}
-          color={hexToRgba(hex, 0.6)}
-          style="stroke"
-          strokeWidth={1}
+      >
+        <LinearGradient
+          start={vec(bounds.minX, bounds.minY)}
+          end={vec(bounds.maxX, bounds.maxY)}
+          colors={[hexToRgba(hex, 0.10), hexToRgba(hex, 0.04)]}
         />
-      )}
+      </SkiaPath>
+
+      {/* Border — stroke outline */}
+      <SkiaPath
+        path={polygonPath}
+        style="stroke"
+        strokeWidth={2.5}
+        color={hexToRgba(hex, 0.50)}
+      />
     </>
   );
 }
@@ -102,7 +96,6 @@ export function MapOverlay({ capturedSpaces, selectedSpaceId }: Props) {
         <SpacePolygon
           key={space.spaceId}
           space={space}
-          isSelected={space.spaceId === selectedSpaceId}
         />
       ))}
     </>

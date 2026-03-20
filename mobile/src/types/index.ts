@@ -22,7 +22,6 @@ export interface AvatarConfig {
   skinTone: number;
   outfit: number;
   accessory: number;
-  characterPreset?: number;
 }
 
 export interface User {
@@ -39,6 +38,7 @@ export interface User {
   lastActiveDate: string;
   tutorialDone: boolean;
   fcmToken: string;
+  playerCode: string | null;
   createdAt: string;
 }
 
@@ -59,6 +59,7 @@ export interface Location {
   category: LocationCategory;
   locked: boolean;
   bonusXP?: boolean;
+  isCoop?: boolean;
 }
 
 export interface TargetSpace {
@@ -94,6 +95,7 @@ export interface MinigameInfo {
   name: string;
   timeLimit: number;
   description: string;
+  difficulty?: 'easy' | 'medium' | 'hard';
   completed: boolean;
 }
 
@@ -113,12 +115,30 @@ export interface LocationModifiers {
   linkedTo: string | null;
 }
 
-export interface ScanQRResponse {
+export interface ScanQRMinigameResponse {
   locationId: string;
   locationName: string;
   availableMinigames: MinigameInfo[];
   xpAvailable?: boolean;
+  capReached?: boolean;
   locationModifiers?: LocationModifiers;
+  isCoopSession?: boolean;
+  partnerDisplayName?: string;
+}
+
+export interface CoopPartnerRequiredResponse {
+  partnerRequired: true;
+  locationId: string;
+  locationName: string;
+}
+
+export type ScanQRResponse = ScanQRMinigameResponse | CoopPartnerRequiredResponse;
+
+export interface PlayerSearchResult {
+  userId: string;
+  displayName: string;
+  playerCode: string;
+  clan: string;
 }
 
 export interface GameSession {
@@ -135,6 +155,7 @@ export interface GameSession {
   chestAssetId: string | null;
   completionHash: string;
   coopPartnerId: string | null;
+  partnerIsGuest: boolean;
 }
 
 export interface StartGameResponse {
@@ -264,6 +285,7 @@ export interface PlayerProfile {
   currentStreak: number;
   bestStreak: number;
   tutorialDone: boolean;
+  playerCode?: string | null;
 }
 
 export interface ApiResponse<T> {
@@ -399,7 +421,7 @@ export type LeaveReason =
   | 'fallback_next_session'
   | 'fallback_end_of_day';
 
-export type Floor = 'outdoor' | 'ground' | 'first' | 'second' | 'third';
+export type Floor = 'ground' | 'first';
 
 export enum ErrorCode {
   InvalidDomain = 'INVALID_DOMAIN',
@@ -423,4 +445,7 @@ export enum ErrorCode {
   GameInactive = 'GAME_INACTIVE',
   SeasonEnded = 'SEASON_ENDED',
   AllMinigamesPlayed = 'ALL_MINIGAMES_PLAYED',
+  PartnerCapReached = 'PARTNER_CAP_REACHED',
+  PartnerLocationLocked = 'PARTNER_LOCATION_LOCKED',
+  PartnerAlreadyWon = 'PARTNER_ALREADY_WON',
 }

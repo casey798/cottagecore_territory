@@ -1,12 +1,13 @@
+import crypto from 'crypto';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import QRCode from 'qrcode';
 import PDFDocument from 'pdfkit';
 import { success, error, ErrorCode } from '../../shared/response';
 import { generateQrSchema } from '../../shared/schemas';
-import { getItem, updateItem } from '../../shared/db';
-import { generateQrPayload } from '../../shared/hmac';
-import type { DailyConfig, Location, QrPayload } from '../../shared/types';
+import { getItem, updateItem, scan } from '../../shared/db';
+import { generateQrPayload, generatePermanentQrPayload } from '../../shared/hmac';
+import type { DailyConfig, Location, LocationMasterConfig, QrPayload } from '../../shared/types';
 
 const s3 = new S3Client({ region: process.env.AWS_REGION || 'ap-south-1' });
 const ASSETS_BUCKET = process.env.ASSETS_BUCKET || '';
@@ -104,6 +105,74 @@ export async function handler(
 
     // Validate input
     const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
+    const mode = body.mode as string | undefined;
+
+    // ── Permanent QR generation mode ────────────────────────────────
+    if (mode === 'permanent') {
+      const allLocations: LocationMasterConfig[] = [];
+      let lastKey: Record<string, unknown> | undefined;
+      do {
+        const result = await scan<LocationMasterConfig>('location-master-config', {
+          exclusiveStartKey: lastKey,
+        });
+        allLocations.push(...result.items);
+        lastKey = result.lastEvaluatedKey;
+      } while (lastKey);
+
+      allLocations.sort((a, b) => a.qrNumber - b.qrNumber);
+
+      const qrCodesOut: { locationId: string; locationName: string; qrPayload: string; qrImageBase64: string; qrGeneratedAt: string; alreadyExisted: boolean; active: boolean }[] = [];
+
+      for (const loc of allLocations) {
+        // Skip locations that already have a permanent QR
+        if (loc.qrSecret && loc.qrImageBase64 && loc.qrPayload) {
+          qrCodesOut.push({
+            locationId: loc.locationId,
+            locationName: loc.name,
+            qrPayload: loc.qrPayload,
+            qrImageBase64: loc.qrImageBase64,
+            qrGeneratedAt: loc.qrGeneratedAt ?? '',
+            alreadyExisted: true,
+            active: loc.active,
+          });
+          continue;
+        }
+
+        // Generate new secret if missing
+        const locSecret = loc.qrSecret || crypto.randomBytes(32).toString('hex');
+        const payload = generatePermanentQrPayload(loc.locationId, locSecret);
+        const qrPayloadString = JSON.stringify(payload);
+
+        const qrImageBase64 = await QRCode.toDataURL(qrPayloadString, {
+          width: 300,
+          margin: 2,
+          errorCorrectionLevel: 'M',
+        });
+
+        const now = new Date().toISOString();
+
+        await updateItem(
+          'location-master-config',
+          { locationId: loc.locationId },
+          'SET qrSecret = :s, qrGeneratedAt = :t, qrImageBase64 = :img, qrPayload = :p',
+          { ':s': locSecret, ':t': now, ':img': qrImageBase64, ':p': qrPayloadString },
+        );
+
+        qrCodesOut.push({
+          locationId: loc.locationId,
+          locationName: loc.name,
+          qrPayload: qrPayloadString,
+          qrImageBase64,
+          qrGeneratedAt: now,
+          alreadyExisted: false,
+          active: loc.active,
+        });
+      }
+
+      return success({ qrCodes: qrCodesOut, mode: 'permanent' });
+    }
+
+    // ── Daily QR generation mode (existing) ─────────────────────────
     const parsed = generateQrSchema.safeParse(body);
     if (!parsed.success) {
       return error(ErrorCode.VALIDATION_ERROR, parsed.error.message, 400);

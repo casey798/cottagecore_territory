@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ScanQRResponse, GameResult, DailyInfo, Location } from '@/types';
+import { ScanQRResponse, ScanQRMinigameResponse, GameResult, DailyInfo, Location } from '@/types';
 import { XP_PER_WIN } from '@/constants/config';
 import { getTodayISTString } from '@/utils/time';
 
@@ -37,7 +37,7 @@ interface GameState {
   setTodayLocations: (locations: Location[]) => void;
   setDailyInfo: (info: DailyInfo) => void;
   markXpEarnedAtLocation: (locationId: string) => void;
-  patchLastScanResult: (patch: Partial<ScanQRResponse>) => void;
+  patchLastScanResult: (patch: Partial<ScanQRMinigameResponse>) => void;
   setResetSeq: (seq: number) => void;
   setCelebrationPending: (clan: string, spaceName: string) => void;
   clearCelebration: () => void;
@@ -48,6 +48,7 @@ interface GameState {
   setActiveLocationSession: (sessionId: string) => void;
   clearActiveLocationSession: () => void;
   resetDaily: () => void;
+  reset: () => void;
 }
 
 export const useGameStore = create<GameState>()(
@@ -113,7 +114,7 @@ export const useGameStore = create<GameState>()(
           xpEarnedDate: getTodayISTString(),
         })),
 
-      patchLastScanResult: (patch: Partial<ScanQRResponse>) =>
+      patchLastScanResult: (patch: Partial<ScanQRMinigameResponse>) =>
         set((state) => {
           if (!state.lastScanResult) return {};
           return { lastScanResult: { ...state.lastScanResult, ...patch } };
@@ -163,6 +164,30 @@ export const useGameStore = create<GameState>()(
           activeLocationSessionId: null,
           activeLocationSessionStart: null,
         }),
+
+      reset: () => {
+        set({
+          todayXp: 0,
+          currentSessionId: null,
+          lastScanResult: null,
+          captureResult: null,
+          selectedLocationId: null,
+          todayLocations: [],
+          dailyInfo: null,
+          xpEarnedAtLocations: {},
+          xpEarnedDate: null,
+          lastResetDate: null,
+          resetSeq: 0,
+          celebrationPending: false,
+          pendingCelebrationClan: null,
+          pendingCelebrationSpace: null,
+          lastSeenCelebrationDate: null,
+          quietMode: false,
+          activeLocationSessionId: null,
+          activeLocationSessionStart: null,
+        });
+        AsyncStorage.removeItem('grove-wars-game');
+      },
     }),
     {
       name: 'grove-wars-game',

@@ -32,14 +32,19 @@ export async function handler(
     const qrSecret = existing?.qrSecret ?? crypto.randomBytes(32).toString('hex');
     console.log('[setDailyConfig] qrSecret:', existing ? 'reused existing' : 'generated new');
 
-    // Create daily config record, preserving existing qrCodes if present
+    // Preserve winnerClan and status if scoring has already happened
+    const scoringDone = existing && (
+      existing.status === DailyConfigStatus.Complete ||
+      existing.status === DailyConfigStatus.Scoring
+    );
+
     const dailyConfig: Record<string, unknown> = {
       date,
       activeLocationIds: activeLocationIds ?? [],
       targetSpace: targetSpace ?? null,
       qrSecret,
-      winnerClan: null,
-      status: DailyConfigStatus.Active,
+      winnerClan: scoringDone ? existing.winnerClan : null,
+      status: scoringDone ? existing.status : DailyConfigStatus.Active,
       quietMode: quietMode ?? false,
     };
 

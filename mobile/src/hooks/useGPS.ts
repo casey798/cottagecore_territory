@@ -87,7 +87,7 @@ export function useGPS(): GPSState {
         const acc = position.coords.accuracy;
         const weak = acc > GPS_ACCURACY_WEAK;
 
-        if (acc > GPS_ACCURACY_OK && acc <= GPS_ACCURACY_WEAK) {
+        if (__DEV__ && acc > GPS_ACCURACY_OK && acc <= GPS_ACCURACY_WEAK) {
           console.warn(
             `[GPS] Accuracy ${acc.toFixed(1)}m is between ${GPS_ACCURACY_OK}-${GPS_ACCURACY_WEAK}m — proceeding with warning`,
           );

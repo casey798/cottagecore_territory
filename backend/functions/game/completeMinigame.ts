@@ -6,6 +6,7 @@ import { verifyCompletionHash, verifyClientCompletionHash } from '../../shared/h
 import { success, error, ErrorCode } from '../../shared/response';
 import { completeMinigameSchema } from '../../shared/schemas';
 import { getTodayISTString, getMidnightISTAsISO, getNext8amISTEpochSeconds } from '../../shared/time';
+import { isQuietModeActive } from '../../shared/quietMode';
 import { broadcastScoreUpdate } from '../websocket/broadcast';
 import {
   applyTap as pipsApplyTap,
@@ -24,7 +25,6 @@ import {
   ChestDrop,
   GameResult,
   GameSession,
-  LocationMasterConfig,
   PlayerAsset,
   PlayerLock,
   SOLO_CHEST_WEIGHTS,
@@ -136,6 +136,28 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     // 2. Session not already completed
     if (session.completedAt !== null) {
       return error(ErrorCode.SESSION_COMPLETED, 'Session has already been completed', 400);
+    }
+
+    // 2b. Quiet mode check — cancel in-flight session cleanly
+    if (await isQuietModeActive()) {
+      const now = new Date().toISOString();
+      await updateItem(
+        'game-sessions',
+        { sessionId },
+        'SET completedAt = :completedAt, #r = :result, xpEarned = :xp, completionHash = :hash',
+        {
+          ':completedAt': now,
+          ':result': GameResult.Abandoned,
+          ':xp': 0,
+          ':hash': completionHash,
+        },
+        { '#r': 'result' }
+      );
+      return error(
+        ErrorCode.QUIET_MODE_ACTIVE,
+        'Quiet mode was enabled during your session. No XP has been awarded.',
+        403,
+      );
     }
 
     // 3. Verify completion hash — try client-salt hash first, then server-salt hash
@@ -483,7 +505,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         }
 
         // Co-op: repeat XP/streak for partner + independent chest roll + cross-clan XP
-        if (session.coopPartnerId) {
+        if (session.coopPartnerId && session.coopPartnerId !== 'dev-partner') {
           const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
           const partnerClanId = coopResult.clan;
 
@@ -591,23 +613,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
       await putItem('player-locks', playerLock as unknown as Record<string, unknown>);
 
-      // 1b. Lock partner at co-op-only locations
-      if (session.coopPartnerId) {
-        let isCoopOnlyLocation = false;
-        try {
-          const mc = await getItem<LocationMasterConfig>('location-master-config', { locationId: session.locationId });
-          isCoopOnlyLocation = mc?.coopOnly ?? false;
-        } catch (e) {
-          console.warn('[completeMinigame] Failed to check coopOnly for partner lock (non-fatal):', e);
-        }
-        if (isCoopOnlyLocation) {
-          const partnerLock: PlayerLock = {
-            dateUserLocation: `${today}#${session.coopPartnerId}#${session.locationId}`,
-            lockedAt: now,
-            ttl,
-          };
-          await putItem('player-locks', partnerLock as unknown as Record<string, unknown>);
-        }
+      // 1b. Lock partner only if they are NOT a guest (i.e. location was in their assignment)
+      if (session.coopPartnerId && session.coopPartnerId !== 'dev-partner' && session.partnerIsGuest === false) {
+        const partnerLock: PlayerLock = {
+          dateUserLocation: `${today}#${session.coopPartnerId}#${session.locationId}`,
+          lockedAt: now,
+          ttl,
+        };
+        await putItem('player-locks', partnerLock as unknown as Record<string, unknown>);
       }
 
       // 2. Update session

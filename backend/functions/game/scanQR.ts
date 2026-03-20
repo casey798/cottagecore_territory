@@ -2,10 +2,11 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { extractUserId } from '../../shared/auth';
 import { getItem, query, updateItem } from '../../shared/db';
 import { isWithinGeofence } from '../../shared/geo';
-import { verifyQrPayload } from '../../shared/hmac';
+import { verifyQrPayload, verifyPermanentQrPayload } from '../../shared/hmac';
 import { success, error, ErrorCode } from '../../shared/response';
 import { scanQrSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
+import { isQuietModeActive } from '../../shared/quietMode';
 import { MINIGAME_POOL } from '../../shared/minigames';
 import {
   COOP_MINIGAME_IDS,
@@ -21,7 +22,20 @@ import {
 } from '../../shared/types';
 
 const DAILY_XP_CAP = 100;
-const SET_SIZE = 6;
+const SOLO_SET_SIZE = 6;
+const COOP_SET_SIZE = 3;
+const TARGET_EASY = 2;
+const TARGET_MEDIUM = 3;
+const TARGET_HARD = 1;
+
+function shuffle<T>(arr: T[]): T[] {
+  const copy = [...arr];
+  for (let i = copy.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
 
 function pickRandomMinigames(excludeIds: string[], coopOnly: boolean): string[] {
   const allEntries = Object.keys(MINIGAME_POOL);
@@ -34,9 +48,32 @@ function pickRandomMinigames(excludeIds: string[], coopOnly: boolean): string[] 
     pool = allEntries.filter((id) => !coopSet.has(id) && !excludeIds.includes(id));
   }
 
-  const shuffled = pool.sort(() => Math.random() - 0.5);
-  const count = Math.max(coopOnly ? 3 : SET_SIZE, 0);
-  return shuffled.slice(0, Math.min(count, shuffled.length));
+  // Co-op: flat random (only 6 games, no meaningful difficulty split)
+  if (coopOnly) {
+    return shuffle(pool).slice(0, Math.min(COOP_SET_SIZE, pool.length));
+  }
+
+  // Solo: difficulty-bucketed selection (2 Easy + 3 Medium + 1 Hard)
+  const easy: string[] = [];
+  const medium: string[] = [];
+  const hard: string[] = [];
+
+  for (const id of pool) {
+    const diff = MINIGAME_POOL[id].difficulty;
+    if (diff === 'easy') easy.push(id);
+    else if (diff === 'hard') hard.push(id);
+    else medium.push(id);
+  }
+
+  const pickedEasy = shuffle(easy).slice(0, TARGET_EASY);
+  const pickedHard = shuffle(hard).slice(0, TARGET_HARD);
+
+  // Shortfall from easy/hard gets compensated from medium
+  const shortfall = (TARGET_EASY - pickedEasy.length) + (TARGET_HARD - pickedHard.length);
+  const pickedMedium = shuffle(medium).slice(0, TARGET_MEDIUM + shortfall);
+
+  const result = [...pickedEasy, ...pickedMedium, ...pickedHard];
+  return result.slice(0, SOLO_SET_SIZE);
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -48,27 +85,51 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.VALIDATION_ERROR, parsed.error.message, 400);
     }
 
+    // Quiet mode check — block all new sessions
+    if (await isQuietModeActive()) {
+      return error(ErrorCode.QUIET_MODE, 'The game is currently in quiet mode. No new sessions can be started.', 403);
+    }
+
     const { qrData, gpsLat, gpsLng } = parsed.data;
     const today = getTodayISTString();
-
-    // Step 1: Check QR date matches today
-    if (qrData.d !== today) {
-      return error(ErrorCode.QR_EXPIRED, 'QR code has expired', 400);
-    }
-
-    // Step 2: Verify HMAC using daily config's qrSecret
-    const dailyConfig = await getItem<DailyConfig>('daily-config', { date: today });
-    if (!dailyConfig) {
-      return error(ErrorCode.GAME_INACTIVE, 'No daily config found for today', 400);
-    }
+    const isPermanentQr = qrData.v === 2 || qrData.d === 'permanent';
 
     const stage = process.env.STAGE || 'dev';
     const isDevBypass = stage === 'dev' && qrData.h === 'dev-bypass';
-    if (!isDevBypass && !verifyQrPayload(qrData, dailyConfig.qrSecret)) {
-      return error(ErrorCode.QR_INVALID, 'Invalid QR code', 400);
-    }
-
     const locationId = qrData.l;
+
+    // Step 1+2: Verify QR authenticity — branched by QR version
+    let dailyConfig: DailyConfig | undefined;
+
+    if (isPermanentQr) {
+      // Permanent QR: verify using per-location secret from location-master-config
+      if (!isDevBypass) {
+        const mc = await getItem<LocationMasterConfig>('location-master-config', { locationId });
+        if (!mc?.qrSecret) {
+          return error(ErrorCode.QR_INVALID, 'No permanent QR configured for this location', 400);
+        }
+        if (!verifyPermanentQrPayload(qrData, mc.qrSecret)) {
+          return error(ErrorCode.QR_INVALID, 'Invalid QR code', 400);
+        }
+      }
+      // Still need daily config for activeLocationIds check
+      dailyConfig = await getItem<DailyConfig>('daily-config', { date: today }) ?? undefined;
+      if (!dailyConfig) {
+        return error(ErrorCode.GAME_INACTIVE, 'No daily config found for today', 400);
+      }
+    } else {
+      // Daily QR (v1): existing validation — date must match today
+      if (qrData.d !== today) {
+        return error(ErrorCode.QR_EXPIRED, 'QR code has expired', 400);
+      }
+      dailyConfig = await getItem<DailyConfig>('daily-config', { date: today }) ?? undefined;
+      if (!dailyConfig) {
+        return error(ErrorCode.GAME_INACTIVE, 'No daily config found for today', 400);
+      }
+      if (!isDevBypass && !verifyQrPayload(qrData, dailyConfig.qrSecret)) {
+        return error(ErrorCode.QR_INVALID, 'Invalid QR code', 400);
+      }
+    }
 
     // Step 3: Location exists
     const location = await getItem<Location>('locations', { locationId });
@@ -100,18 +161,38 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       console.warn('[scanQR] Failed to fetch location-master-config (non-fatal):', e);
     }
 
-    const coopOnly = masterConfig?.coopOnly ?? location.coopOnly ?? false;
+    const coopOnly = assignment?.coopLocationIds?.includes(locationId) ?? false;
+    if (coopOnly) {
+      console.log('[scanQR] location', locationId, 'resolved as co-op for user', userId, 'via assignment record');
+    }
     const spaceFact = masterConfig?.spaceFact ?? null;
     const firstVisitBonus = masterConfig?.firstVisitBonus ?? false;
     const bonusXP = masterConfig?.bonusXP ?? false;
     const minigameAffinity = masterConfig?.minigameAffinity ?? null;
 
-    // Step 4b: Co-op required check
-    if (coopOnly) {
-      const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
-      const coopPartnerId = (body as { coopPartnerId?: string | null }).coopPartnerId;
-      if (!coopPartnerId) {
-        return error(ErrorCode.COOP_REQUIRED, 'This location requires a co-op partner.', 400);
+    // Step 4b: Co-op partner handling
+    const coopPartnerId = parsed.data.coopPartnerId ?? null;
+
+    if (coopOnly && !coopPartnerId) {
+      // First scan at a co-op-only location without a partner — return partnerRequired
+      return success({
+        partnerRequired: true as const,
+        locationId,
+        locationName: location.name,
+      });
+    }
+
+    // Look up co-op partner if provided (only at co-op-only locations)
+    let partnerUser: User | undefined;
+    const isDevPartner = stage === 'dev' && coopPartnerId === 'dev-partner';
+    if (coopOnly && coopPartnerId) {
+      if (isDevPartner) {
+        console.log('[scanQR] Dev bypass: using synthetic dev-partner');
+      } else {
+        partnerUser = await getItem<User>('users', { userId: coopPartnerId });
+        if (!partnerUser) {
+          return error(ErrorCode.NOT_FOUND, 'Co-op partner not found', 404);
+        }
       }
     }
 
@@ -192,6 +273,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         name: meta.name,
         timeLimit: meta.timeLimit,
         description: meta.description,
+        difficulty: meta.difficulty,
         completed: wonToday.has(id),
       };
     });
@@ -246,6 +328,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       xpAvailable,
       capReached,
       locationModifiers,
+      ...(coopOnly && (partnerUser || isDevPartner) ? {
+        isCoopSession: true,
+        partnerDisplayName: isDevPartner ? 'Dev Partner' : partnerUser!.displayName,
+      } : {}),
     });
   } catch (err) {
     console.error('scanQR error:', err);

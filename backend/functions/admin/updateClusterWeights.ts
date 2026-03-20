@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
-import { scan, putItem } from '../../shared/db';
+import { getItem, scan, putItem } from '../../shared/db';
 import type { ClusterWeightConfig, ClusterWeights, LocationMasterConfig } from '../../shared/types';
 
 const VALID_CLUSTERS = ['nomad', 'seeker', 'drifter', 'forced', 'disengaged', 'null'];
@@ -25,6 +25,7 @@ export async function handler(
       weights?: Record<string, Record<string, number>>;
       badPairings?: Record<string, number[]>;
       assignmentCounts?: Record<string, number>;
+      coopChances?: Record<string, number>;
     };
 
     if (!body.weights || !body.badPairings || !body.assignmentCounts) {
@@ -56,6 +57,18 @@ export async function handler(
       }
     }
 
+    // Validate coopChances
+    if (body.coopChances !== undefined) {
+      for (const [cluster, chance] of Object.entries(body.coopChances)) {
+        if (!VALID_CLUSTERS.includes(cluster)) {
+          return error(ErrorCode.VALIDATION_ERROR, `Invalid cluster key in coopChances: ${cluster}`, 400);
+        }
+        if (typeof chance !== 'number' || chance < 0 || chance > 1) {
+          return error(ErrorCode.VALIDATION_ERROR, `coopChances[${cluster}] must be a number between 0 and 1`, 400);
+        }
+      }
+    }
+
     // Validate badPairings qrNumbers
     for (const [cluster, qrNumbers] of Object.entries(body.badPairings)) {
       if (cluster === 'null') continue; // null cluster doesn't have bad pairings
@@ -66,8 +79,8 @@ export async function handler(
         return error(ErrorCode.VALIDATION_ERROR, `badPairings[${cluster}] must be an array`, 400);
       }
       for (const qr of qrNumbers) {
-        if (typeof qr !== 'number' || qr < 1 || qr > 30 || !Number.isInteger(qr)) {
-          return error(ErrorCode.VALIDATION_ERROR, `badPairings qrNumber must be integer 1-30, got ${qr}`, 400);
+        if (typeof qr !== 'number' || qr < 1 || !Number.isInteger(qr)) {
+          return error(ErrorCode.VALIDATION_ERROR, `badPairings qrNumber must be a positive integer, got ${qr}`, 400);
         }
       }
     }
@@ -111,11 +124,25 @@ export async function handler(
 
     const adminUserId = authorizer.userId || authorizer.uid || 'unknown';
 
+    // Normalize all cluster keys to lowercase to prevent case-mismatch bugs
+    const normalize = <T>(obj: Record<string, T>): Record<string, T> =>
+      Object.fromEntries(Object.entries(obj).map(([k, v]) => [k.toLowerCase(), v]));
+
+    const normalizedWeights = Object.fromEntries(
+      Object.entries(body.weights).map(([k, v]) => [k.toLowerCase(), v]),
+    );
+
+    // Fetch existing config to preserve coopChances if not provided in this request
+    const existingConfig = await getItem<ClusterWeightConfig>('cluster-weight-config', {
+      configId: 'current',
+    });
+
     const config: ClusterWeightConfig = {
       configId: 'current',
-      weights: body.weights as unknown as ClusterWeightConfig['weights'],
+      weights: normalizedWeights as unknown as ClusterWeightConfig['weights'],
       badPairings: resolvedBadPairings as ClusterWeightConfig['badPairings'],
-      assignmentCounts: body.assignmentCounts as ClusterWeightConfig['assignmentCounts'],
+      assignmentCounts: normalize(body.assignmentCounts) as ClusterWeightConfig['assignmentCounts'],
+      coopChances: body.coopChances ? normalize(body.coopChances) : existingConfig?.coopChances ?? {},
       updatedAt: new Date().toISOString(),
       updatedBy: adminUserId as string,
     };

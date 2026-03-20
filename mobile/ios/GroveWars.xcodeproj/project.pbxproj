@@ -15,11 +15,11 @@
 		6132EF182BDFF13200BBE14D /* PrivacyInfo.xcprivacy in Resources */ = {isa = PBXBuildFile; fileRef = 6132EF172BDFF13200BBE14D /* PrivacyInfo.xcprivacy */; };
 		7699B88040F8A987B510C191 /* libPods-GroveWars-GroveWarsTests.a in Frameworks */ = {isa = PBXBuildFile; fileRef = 19F6CBCC0A4E27FBF8BF4A61 /* libPods-GroveWars-GroveWarsTests.a */; };
 		81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */; };
-		8DF1DD7649104E6F9CC615D6 /* Caveat_400Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 61897C5588FD4A539110CEB6 /* Caveat_400Regular.ttf */; };
-		EC5181BAE0BE4D439BD2A81F /* Caveat_700Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 1DF49E1882CA4DF8B0AEED56 /* Caveat_700Bold.ttf */; };
-		D8608467CB9D47C2BFD076DB /* Nunito_400Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 720103B29FEA4741ADFC0F14 /* Nunito_400Regular.ttf */; };
-		675ED6997F9A4AF2A0B1BE20 /* Nunito_600SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 6E9EB6B444AA4A109EE667B6 /* Nunito_600SemiBold.ttf */; };
-		B25755A2A96A4A65BD21327F /* Nunito_700Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = B5970DFBE1014179AAA2D0E2 /* Nunito_700Bold.ttf */; };
+		51F76D11EF7D46C391668C7B /* Caveat_400Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A7072DE289AE46F2983DAF23 /* Caveat_400Regular.ttf */; };
+		C5FAC74760034A7993DE25F4 /* Caveat_700Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = 0B29C2797A6344DDB808C2B6 /* Caveat_700Bold.ttf */; };
+		AD94CA82E66F40AAB320FAB5 /* Nunito_400Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A6A1B3B83217487F97CF899C /* Nunito_400Regular.ttf */; };
+		9B3D1A108B024F85843EE737 /* Nunito_600SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = E6BEE87B14784D32978D0A79 /* Nunito_600SemiBold.ttf */; };
+		E7A77C46AE644B42A5D2B3B6 /* Nunito_700Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = F04BA181C90B40F4890600B0 /* Nunito_700Bold.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,11 +51,11 @@
 		81AB9BB72411601600AC10FF /* LaunchScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = LaunchScreen.storyboard; path = GroveWars/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		89C6BE57DB24E9ADA2F236DE /* Pods-GroveWars-GroveWarsTests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-GroveWars-GroveWarsTests.release.xcconfig"; path = "Target Support Files/Pods-GroveWars-GroveWarsTests/Pods-GroveWars-GroveWarsTests.release.xcconfig"; sourceTree = "<group>"; };
 		ED297162215061F000B7C4FE /* JavaScriptCore.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = JavaScriptCore.framework; path = System/Library/Frameworks/JavaScriptCore.framework; sourceTree = SDKROOT; };
-		61897C5588FD4A539110CEB6 /* Caveat_400Regular.ttf */ = {isa = PBXFileReference; name = "Caveat_400Regular.ttf"; path = "../assets/fonts/Caveat_400Regular.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
-		1DF49E1882CA4DF8B0AEED56 /* Caveat_700Bold.ttf */ = {isa = PBXFileReference; name = "Caveat_700Bold.ttf"; path = "../assets/fonts/Caveat_700Bold.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
-		720103B29FEA4741ADFC0F14 /* Nunito_400Regular.ttf */ = {isa = PBXFileReference; name = "Nunito_400Regular.ttf"; path = "../assets/fonts/Nunito_400Regular.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
-		6E9EB6B444AA4A109EE667B6 /* Nunito_600SemiBold.ttf */ = {isa = PBXFileReference; name = "Nunito_600SemiBold.ttf"; path = "../assets/fonts/Nunito_600SemiBold.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
-		B5970DFBE1014179AAA2D0E2 /* Nunito_700Bold.ttf */ = {isa = PBXFileReference; name = "Nunito_700Bold.ttf"; path = "../assets/fonts/Nunito_700Bold.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
+		A7072DE289AE46F2983DAF23 /* Caveat_400Regular.ttf */ = {isa = PBXFileReference; name = "Caveat_400Regular.ttf"; path = "../assets/fonts/Caveat_400Regular.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
+		0B29C2797A6344DDB808C2B6 /* Caveat_700Bold.ttf */ = {isa = PBXFileReference; name = "Caveat_700Bold.ttf"; path = "../assets/fonts/Caveat_700Bold.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
+		A6A1B3B83217487F97CF899C /* Nunito_400Regular.ttf */ = {isa = PBXFileReference; name = "Nunito_400Regular.ttf"; path = "../assets/fonts/Nunito_400Regular.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
+		E6BEE87B14784D32978D0A79 /* Nunito_600SemiBold.ttf */ = {isa = PBXFileReference; name = "Nunito_600SemiBold.ttf"; path = "../assets/fonts/Nunito_600SemiBold.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
+		F04BA181C90B40F4890600B0 /* Nunito_700Bold.ttf */ = {isa = PBXFileReference; name = "Nunito_700Bold.ttf"; path = "../assets/fonts/Nunito_700Bold.ttf"; sourceTree = "<group>"; fileEncoding = undefined; lastKnownFileType = unknown; explicitFileType = undefined; includeInIndex = 0; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -165,11 +165,11 @@
 		EB66F97CC88A46CC8A8C3E22 /* Resources */ = {
 			isa = "PBXGroup";
 			children = (
-				61897C5588FD4A539110CEB6 /* Caveat_400Regular.ttf */,
-				1DF49E1882CA4DF8B0AEED56 /* Caveat_700Bold.ttf */,
-				720103B29FEA4741ADFC0F14 /* Nunito_400Regular.ttf */,
-				6E9EB6B444AA4A109EE667B6 /* Nunito_600SemiBold.ttf */,
-				B5970DFBE1014179AAA2D0E2 /* Nunito_700Bold.ttf */,
+				A7072DE289AE46F2983DAF23 /* Caveat_400Regular.ttf */,
+				0B29C2797A6344DDB808C2B6 /* Caveat_700Bold.ttf */,
+				A6A1B3B83217487F97CF899C /* Nunito_400Regular.ttf */,
+				E6BEE87B14784D32978D0A79 /* Nunito_600SemiBold.ttf */,
+				F04BA181C90B40F4890600B0 /* Nunito_700Bold.ttf */,
 			);
 			name = Resources;
 			sourceTree = "<group>";
@@ -271,11 +271,11 @@
 				6132EF182BDFF13200BBE14D /* PrivacyInfo.xcprivacy in Resources */,
 				81AB9BB82411601600AC10FF /* LaunchScreen.storyboard in Resources */,
 				13B07FBF1A68108700A75B9A /* Images.xcassets in Resources */,
-				8DF1DD7649104E6F9CC615D6 /* Caveat_400Regular.ttf in Resources */,
-				EC5181BAE0BE4D439BD2A81F /* Caveat_700Bold.ttf in Resources */,
-				D8608467CB9D47C2BFD076DB /* Nunito_400Regular.ttf in Resources */,
-				675ED6997F9A4AF2A0B1BE20 /* Nunito_600SemiBold.ttf in Resources */,
-				B25755A2A96A4A65BD21327F /* Nunito_700Bold.ttf in Resources */,
+				51F76D11EF7D46C391668C7B /* Caveat_400Regular.ttf in Resources */,
+				C5FAC74760034A7993DE25F4 /* Caveat_700Bold.ttf in Resources */,
+				AD94CA82E66F40AAB320FAB5 /* Nunito_400Regular.ttf in Resources */,
+				9B3D1A108B024F85843EE737 /* Nunito_600SemiBold.ttf in Resources */,
+				E7A77C46AE644B42A5D2B3B6 /* Nunito_700Bold.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

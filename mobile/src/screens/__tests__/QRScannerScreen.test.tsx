@@ -1,22 +1,5 @@
 import { ErrorCode } from '@/types';
-
-// Test the error message mapping used by QRScannerScreen
-const ERROR_MESSAGES: Record<string, string> = {
-  [ErrorCode.QrExpired]:
-    "This QR code is from a previous day. Ask admin for today's code.",
-  [ErrorCode.QrInvalid]:
-    "Invalid QR code. Make sure you're scanning the official GroveWars code.",
-  [ErrorCode.GpsOutOfRange]:
-    "You're not close enough to this location. Move closer and try again.",
-  [ErrorCode.NotAssigned]:
-    "This location isn't in your assignment today. Check your map for your locations.",
-  [ErrorCode.LocationLocked]:
-    "You've already lost at this location today. Try a different spot!",
-  [ErrorCode.DailyCapReached]:
-    "You've earned all 100 XP for today! Come back tomorrow.",
-  [ErrorCode.LocationExhausted]:
-    "You've mastered all challenges here today — try another location!",
-};
+import { ERROR_MESSAGES } from '../QRScannerScreen';
 
 describe('QRScannerScreen error messages', () => {
   it('maps QR_EXPIRED to day-expired message', () => {
@@ -28,7 +11,7 @@ describe('QRScannerScreen error messages', () => {
   });
 
   it('maps GPS_OUT_OF_RANGE to proximity message', () => {
-    expect(ERROR_MESSAGES[ErrorCode.GpsOutOfRange]).toContain('not close enough');
+    expect(ERROR_MESSAGES[ErrorCode.GpsOutOfRange]).toContain('Move closer');
   });
 
   it('maps NOT_ASSIGNED to assignment message', () => {
@@ -45,6 +28,34 @@ describe('QRScannerScreen error messages', () => {
 
   it('maps LOCATION_EXHAUSTED to exhausted message', () => {
     expect(ERROR_MESSAGES[ErrorCode.LocationExhausted]).toContain('mastered all challenges');
+  });
+
+  it('maps ALL_MINIGAMES_PLAYED to all-played message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.AllMinigamesPlayed]).toContain('all available challenges');
+  });
+
+  it('maps GAME_INACTIVE to inactive message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.GameInactive]).toContain('game hours');
+  });
+
+  it('maps SEASON_ENDED to season-ended message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.SeasonEnded]).toContain('season has ended');
+  });
+
+  it('maps RATE_LIMITED to rate-limit message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.RateLimited]).toContain('Too many attempts');
+  });
+
+  it('maps PARTNER_CAP_REACHED to partner cap message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.PartnerCapReached]).toContain('partner');
+  });
+
+  it('maps PARTNER_LOCATION_LOCKED to partner locked message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.PartnerLocationLocked]).toContain('partner');
+  });
+
+  it('maps PARTNER_ALREADY_WON to partner won message', () => {
+    expect(ERROR_MESSAGES[ErrorCode.PartnerAlreadyWon]).toContain('partner');
   });
 
   it('returns undefined for unknown error codes', () => {

@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { sendNotification, getNotificationHistory, cancelNotification } from '@/api/notifications';
+import { sendNotification, getNotificationHistory, cancelNotification, sendTestNotification } from '@/api/notifications';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ErrorAlert } from '@/components/ErrorAlert';
+import { format, toZonedTime } from 'date-fns-tz';
 import type { ClanId } from '@/types';
 
 const CLAN_COLORS: Record<string, string> = {
@@ -95,18 +96,15 @@ const TEMPLATES: Template[] = [
   },
 ];
 
-function formatIST(iso: string): string {
-  try {
-    const d = new Date(iso);
-    const istOffset = 5.5 * 60 * 60 * 1000;
-    const ist = new Date(d.getTime() + istOffset);
-    const date = ist.toISOString().slice(0, 10);
-    const time = ist.toISOString().slice(11, 16);
-    return `${date} ${time} IST`;
-  } catch {
-    return iso;
-  }
-}
+const formatIST = (iso: string): string => {
+  const zoned = toZonedTime(new Date(iso), 'Asia/Kolkata');
+  return format(zoned, 'dd MMM yyyy, hh:mm a', { timeZone: 'Asia/Kolkata' });
+};
+
+const toLocalDatetimeString = (date: Date): string => {
+  const offset = date.getTimezoneOffset() * 60000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+};
 
 export function NotificationsPage() {
   const queryClient = useQueryClient();
@@ -119,6 +117,14 @@ export function NotificationsPage() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [scheduleMode, setScheduleMode] = useState(false);
   const [scheduledFor, setScheduledFor] = useState('');
+  const [cancelTargetId, setCancelTargetId] = useState<string | null>(null);
+  const toastTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // History query
   const {
@@ -129,6 +135,11 @@ export function NotificationsPage() {
     queryKey: ['notification-history'],
     queryFn: getNotificationHistory,
   });
+
+  function scheduleToastDismiss(ms: number) {
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), ms);
+  }
 
   // Send mutation
   const sendMut = useMutation({
@@ -158,7 +169,7 @@ export function NotificationsPage() {
       setScheduledFor('');
       setShowConfirm(false);
       queryClient.invalidateQueries({ queryKey: ['notification-history'] });
-      setTimeout(() => setToast(null), 5000);
+      scheduleToastDismiss(5000);
     },
     onError: (err) => {
       setToast({
@@ -166,7 +177,7 @@ export function NotificationsPage() {
         message: err instanceof Error ? err.message : 'Failed to send notification',
       });
       setShowConfirm(false);
-      setTimeout(() => setToast(null), 8000);
+      scheduleToastDismiss(8000);
     },
   });
 
@@ -174,13 +185,28 @@ export function NotificationsPage() {
   const cancelMut = useMutation({
     mutationFn: cancelNotification,
     onSuccess: () => {
+      setCancelTargetId(null);
       queryClient.invalidateQueries({ queryKey: ['notification-history'] });
       setToast({ type: 'success', message: 'Scheduled notification cancelled' });
-      setTimeout(() => setToast(null), 5000);
+      scheduleToastDismiss(5000);
     },
     onError: (err) => {
+      setCancelTargetId(null);
       setToast({ type: 'error', message: err instanceof Error ? err.message : 'Cancel failed' });
-      setTimeout(() => setToast(null), 8000);
+      scheduleToastDismiss(8000);
+    },
+  });
+
+  // Test notification mutation
+  const testMut = useMutation({
+    mutationFn: sendTestNotification,
+    onSuccess: () => {
+      setToast({ type: 'success', message: 'Test notification sent!' });
+      scheduleToastDismiss(5000);
+    },
+    onError: (err) => {
+      setToast({ type: 'error', message: err instanceof Error ? err.message : 'Test notification failed' });
+      scheduleToastDismiss(8000);
     },
   });
 
@@ -331,6 +357,13 @@ export function NotificationsPage() {
           >
             Send Now
           </button>
+          <button
+            onClick={() => testMut.mutate()}
+            disabled={testMut.isPending}
+            className="rounded border-2 border-[#D4A843] px-4 py-2.5 text-sm font-semibold text-[#D4A843] hover:bg-[#D4A843]/10 disabled:opacity-50"
+          >
+            {testMut.isPending ? 'Sending...' : 'Send Test Notification'}
+          </button>
           <div className="flex items-end gap-2">
             <div>
               <label className="mb-1 block text-xs text-[#3D2B1F]/60">Schedule for later</label>
@@ -338,8 +371,8 @@ export function NotificationsPage() {
                 type="datetime-local"
                 value={scheduledFor}
                 onChange={(e) => setScheduledFor(e.target.value)}
-                min={new Date(Date.now() + 5 * 60 * 1000).toISOString().slice(0, 16)}
-                max={new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString().slice(0, 16)}
+                min={toLocalDatetimeString(new Date(Date.now() + 5 * 60 * 1000))}
+                max={toLocalDatetimeString(new Date(Date.now() + 14 * 24 * 60 * 60 * 1000))}
                 className="rounded border border-[#8B6914]/30 bg-white px-3 py-2 text-sm text-[#3D2B1F] focus:border-[#D4A843] focus:outline-none"
               />
             </div>
@@ -373,6 +406,7 @@ export function NotificationsPage() {
                   <th className="py-2 pr-3">Message</th>
                   <th className="py-2 pr-3">Target</th>
                   <th className="py-2 pr-3">Type</th>
+                  <th className="py-2 pr-3">Sent By</th>
                   <th className="py-2 pr-3">Status</th>
                   <th className="py-2 pr-3 text-right">Delivered</th>
                   <th className="py-2">Actions</th>
@@ -391,6 +425,9 @@ export function NotificationsPage() {
                     <td className="py-2 pr-3">
                       <TypeBadge type={n.notificationType} />
                     </td>
+                    <td className="py-2 pr-3 text-[#3D2B1F]/70">
+                      {n.sentBy || '\u2014'}
+                    </td>
                     <td className="py-2 pr-3">
                       <StatusBadge status={n.status} scheduledFor={n.scheduledFor} />
                     </td>
@@ -400,11 +437,11 @@ export function NotificationsPage() {
                     <td className="py-2">
                       {n.status === 'scheduled' && (
                         <button
-                          onClick={() => cancelMut.mutate(n.notificationId)}
-                          disabled={cancelMut.isPending}
-                          className="rounded border border-red-300 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
+                          onClick={() => setCancelTargetId(n.notificationId)}
+                          disabled={cancelTargetId === n.notificationId && cancelMut.isPending}
+                          className="rounded border border-red-300 px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
                         >
-                          Cancel
+                          {cancelTargetId === n.notificationId && cancelMut.isPending ? 'Cancelling...' : 'Cancel'}
                         </button>
                       )}
                     </td>
@@ -449,6 +486,33 @@ export function NotificationsPage() {
                 className="rounded bg-[#8B6914] px-4 py-2 text-sm font-semibold text-white hover:bg-[#6B5210] disabled:opacity-50"
               >
                 {sendMut.isPending ? (scheduleMode ? 'Scheduling...' : 'Sending...') : (scheduleMode ? 'Schedule' : 'Send')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {cancelTargetId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="mx-4 w-full max-w-md rounded-lg bg-white p-6 shadow-xl">
+            <h3 className="mb-2 text-lg font-bold text-[#3D2B1F]">Cancel Notification</h3>
+            <p className="mb-4 text-sm text-[#3D2B1F]/70">
+              Cancel this scheduled notification? This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setCancelTargetId(null)}
+                disabled={cancelMut.isPending}
+                className="rounded bg-[#F5EACB] px-4 py-2 text-sm font-medium text-[#3D2B1F] hover:bg-[#E8DDB8] disabled:opacity-50"
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={() => cancelMut.mutate(cancelTargetId)}
+                disabled={cancelMut.isPending}
+                className="rounded bg-[#C0392B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#A93226] disabled:opacity-50"
+              >
+                {cancelMut.isPending ? 'Cancelling...' : 'Confirm Cancel'}
               </button>
             </div>
           </div>

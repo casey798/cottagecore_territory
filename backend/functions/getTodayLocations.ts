@@ -27,6 +27,7 @@ export const handler = async (
       : null;
 
     let locationIds: string[];
+    const coopLocationIds = new Set(assignment?.coopLocationIds ?? []);
 
     if (assignment) {
       // Filter out locations that admin removed from today's active pool
@@ -73,6 +74,7 @@ export const handler = async (
           category: location?.category ?? 'other',
           locked: !!lock,
           bonusXP,
+          isCoop: coopLocationIds.has(locationId),
         };
       })
     );

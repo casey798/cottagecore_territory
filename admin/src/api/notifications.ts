@@ -26,3 +26,7 @@ export async function getNotificationHistory(): Promise<Notification[]> {
 export async function cancelNotification(notificationId: string): Promise<void> {
   await apiClient.delete(`/admin/notifications/${notificationId}`);
 }
+
+export async function sendTestNotification(): Promise<void> {
+  await apiClient.post('/admin/test-notification', {});
+}

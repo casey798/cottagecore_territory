@@ -7,6 +7,7 @@ import type {
   ClusterWeightConfig,
   ClusterWeightUpdatePayload,
   ScheduleEntry,
+  ClusteringRunResult,
 } from '@/types';
 
 // Legacy locations API (old locations table)
@@ -56,6 +57,16 @@ export async function getMasterLocations(): Promise<LocationMasterConfig[]> {
   return res.data?.locations ?? [];
 }
 
+export async function createMasterLocation(
+  data: Partial<LocationMasterConfig>,
+): Promise<LocationMasterConfig> {
+  const res = await apiClient.post<LocationMasterConfig>(
+    '/admin/locations/master',
+    data,
+  );
+  return res.data;
+}
+
 export async function updateMasterLocation(
   locationId: string,
   data: Partial<LocationMasterConfig>,
@@ -64,7 +75,21 @@ export async function updateMasterLocation(
     `/admin/locations/master/${locationId}`,
     data,
   );
-  return res.data.location ?? (res.data as unknown as LocationMasterConfig);
+  return res.data.location;
+}
+
+export async function deleteMasterLocation(locationId: string): Promise<void> {
+  await apiClient.delete(`/admin/locations/master/${locationId}`);
+}
+
+export async function importPhase1Data(
+  data: { locations: Array<{ locationId: string; sdtDeficit?: number; priorityTier?: string | null; phase1Visits?: number; phase1Satisfaction?: number | null; phase1DominantCluster?: string | null; isNewSpace?: boolean }> },
+): Promise<{ updated: number; skipped: number }> {
+  const res = await apiClient.post<{ updated: number; skipped: number }>(
+    '/admin/locations/phase1-import',
+    data,
+  );
+  return res.data;
 }
 
 export async function suggestDailyPool(): Promise<SuggestedPoolResponse> {
@@ -76,6 +101,19 @@ export async function suggestDailyPool(): Promise<SuggestedPoolResponse> {
 
 export async function deployAssignments(): Promise<DeployResult> {
   const res = await apiClient.post<DeployResult>('/admin/daily/deploy');
+  return res.data;
+}
+
+export async function getClusteringRun(): Promise<ClusteringRunResult | null> {
+  const res = await apiClient.get<ClusteringRunResult | null>('/admin/clustering/run');
+  return res.data;
+}
+
+export async function runClustering(force?: boolean): Promise<ClusteringRunResult> {
+  const res = await apiClient.post<ClusteringRunResult>(
+    '/admin/clustering/run',
+    force ? { force: true } : {},
+  );
   return res.data;
 }
 

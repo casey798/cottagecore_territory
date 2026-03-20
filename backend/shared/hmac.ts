@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { QrPayload } from './types';
+import { QrPayload, PermanentQrPayload } from './types';
 
 export function generateQrPayload(
   locationId: string,
@@ -23,6 +23,34 @@ export function verifyQrPayload(payload: QrPayload, secret: string): boolean {
     Buffer.from(payload.h, 'hex'),
     Buffer.from(expectedHmac, 'hex')
   );
+}
+
+export function generatePermanentQrPayload(
+  locationId: string,
+  secret: string
+): PermanentQrPayload {
+  const message = locationId;
+  const hmac = crypto.createHmac('sha256', secret).update(message).digest('hex');
+  return {
+    v: 2,
+    l: locationId,
+    d: 'permanent',
+    h: hmac,
+  };
+}
+
+export function verifyPermanentQrPayload(payload: QrPayload, secret: string): boolean {
+  if (payload.d !== 'permanent') return false;
+  const message = payload.l;
+  const expectedHmac = crypto.createHmac('sha256', secret).update(message).digest('hex');
+  try {
+    return crypto.timingSafeEqual(
+      Buffer.from(payload.h, 'hex'),
+      Buffer.from(expectedHmac, 'hex')
+    );
+  } catch {
+    return false;
+  }
 }
 
 export function generateCompletionHash(

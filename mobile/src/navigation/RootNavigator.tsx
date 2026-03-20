@@ -1,10 +1,15 @@
-import React from 'react';
-import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import React, { useEffect, useRef } from 'react';
+import {
+  View,
+  Image,
+  ImageBackground,
+  Animated,
+  Easing,
+  StyleSheet,
+} from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuthStore } from '@/store/useAuthStore';
-import { PALETTE } from '@/constants/colors';
-import { FONTS } from '@/constants/fonts';
 import LoginScreen from '@/screens/LoginScreen';
 import TutorialScreen from '@/screens/TutorialScreen';
 import { MainStack } from './MainStack';
@@ -17,12 +22,44 @@ export type RootStackParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-function LoadingScreen() {
+function SplashScreen() {
+  const spinAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 1200,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    ).start();
+  }, [spinAnim]);
+
+  const spin = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
   return (
-    <View style={styles.loading}>
-      <Text style={styles.loadingTitle}>GroveWars</Text>
-      <ActivityIndicator size="large" color={PALETTE.honeyGold} style={{ marginTop: 16 }} />
-    </View>
+    <ImageBackground
+      source={require('@/assets/ui/backgrounds/bg_splash.png')}
+      resizeMode="cover"
+      style={styles.splashBg}
+    >
+      <View style={styles.splashContent}>
+        <Image
+          source={require('@/assets/sprites/logo/logo_grovewars.png')}
+          style={styles.splashLogo}
+          resizeMode="contain"
+        />
+        <Animated.Image
+          source={require('@/assets/ui/icons/spinner_leaf.png')}
+          style={[styles.splashSpinner, { transform: [{ rotate: spin }] }]}
+          resizeMode="contain"
+        />
+      </View>
+    </ImageBackground>
   );
 }
 
@@ -60,7 +97,7 @@ export function RootNavigator() {
   }, [isHydrated]);
 
   if (!isHydrated || !sessionChecked) {
-    return <LoadingScreen />;
+    return <SplashScreen />;
   }
 
   return (
@@ -79,15 +116,21 @@ export function RootNavigator() {
 }
 
 const styles = StyleSheet.create({
-  loading: {
+  splashBg: {
+    flex: 1,
+  },
+  splashContent: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: PALETTE.parchmentBg,
   },
-  loadingTitle: {
-    fontSize: 36,
-    fontFamily: FONTS.headerBold,
-    color: PALETTE.darkBrown,
+  splashLogo: {
+    width: 450,
+    height: 150,
+  },
+  splashSpinner: {
+    width: 48,
+    height: 48,
+    marginTop: 24,
   },
 });

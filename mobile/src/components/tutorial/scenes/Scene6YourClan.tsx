@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet } from 'react-native';
 import { LORE_CLANS, CLAN_TO_LORE_MAP, PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -18,15 +18,21 @@ const LINES = [
   'Together, you will wander the paths once more.',
 ];
 
-function usePlayerLoreClan() {
-  const gameClan = useAuthStore((s) => s.clan);
-  const loreId = gameClan ? CLAN_TO_LORE_MAP[gameClan] : undefined;
-  const loreClan = LORE_CLANS.find((c) => c.id === loreId);
-  return loreClan ?? LORE_CLANS[0];
-}
-
 export default function Scene6YourClan({ onComplete }: Scene6YourClanProps) {
-  const loreClan = usePlayerLoreClan();
+  const gameClan = useAuthStore((s) => s.clan);
+  const isHydrated = useAuthStore((s) => s.isHydrated);
+
+  const loreId = gameClan ? CLAN_TO_LORE_MAP[gameClan] : undefined;
+  const loreClan = loreId ? LORE_CLANS.find((c) => c.id === loreId) : undefined;
+
+  if (!isHydrated || loreClan === undefined) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={PALETTE.honeyGold} />
+        <Text style={styles.loadingText}>Loading your clan...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
@@ -50,6 +56,17 @@ export default function Scene6YourClan({ onComplete }: Scene6YourClanProps) {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.stoneGrey,
+    marginTop: 12,
   },
   clanArea: {
     flex: 40,

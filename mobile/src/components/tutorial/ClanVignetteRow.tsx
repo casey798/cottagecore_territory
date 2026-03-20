@@ -15,6 +15,7 @@ export default function ClanVignetteRow({
   onAnimationComplete,
 }: ClanVignetteRowProps) {
   const anims = useRef(clans.map(() => new Animated.Value(0))).current;
+  const compositeRef = useRef<Animated.CompositeAnimation | null>(null);
 
   useEffect(() => {
     const animations = anims.map((anim, index) =>
@@ -26,9 +27,17 @@ export default function ClanVignetteRow({
       }),
     );
 
-    Animated.parallel(animations).start(() => {
-      onAnimationComplete();
+    const composite = Animated.parallel(animations);
+    compositeRef.current = composite;
+    composite.start(({ finished }) => {
+      if (finished) {
+        onAnimationComplete();
+      }
     });
+
+    return () => {
+      compositeRef.current?.stop();
+    };
   }, [anims, onAnimationComplete]);
 
   return (

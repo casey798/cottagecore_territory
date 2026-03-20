@@ -1,6 +1,6 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
-import { query, updateItem } from '../../shared/db';
+import { getItem, query, updateItem } from '../../shared/db';
 import type { User } from '../../shared/types';
 
 const VALID_CLUSTERS = new Set(['nomad', 'drifter', 'forced', 'seeker', 'disengaged']);
@@ -21,7 +21,8 @@ export async function handler(
       return error(ErrorCode.VALIDATION_ERROR, 'rows array is required', 400);
     }
 
-    let matched = 0;
+    let matchedRoster = 0;
+    let alsoUpdatedUsers = 0;
     let notInRoster = 0;
     let invalid = 0;
     const errors: string[] = [];
@@ -43,31 +44,45 @@ export async function handler(
         continue;
       }
 
-      // Look up user by email via EmailIndex
-      const result = await query<User>(
+      // Primary: write phase1Cluster to the roster table (PK = email)
+      const rosterEntry = await getItem<{ email: string; clan: string }>('roster', { email });
+
+      if (!rosterEntry) {
+        notInRoster++;
+        errors.push(`Row ${i + 1}: ${email} not found in roster`);
+        continue;
+      }
+
+      // Update roster record with phase1Cluster
+      await updateItem(
+        'roster',
+        { email },
+        'SET phase1Cluster = :cluster',
+        { ':cluster': cluster },
+      );
+      matchedRoster++;
+
+      // Also update the users table if the student has already signed up
+      const userResult = await query<User>(
         'users',
         'email = :email',
         { ':email': email },
         { indexName: 'EmailIndex', limit: 1 },
       );
 
-      if (result.items.length === 0) {
-        notInRoster++;
-        errors.push(`Row ${i + 1}: ${email} not found in roster`);
-        continue;
+      if (userResult.items.length > 0) {
+        const user = userResult.items[0];
+        await updateItem(
+          'users',
+          { userId: user.userId },
+          'SET phase1Cluster = :cluster',
+          { ':cluster': cluster },
+        );
+        alsoUpdatedUsers++;
       }
-
-      const user = result.items[0];
-      await updateItem(
-        'users',
-        { userId: user.userId },
-        'SET phase1Cluster = :cluster',
-        { ':cluster': cluster },
-      );
-      matched++;
     }
 
-    return success({ matched, notInRoster, invalid, errors });
+    return success({ matchedRoster, alsoUpdatedUsers, notInRoster, invalid, errors });
   } catch (err) {
     console.error('[importClusters] Error:', err);
     return error(ErrorCode.INTERNAL_ERROR, 'Internal server error', 500);

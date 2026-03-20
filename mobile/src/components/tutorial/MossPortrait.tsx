@@ -1,14 +1,12 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { PALETTE } from '@/constants/colors';
-import { FONTS } from '@/constants/fonts';
+import { Image, StyleSheet } from 'react-native';
 
 type MossMood = 'neutral' | 'alert' | 'warm';
 
-const MOOD_BORDER_COLORS: Record<MossMood, string> = {
-  neutral: PALETTE.honeyGold,
-  alert: '#C0392B',
-  warm: PALETTE.softGreen,
+const MOSS_PORTRAITS: Record<MossMood, ReturnType<typeof require>> = {
+  neutral: require('../../assets/sprites/npc/elder_moss_neutral.png'),
+  alert: require('../../assets/sprites/npc/elder_moss_surprised.png'),
+  warm: require('../../assets/sprites/npc/elder_moss_proud.png'),
 };
 
 interface MossPortraitProps {
@@ -16,34 +14,18 @@ interface MossPortraitProps {
 }
 
 export default function MossPortrait({ mood = 'neutral' }: MossPortraitProps) {
-  const borderColor = MOOD_BORDER_COLORS[mood];
-
   return (
-    <View style={[styles.container, { borderColor }]}>
-      <Text style={styles.nameText}>[ Moss ]</Text>
-      <Text style={styles.glowIndicator}>◈</Text>
-    </View>
+    <Image
+      source={MOSS_PORTRAITS[mood]}
+      style={styles.portrait}
+      resizeMode="contain"
+    />
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    width: 112,
-    height: 112,
-    backgroundColor: '#1A1A2E',
-    borderWidth: 2,
-    borderRadius: 8,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  nameText: {
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 13,
-    color: PALETTE.honeyGold,
-  },
-  glowIndicator: {
-    fontSize: 13,
-    color: '#2980B9',
-    marginTop: 4,
+  portrait: {
+    width: 128,
+    height: 128,
   },
 });

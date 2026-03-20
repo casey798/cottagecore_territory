@@ -60,6 +60,8 @@ export async function getSeasonStatus(): Promise<SeasonStatus> {
 
 export interface ImportResult {
   matched?: number;
+  matchedRoster?: number;
+  alsoUpdatedUsers?: number;
   updated?: number;
   notInRoster?: number;
   notFound?: number;

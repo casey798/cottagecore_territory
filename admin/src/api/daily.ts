@@ -6,8 +6,13 @@ export async function getDailyConfig(date?: string): Promise<DailyConfig | null>
     const query = date ? `?date=${date}` : '';
     const res = await apiClient.get<DailyConfig>(`/admin/daily/config${query}`);
     return res.data;
-  } catch {
-    return null;
+  } catch (err: unknown) {
+    // 404 = no config for this date — valid not-found state
+    if (err && typeof err === 'object' && 'status' in err && (err as { status: number }).status === 404) {
+      return null;
+    }
+    // Any other error (500, network failure, 401) — surface to caller
+    throw err;
   }
 }
 
@@ -21,19 +26,6 @@ export async function setDailyConfig(
     '/admin/daily/config',
     config,
   );
-  return res.data;
-}
-
-export async function applyDailyConfig(): Promise<{
-  date: string;
-  assignedPlayerCount: number;
-  activeLocationCount: number;
-}> {
-  const res = await apiClient.post<{
-    date: string;
-    assignedPlayerCount: number;
-    activeLocationCount: number;
-  }>('/admin/daily/apply');
   return res.data;
 }
 
@@ -109,5 +101,61 @@ export async function generateQR(
     }[];
     printablePdfKey: string;
   }>('/admin/qr/generate', { date });
+  return res.data;
+}
+
+export async function generatePermanentQRs(): Promise<{
+  qrCodes: {
+    locationId: string;
+    locationName: string;
+    qrPayload: string;
+    qrImageBase64: string;
+    qrGeneratedAt: string;
+    alreadyExisted: boolean;
+    active: boolean;
+  }[];
+}> {
+  const res = await apiClient.post<{
+    qrCodes: {
+      locationId: string;
+      locationName: string;
+      qrPayload: string;
+      qrImageBase64: string;
+      qrGeneratedAt: string;
+      alreadyExisted: boolean;
+      active: boolean;
+    }[];
+  }>('/admin/qr/generate', { mode: 'permanent' });
+  return res.data;
+}
+
+export interface PlayerAssignmentDebug {
+  dateUserId: string;
+  assignedLocations: Array<{
+    locationId: string;
+    name: string;
+    isCoop: boolean;
+  }>;
+  coopCount: number;
+  totalCount: number;
+}
+
+export async function getPlayerAssignment(
+  userId: string,
+  date?: string,
+): Promise<PlayerAssignmentDebug> {
+  const params = new URLSearchParams({ userId });
+  if (date) params.set('date', date);
+  const res = await apiClient.get<PlayerAssignmentDebug>(
+    `/admin/debug/assignment?${params.toString()}`,
+  );
+  return res.data;
+}
+
+export async function regenerateLocationQR(locationId: string): Promise<{ locationId: string; message: string }> {
+  const res = await apiClient.post<{ locationId: string; message: string }>(
+    '/admin/qr/reset',
+    { locationId },
+  );
   return res.data;
 }

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { queryClient } from '@/api/queryClient';
 
 const STORAGE_KEY = 'grove-wars-admin-token';
 
@@ -21,15 +22,22 @@ function decodeJwtPayload(token: string): Record<string, unknown> {
   return JSON.parse(json);
 }
 
+function isTokenExpired(token: string): boolean {
+  try {
+    const payload = decodeJwtPayload(token);
+    const exp = payload.exp as number;
+    return exp * 1000 < Date.now();
+  } catch {
+    return true;
+  }
+}
+
 function loadPersistedAuth(): Pick<AuthState, 'token' | 'email' | 'isAuthenticated'> | null {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return null;
     const { token, email } = JSON.parse(stored);
-    if (!token) return null;
-    const payload = decodeJwtPayload(token);
-    const exp = payload.exp as number;
-    if (exp * 1000 < Date.now()) {
+    if (!token || isTokenExpired(token)) {
       localStorage.removeItem(STORAGE_KEY);
       return null;
     }
@@ -50,12 +58,17 @@ export const useAuthStore = create<AuthState>((set) => ({
   error: null,
 
   login: (token: string, email: string) => {
+    if (isTokenExpired(token)) {
+      set({ token: null, email: null, isAuthenticated: false, isLoading: false, error: 'Session expired — please sign in again' });
+      return;
+    }
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ token, email }));
     set({ token, email, isAuthenticated: true, isLoading: false, error: null });
   },
 
   logout: () => {
     localStorage.removeItem(STORAGE_KEY);
+    queryClient.clear();
     set({ token: null, email: null, isAuthenticated: false, error: null });
   },
 

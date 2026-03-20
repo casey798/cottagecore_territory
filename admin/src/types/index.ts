@@ -138,6 +138,11 @@ export interface LocationMasterConfig {
   totalPhase2GameSessions: number;
   totalPhase2FreeRoamCheckins: number;
   avgPhase2Satisfaction: number | null;
+  last3DaysVisits: [number, number, number];
+  qrSecret?: string;
+  qrGeneratedAt?: string;
+  qrImageBase64?: string;
+  qrPayload?: string;
 }
 
 export interface ClusterWeights {
@@ -155,6 +160,7 @@ export interface ClusterWeightConfig {
   weights: Record<Phase1Cluster | 'null', ClusterWeights>;
   badPairings: Record<Phase1Cluster, string[]>;
   assignmentCounts: Record<Phase1Cluster | 'null', number>;
+  coopChances?: Record<string, number>;
   updatedAt: string;
   updatedBy: string;
 }
@@ -163,6 +169,19 @@ export interface ClusterWeightUpdatePayload {
   weights: Record<string, Record<string, number>>;
   badPairings: Record<string, number[]>;
   assignmentCounts: Record<string, number>;
+  coopChances?: Record<string, number>;
+}
+
+export interface ClusteringRunResult {
+  date: string;
+  totalPlayers: number;
+  clusterCounts: Record<Phase1Cluster, number>;
+  noDataPlayers: number;
+  withinClusterVariance: number;
+  featureWindowActual: number;
+  labelMapping: Record<number, Phase1Cluster>;
+  computedAt: string;
+  expiresAt: number;
 }
 
 export interface SuggestedLocation {
@@ -175,6 +194,7 @@ export interface SuggestedLocation {
   warning?: string;
   recentDailyAverage?: number;
   last3DaysVisits?: [number, number, number];
+  clusterDemand?: Record<string, number>;
 }
 
 export interface SuggestedPoolResponse {
@@ -187,6 +207,8 @@ export interface DeployResult {
   assigned: number;
   failed: number;
   date: string;
+  quietModeWarning?: boolean;
+  message?: string;
 }
 
 export interface ScheduleEntry {

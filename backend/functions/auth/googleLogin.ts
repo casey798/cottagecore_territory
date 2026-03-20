@@ -1,10 +1,23 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { googleLoginSchema } from '../../shared/schemas';
-import { query, putItem, deleteItem, getItem } from '../../shared/db';
+import { query, putItem, deleteItem, getItem, updateItem } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
 import { getTodayISTString } from '../../shared/time';
 import { User, ClanId, DailyConfig, PlayerAssignment } from '../../shared/types';
 import { ensureFirebaseInitialized, getFirebaseAdmin } from '../../shared/firebase';
+
+async function generateUniquePlayerCode(): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const num = Math.floor(Math.random() * 10000);
+    const code = `grv-${String(num).padStart(4, '0')}`;
+    const { items } = await query<User>('users', 'playerCode = :code', { ':code': code }, { indexName: 'PlayerCodeIndex', limit: 1 });
+    if (items.length === 0) return code;
+  }
+  // Fallback to 5-digit code
+  const num = Math.floor(Math.random() * 100000);
+  const code = `grv-${String(num).padStart(5, '0')}`;
+  return code;
+}
 
 const ALLOWED_EMAIL_DOMAINS = (process.env.ALLOWED_EMAIL_DOMAIN || '')
   .split(',')
@@ -101,9 +114,11 @@ export const handler = async (
       }
 
       const clan = rosterEntry.clan as ClanId;
+      const phase1Cluster = (rosterEntry as Record<string, unknown>).phase1Cluster as string | undefined;
 
       // Create new user using Firebase UID as userId
       const now = new Date().toISOString();
+      const playerCode = await generateUniquePlayerCode();
       const newUser: Record<string, unknown> = {
         userId: firebaseUid,
         email,
@@ -115,7 +130,9 @@ export const handler = async (
         currentStreak: 0,
         bestStreak: 0,
         tutorialDone: false,
+        playerCode,
         createdAt: now,
+        ...(phase1Cluster ? { phase1Cluster } : {}),
       };
 
       await putItem('users', newUser);
@@ -145,6 +162,14 @@ export const handler = async (
         await deleteItem('player-assignments', { dateUserId: oldKey });
         console.log(`Migrated player assignment from ${oldUserId} to ${firebaseUid}`);
       }
+    }
+
+    // Backfill playerCode for legacy users
+    if (!user.playerCode) {
+      const backfilledCode = await generateUniquePlayerCode();
+      await updateItem('users', { userId: user.userId }, 'SET playerCode = :code', { ':code': backfilledCode });
+      user = { ...user, playerCode: backfilledCode };
+      console.log(`Backfilled playerCode=${backfilledCode} for user ${user.userId}`);
     }
 
     // Fix 3: Ensure a player-assignment exists for today (covers first login + missed resets)

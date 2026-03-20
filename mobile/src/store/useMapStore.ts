@@ -40,6 +40,7 @@ interface MapState {
   updatePlayerPosition: (position: PlayerPosition) => void;
   lockLocation: (locationId: string) => void;
   clearLockedFlags: () => void;
+  reset: () => void;
 }
 
 export const useMapStore = create<MapState>()(
@@ -58,9 +59,9 @@ export const useMapStore = create<MapState>()(
 
   loadMapConfig: async () => {
     try {
-      console.log('[MapStore] loadMapConfig: fetching...');
+      if (__DEV__) console.log('[MapStore] loadMapConfig: fetching...');
       const result = await mapApi.getMapConfig();
-      console.log('[MapStore] getMapConfig result:', JSON.stringify(result));
+      if (__DEV__) console.log('[MapStore] getMapConfig result:', JSON.stringify(result));
       if (result.success && result.data) {
         const newUrl = result.data.mapImageUrl;
         const newVersion = extractUrlPath(newUrl);
@@ -68,12 +69,12 @@ export const useMapStore = create<MapState>()(
 
         // If the underlying map image changed (different S3 key), clear FastImage cache
         if (oldVersion && oldVersion !== newVersion) {
-          console.log('[MapStore] Map image changed, clearing FastImage cache');
+          if (__DEV__) console.log('[MapStore] Map image changed, clearing FastImage cache');
           await FastImage.clearDiskCache();
           await FastImage.clearMemoryCache();
         }
 
-        console.log('[MapStore] mapImageUrl:', newUrl);
+        if (__DEV__) console.log('[MapStore] mapImageUrl:', newUrl);
         set({ mapConfig: result.data, mapImageVersion: newVersion });
       } else if (result.error?.code === 'UNAUTHORIZED') {
         console.warn('[MapStore] loadMapConfig: UNAUTHORIZED, logging out');
@@ -88,7 +89,7 @@ export const useMapStore = create<MapState>()(
 
   loadTodayLocations: async () => {
     const result = await mapApi.getTodayLocations();
-    console.log('[locations/today] response:', JSON.stringify(result, null, 2));
+    if (__DEV__) console.log('[locations/today] response:', JSON.stringify(result, null, 2));
     if (result.success && result.data) {
       const { lockedLocationIds } = get();
       const locations = (result.data.locations ?? []).map((loc) =>
@@ -129,6 +130,20 @@ export const useMapStore = create<MapState>()(
       lockedLocationIds: [],
       locksDate: null,
     })),
+
+  reset: () => {
+    set({
+      mapConfig: null,
+      mapImageVersion: null,
+      todayLocations: [],
+      capturedSpaces: [],
+      skiaMapImage: null,
+      playerPosition: null,
+      lockedLocationIds: [],
+      locksDate: null,
+    });
+    AsyncStorage.removeItem('grove-wars-map');
+  },
     }),
     {
       name: 'grove-wars-map',

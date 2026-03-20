@@ -66,6 +66,11 @@ export async function googleSignIn(): Promise<ApiResponse<AuthResult>> {
       body: JSON.stringify({ idToken: firebaseIdToken }),
     });
 
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`Server error ${response.status}: ${text.substring(0, 100)}`);
+    }
+
     const result: ApiResponse<AuthResult> = await response.json();
     return result;
   } catch (err) {

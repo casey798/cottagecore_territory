@@ -1,239 +1,148 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   View,
   Text,
+  Image,
+  ImageBackground,
   Pressable,
   StyleSheet,
-  Alert,
   SafeAreaView,
-  ScrollView,
 } from 'react-native';
-import { PALETTE } from '@/constants/colors';
-import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
 import { configureGoogleSignIn } from '@/api/auth';
+import { FONTS } from '@/constants/fonts';
 import { requestNotificationPermission } from '@/utils/notifications';
 
 export default function LoginScreen() {
   const googleSignIn = useAuthStore((s) => s.googleSignIn);
   const isLoading = useAuthStore((s) => s.isLoading);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     configureGoogleSignIn();
   }, []);
 
   const handleGoogleSignIn = async () => {
+    setError(null);
     const result = await googleSignIn();
     if (result.success) {
       requestNotificationPermission();
     } else {
       if (result.errorCode === 'CANCELLED') return;
 
-      const errorMsg =
-        result.errorCode === 'INVALID_DOMAIN'
-          ? 'Only @student.tce.edu or @tce.edu accounts are allowed'
-          : result.errorCode === 'NOT_IN_ROSTER'
-          ? 'Your email is not on the approved roster. Contact your administrator.'
-          : result.errorMessage || 'Something went wrong.';
-      Alert.alert('Error', errorMsg);
+      if (result.errorCode === 'NOT_IN_ROSTER') {
+        setError('This email is not registered for GroveWars. Contact your coordinator.');
+      } else {
+        setError(result.errorMessage || 'Something went wrong.');
+      }
     }
   };
 
   return (
-    <SafeAreaView style={styles.screen}>
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Top section — logo and tagline */}
-        <View style={styles.topSection}>
-          <View style={styles.logoContainer}>
-            <Text style={styles.logoText}>GroveWars</Text>
-            <View style={styles.logoUnderline} />
-          </View>
-          <Text style={styles.tagline}>
-            Five clans. One campus.{'\n'}Who will claim it?
-          </Text>
-        </View>
+    <ImageBackground
+      source={require('@/assets/ui/backgrounds/bg_login.png')}
+      resizeMode="cover"
+      style={styles.background}
+    >
+      <View style={styles.overlay}>
+        <SafeAreaView style={styles.safeArea}>
+          <View style={styles.container}>
+            {/* Logo */}
+            <Image
+              source={require('@/assets/sprites/logo/logo_grovewars.png')}
+              style={styles.logo}
+              resizeMode="contain"
+            />
 
-        {/* Elder Moss dialogue */}
-        <View style={styles.elderSection}>
-          <View style={styles.elderPortrait}>
-            <Text style={styles.elderEmoji}>🧙</Text>
-          </View>
-          <View style={styles.dialogueBox}>
-            <Text style={styles.dialogueText}>
-              Welcome back, grove keeper...
-            </Text>
-            <View style={styles.dialogueTail} />
-          </View>
-        </View>
+            <View style={styles.spacer} />
 
-        {/* Sign in section */}
-        <View style={styles.inputSection}>
-          <View style={styles.parchmentPanel}>
-            <Text style={styles.inputLabel}>Sign in with your college account</Text>
-            <Pressable
-              style={({ pressed }) => [
-                styles.button,
-                pressed && styles.buttonPressed,
-                isLoading && styles.buttonDisabled,
-              ]}
-              onPress={handleGoogleSignIn}
-              disabled={isLoading}
-            >
-              <Text style={styles.buttonText}>
-                {isLoading ? 'Signing in...' : 'Sign in with Google'}
-              </Text>
-            </Pressable>
-          </View>
-        </View>
+            {/* Sign in button */}
+            {isLoading ? (
+              <Image
+                source={require('../assets/ui/buttons/btn_google_clicked.png')}
+                style={styles.googleButton}
+                resizeMode="contain"
+              />
+            ) : (
+              <Pressable
+                onPress={handleGoogleSignIn}
+                style={({ pressed }) => [pressed && styles.buttonPressed]}
+              >
+                <ImageBackground
+                  source={require('@/assets/ui/buttons/btn_google.png')}
+                  resizeMode="contain"
+                  style={styles.googleButton}
+                />
+              </Pressable>
+            )}
 
-        {/* Bottom hint */}
-        <Text style={styles.hintText}>
-          Use your @student.tce.edu or @tce.edu Google account
-        </Text>
-      </ScrollView>
-    </SafeAreaView>
+            {/* Error message */}
+            {error ? (
+              <Text style={styles.errorText}>{error}</Text>
+            ) : null}
+
+          </View>
+
+          {/* Elder Moss — absolutely positioned at bottom */}
+          <Image
+            source={require('@/assets/sprites/npc/npc_elder_moss.png')}
+            style={styles.elderMoss}
+            resizeMode="contain"
+          />
+        </SafeAreaView>
+      </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
+  background: {
     flex: 1,
-    backgroundColor: PALETTE.parchmentBg,
   },
-  scrollContent: {
-    flexGrow: 1,
+  overlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  safeArea: {
+    flex: 1,
+    position: 'relative',
+  },
+  container: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
     paddingHorizontal: 24,
-    paddingBottom: 24,
   },
-  // Top section
-  topSection: {
-    alignItems: 'center',
-    paddingTop: 48,
-    marginBottom: 24,
+  logo: {
+    width: 420,
+    height: 140,
+    marginTop: 200,
   },
-  logoContainer: {
-    alignItems: 'center',
-    marginBottom: 12,
+  spacer: {
+    flex: 1,
   },
-  logoText: {
-    fontSize: 42,
-    fontFamily: FONTS.headerBold,
-    color: PALETTE.darkBrown,
+  elderMoss: {
+    position: 'absolute',
+    bottom: 0,
+    alignSelf: 'center',
+    width: 360,
+    height: 290,
   },
-  logoUnderline: {
-    width: 80,
-    height: 3,
-    backgroundColor: PALETTE.honeyGold,
-    borderRadius: 2,
-    marginTop: 4,
-  },
-  tagline: {
-    fontSize: 16,
-    fontFamily: FONTS.headerRegular,
-    color: PALETTE.warmBrown,
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  // Elder Moss
-  elderSection: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    marginBottom: 28,
-    paddingHorizontal: 8,
-  },
-  elderPortrait: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: PALETTE.softGreen + '30',
-    borderWidth: 2.5,
-    borderColor: PALETTE.warmBrown,
+  googleButton: {
+    width: 320,
+    height: 100,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 12,
-  },
-  elderEmoji: {
-    fontSize: 28,
-  },
-  dialogueBox: {
-    flex: 1,
-    backgroundColor: PALETTE.cream,
-    borderWidth: 1.5,
-    borderColor: PALETTE.warmBrown,
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-  },
-  dialogueText: {
-    fontSize: 14,
-    fontFamily: FONTS.headerRegular,
-    color: PALETTE.darkBrown,
-    fontStyle: 'italic',
-  },
-  dialogueTail: {
-    position: 'absolute',
-    left: -8,
-    top: 16,
-    width: 0,
-    height: 0,
-    borderTopWidth: 6,
-    borderBottomWidth: 6,
-    borderRightWidth: 8,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
-    borderRightColor: PALETTE.warmBrown,
-  },
-  // Input section
-  inputSection: {
-    marginBottom: 20,
-  },
-  parchmentPanel: {
-    backgroundColor: PALETTE.cream,
-    borderWidth: 2,
-    borderColor: PALETTE.warmBrown,
-    borderRadius: 16,
-    padding: 20,
-    elevation: 3,
-    shadowColor: PALETTE.darkBrown,
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-  },
-  inputLabel: {
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-    color: PALETTE.darkBrown,
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  button: {
-    backgroundColor: PALETTE.honeyGold,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-    borderBottomWidth: 3,
-    borderBottomColor: PALETTE.warmBrown,
+    marginBottom: 250,
   },
   buttonPressed: {
-    borderBottomWidth: 0,
-    transform: [{ translateY: 3 }],
+    opacity: 0.8,
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    color: PALETTE.darkBrown,
+  errorText: {
+    fontFamily: FONTS.pixel,
     fontSize: 17,
-    fontFamily: FONTS.bodySemiBold,
-  },
-  // Bottom
-  hintText: {
-    fontSize: 12,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.stoneGrey,
+    color: '#ff6b6b',
     textAlign: 'center',
+    marginTop: 8,
   },
 });

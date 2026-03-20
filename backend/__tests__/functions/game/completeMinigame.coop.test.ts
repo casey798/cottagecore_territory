@@ -161,8 +161,8 @@ describe('completeMinigame co-op tests', () => {
     });
   }
 
-  function setupCoopLoseMocks(coopOnly: boolean) {
-    const session = makeSession({ coopPartnerId: PARTNER_ID });
+  function setupCoopLoseMocks(partnerIsGuest: boolean) {
+    const session = makeSession({ coopPartnerId: PARTNER_ID, partnerIsGuest });
 
     mockGetItem.mockImplementation(async (table: string, key: Record<string, unknown>) => {
       if (table === 'game-sessions') return session;
@@ -170,12 +170,6 @@ describe('completeMinigame co-op tests', () => {
         const uid = key.userId as string;
         if (uid === USER_ID) return { userId: USER_ID, todayXp: 0, clan: 'ember' };
         if (uid === PARTNER_ID) return { userId: PARTNER_ID, todayXp: 0, clan: 'tide' };
-      }
-      if (table === 'location-master-config') {
-        if (coopOnly) {
-          return { locationId: LOCATION_ID, coopOnly: true };
-        }
-        return coopOnly === false ? { locationId: LOCATION_ID, coopOnly: false } : undefined;
       }
       return undefined;
     });
@@ -235,13 +229,12 @@ describe('completeMinigame co-op tests', () => {
     expect(clanKeys).toContainEqual({ clanId: 'tide' });
   });
 
-  it('locks partner on loss at coopOnly location', async () => {
-    setupCoopLoseMocks(true);
+  it('locks both players on loss when partnerIsGuest=false', async () => {
+    setupCoopLoseMocks(false);
 
     const event = makeEvent(makeBody({ result: 'lose' }));
     await handler(event);
 
-    // Filter putItem calls for 'player-locks'
     const lockCalls = mockPutItem.mock.calls.filter(
       (call) => call[0] === 'player-locks'
     );
@@ -255,21 +248,39 @@ describe('completeMinigame co-op tests', () => {
     expect(lockKeys).toContain(`${TODAY}#${PARTNER_ID}#${LOCATION_ID}`);
   });
 
-  it('does NOT lock partner on loss at solo location', async () => {
-    setupCoopLoseMocks(false);
+  it('only locks Player A on loss when partnerIsGuest=true', async () => {
+    setupCoopLoseMocks(true);
 
     const event = makeEvent(makeBody({ result: 'lose' }));
     await handler(event);
 
-    // Filter putItem calls for 'player-locks'
     const lockCalls = mockPutItem.mock.calls.filter(
       (call) => call[0] === 'player-locks'
     );
 
-    // Only 1 lock: for the primary user
     expect(lockCalls.length).toBe(1);
 
     const lockKey = (lockCalls[0][1] as Record<string, unknown>).dateUserLocation as string;
     expect(lockKey).toBe(`${TODAY}#${USER_ID}#${LOCATION_ID}`);
+  });
+
+  it('awards XP to both players on win regardless of partnerIsGuest', async () => {
+    // partnerIsGuest=true — partner should still get XP
+    setupCoopWinMocks({ partnerIsGuest: true });
+
+    const event = makeEvent(makeBody());
+    const result = await handler(event);
+    const body = JSON.parse(result.body);
+
+    expect(result.statusCode).toBe(200);
+    expect(body.data.result).toBe('win');
+    expect(body.data.xpEarned).toBe(25);
+
+    // Both user and partner should have updateItem calls to 'users' for XP
+    const userUpdateCalls = mockUpdateItem.mock.calls.filter(
+      (call) => call[0] === 'users'
+    );
+    // At minimum: user ADD todayXp + user SET streak + partner ADD todayXp + partner SET streak
+    expect(userUpdateCalls.length).toBeGreaterThanOrEqual(2);
   });
 });

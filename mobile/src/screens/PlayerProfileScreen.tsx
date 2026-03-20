@@ -6,10 +6,10 @@ import {
   ScrollView,
   ActivityIndicator,
   Pressable,
+  Alert,
+  Share,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
-import { CompositeNavigationProp } from '@react-navigation/native';
-import { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { PALETTE, CLAN_COLORS, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
@@ -17,13 +17,10 @@ import { DAILY_XP_CAP } from '@/constants/config';
 import { useAuthStore } from '@/store/useAuthStore';
 import * as playerApi from '@/api/player';
 import { PlayerProfile, ClanId } from '@/types';
-import { MainTabParamList, MainModalParamList } from '@/navigation/MainStack';
-import { getPresetByIndex } from '@/utils/characterPresets';
+import { MainModalParamList } from '@/navigation/MainStack';
+import { getPresetById } from '@/utils/characterPresets';
 
-type Nav = CompositeNavigationProp<
-  BottomTabNavigationProp<MainTabParamList>,
-  NativeStackNavigationProp<MainModalParamList>
->;
+type Nav = NativeStackNavigationProp<MainModalParamList>;
 
 interface StreakMilestone {
   emoji: string;
@@ -40,6 +37,8 @@ const MILESTONES: StreakMilestone[] = [
 export default function PlayerProfileScreen() {
   const navigation = useNavigation<Nav>();
   const token = useAuthStore((s) => s.token);
+  const playerCode = useAuthStore((s) => s.playerCode);
+  const selectedPresetId = useAuthStore((s) => s.selectedPresetId);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [assetCount, setAssetCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -99,7 +98,7 @@ export default function PlayerProfileScreen() {
 
   const handleAssetsTap = () => {
     try {
-      navigation.navigate('Inventory');
+      navigation.navigate('AssetInventory');
     } catch {
       // AssetInventoryScreen not in navigator — no-op
     }
@@ -117,9 +116,25 @@ export default function PlayerProfileScreen() {
         <View style={[styles.clanBadge, { backgroundColor: clanColor }]}>
           <Text style={styles.clanBadgeText}>{clanLabel}</Text>
         </View>
+        {playerCode && (
+          <View style={styles.playerCodeSection}>
+            <View style={styles.playerCodeRow}>
+              <Text style={styles.playerCodeText}>{playerCode.toUpperCase()}</Text>
+              <Pressable
+                style={styles.copyBtn}
+                onPress={() => {
+                  Share.share({ message: playerCode.toUpperCase() });
+                }}
+              >
+                <Text style={styles.copyBtnText}>{'📋'}</Text>
+              </Pressable>
+            </View>
+            <Text style={styles.playerCodeHint}>Share this code to play co-op</Text>
+          </View>
+        )}
         {(() => {
-          const preset = profile.avatarConfig?.characterPreset
-            ? getPresetByIndex(profile.avatarConfig.characterPreset)
+          const preset = selectedPresetId
+            ? getPresetById(selectedPresetId)
             : undefined;
           if (preset) {
             return (
@@ -282,6 +297,33 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontFamily: FONTS.bodySemiBold,
     color: '#FFFFFF',
+  },
+  playerCodeSection: {
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  playerCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  playerCodeText: {
+    fontSize: 16,
+    fontFamily: FONTS.bodyBold,
+    color: PALETTE.warmBrown,
+    letterSpacing: 1,
+  },
+  copyBtn: {
+    padding: 4,
+  },
+  copyBtnText: {
+    fontSize: 16,
+  },
+  playerCodeHint: {
+    fontSize: 11,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    marginTop: 2,
   },
   avatarRing: {
     width: 104,

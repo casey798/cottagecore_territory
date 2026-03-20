@@ -111,19 +111,16 @@ export default function Scene9DemoGame({ onComplete }: Scene9DemoGameProps) {
               ? ["Excellent! You're ready.", 'The grove awaits.']
               : ['The grove will teach you in time.', 'No matter — the paths are open.']
           }
-          onComplete={() => {}}
+          onComplete={onComplete}
           mood={isWin ? 'warm' : 'neutral'}
         />
-        <View style={styles.resultButtons}>
-          <Pressable style={styles.beginButton} onPress={onComplete}>
-            <Text style={styles.beginButtonText}>Begin</Text>
-          </Pressable>
-          {!isWin && (
+        {!isWin && (
+          <View style={styles.resultButtons}>
             <Pressable onPress={handleTryAgain}>
               <Text style={styles.tryAgainText}>Try Again</Text>
             </Pressable>
-          )}
-        </View>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -153,17 +150,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 24,
     gap: 12,
-  },
-  beginButton: {
-    backgroundColor: PALETTE.honeyGold,
-    paddingVertical: 12,
-    paddingHorizontal: 48,
-    borderRadius: 8,
-  },
-  beginButtonText: {
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 16,
-    color: PALETTE.darkBrown,
   },
   tryAgainText: {
     fontFamily: FONTS.bodySemiBold,

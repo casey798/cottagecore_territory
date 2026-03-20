@@ -1,6 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
-import { updateItem } from '../../shared/db';
+import { getItem, updateItem } from '../../shared/db';
+import type { LocationMasterConfig } from '../../shared/types';
 
 export async function handler(
   event: APIGatewayProxyEvent
@@ -12,10 +13,29 @@ export async function handler(
     }
 
     const body = JSON.parse(event.body || '{}') as Record<string, unknown>;
+
+    // ── Per-location permanent QR regenerate ──────────────────────
+    const locationId = body.locationId as string | undefined;
+    if (locationId && typeof locationId === 'string') {
+      const existing = await getItem<LocationMasterConfig>('location-master-config', { locationId });
+      if (!existing) {
+        return error(ErrorCode.NOT_FOUND, 'Location not found', 404);
+      }
+
+      await updateItem(
+        'location-master-config',
+        { locationId },
+        'REMOVE qrSecret, qrGeneratedAt, qrImageBase64, qrPayload',
+      );
+
+      return success({ locationId, message: 'Permanent QR invalidated — regenerate to create a new one' });
+    }
+
+    // ── Daily QR reset (existing behavior) ────────────────────────
     const date = body.date as string | undefined;
 
     if (!date || typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
-      return error(ErrorCode.VALIDATION_ERROR, 'Valid date (YYYY-MM-DD) is required', 400);
+      return error(ErrorCode.VALIDATION_ERROR, 'Valid date (YYYY-MM-DD) or locationId is required', 400);
     }
 
     await updateItem(

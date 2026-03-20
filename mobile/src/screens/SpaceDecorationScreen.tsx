@@ -55,7 +55,7 @@ function hexToRgba(hex: string, alpha: number): string {
 export default function SpaceDecorationScreen() {
   const navigation = useNavigation();
   const route = useRoute<Route>();
-  const { spaceId, spaceName, clan, gridCells } = route.params;
+  const { spaceId, spaceName, clan, gridCells, userAssetId } = route.params;
 
   const clanColor = CLAN_COLORS[clan as ClanId] ?? PALETTE.honeyGold;
 
@@ -146,6 +146,13 @@ export default function SpaceDecorationScreen() {
 
     return () => { cancelled = true; };
   }, [spaceId]);
+
+  // Pre-select asset when navigated from inventory with userAssetId
+  useEffect(() => {
+    if (userAssetId && allAssets.length > 0) {
+      setSelectedAssetId(userAssetId);
+    }
+  }, [userAssetId, allAssets]);
 
   // Show toast briefly
   const showToast = useCallback((type: 'success' | 'error', message: string) => {

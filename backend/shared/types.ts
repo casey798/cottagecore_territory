@@ -89,8 +89,12 @@ export interface User {
   lastActiveDate: string;
   tutorialDone: boolean;
   fcmToken: string;
+  playerCode: string;
   createdAt: string;
   phase1Cluster?: Phase1Cluster | null;
+  computedCluster?: Phase1Cluster | null;
+  clusterComputedAt?: string;
+  clusterFeatureWindow?: string;
 }
 
 export interface Clan {
@@ -173,6 +177,7 @@ export interface LocationMinigameSet {
 export interface PlayerAssignment {
   dateUserId: string;
   assignedLocationIds: string[];
+  coopLocationIds?: string[];
   locationMinigames?: Record<string, LocationMinigameSet>;
   weightsUsed?: Record<string, number>;
 }
@@ -191,6 +196,7 @@ export interface GameSession {
   chestAssetId: string | null;
   completionHash: string;
   coopPartnerId: string | null;
+  partnerIsGuest?: boolean;
   _salt?: string;
   puzzleData?: MinigamePuzzle;
   timeLimit?: number;
@@ -309,6 +315,13 @@ export interface QrPayload {
   h: string;
 }
 
+export interface PermanentQrPayload {
+  v: 2;
+  l: string;
+  d: 'permanent';
+  h: string;
+}
+
 export interface MinigamePuzzle {
   type: string;
   config: Record<string, unknown>;
@@ -354,6 +367,19 @@ export interface ScanQrRequest {
   qrData: QrPayload;
   gpsLat: number;
   gpsLng: number;
+}
+
+export interface CoopPartnerRequiredResponse {
+  partnerRequired: true;
+  locationId: string;
+  locationName: string;
+}
+
+export interface PlayerSearchResult {
+  userId: string;
+  displayName: string;
+  playerCode: string;
+  clan: string;
 }
 
 export interface StartMinigameRequest {
@@ -416,6 +442,7 @@ export interface AvailableMinigame {
   name: string;
   timeLimit: number;
   description: string;
+  difficulty: 'easy' | 'medium' | 'hard';
   completed: boolean;
 }
 
@@ -499,7 +526,7 @@ export interface SubmitLeaveRequest {
   reason: LeaveReason;
 }
 
-export type Floor = 'outdoor' | 'ground' | 'first' | 'second' | 'third';
+export type Floor = 'ground' | 'first';
 
 export interface CheckIn {
   checkInId: string;
@@ -507,12 +534,15 @@ export interface CheckIn {
   clanId: string;
   gpsLat: number;
   gpsLng: number;
-  pixelX: number;
-  pixelY: number;
+  pixelX: number | null;
+  pixelY: number | null;
+  pixelAvailable: boolean;
   activityCategory: ActivityCategory;
   satisfaction: Satisfaction;
   sentiment: Sentiment;
   floor: Floor;
+  durationMinutes: number;
+  activityTime: string;
   timestamp: string;
   date: string;
 }
@@ -530,6 +560,7 @@ export interface SubmitCheckInRequest {
   gpsLng: number;
   pixelX: number;
   pixelY: number;
+  pixelAvailable: boolean;
   activityCategory: ActivityCategory;
   satisfaction: Satisfaction;
   sentiment: Sentiment;
@@ -586,6 +617,12 @@ export interface LocationMasterConfig {
   // Rolling 3-day visit window (updated by daily reset)
   // Index 0 = yesterday, 1 = two days ago, 2 = three days ago
   last3DaysVisits: [number, number, number];
+
+  // Persistent QR — per-location HMAC secret
+  qrSecret?: string;
+  qrGeneratedAt?: string;
+  qrImageBase64?: string;
+  qrPayload?: string;
 }
 
 export interface ClusterWeights {
@@ -601,6 +638,9 @@ export interface ClusterWeightConfig {
   weights: Record<Phase1Cluster | 'null', ClusterWeights>;
   badPairings: Record<Phase1Cluster, string[]>;
   assignmentCounts: Record<Phase1Cluster | 'null', number>;
+  coopChances?: Record<string, number>;
+  /** @deprecated Use coopChances (per-cluster). Kept for DynamoDB migration compatibility. */
+  coopChance?: number;
   updatedAt: string;
   updatedBy: string;
 }
@@ -637,6 +677,45 @@ export interface SeasonSummaryData {
     bestStreak: number;
     spacesDiscovered: number;
   };
+}
+
+// ── Player Clustering types ──────────────────────────────────────────
+
+export interface PlayerFeatureVector {
+  userId: string;
+  visits: number;
+  avg_duration: number;
+  avg_satisfaction: number;
+  unique_spaces: number;
+  space_diversity: number;
+  pct_morning: number;
+  pct_he_social: number;
+  pct_he_personal: number;
+  pct_le_social: number;
+  pct_le_personal: number;
+  pct_social_hub: number;
+  pct_transit: number;
+  pct_hidden_gem: number;
+  pct_dead_zone: number;
+}
+
+export interface ClusteringResult {
+  assignments: Record<string, Phase1Cluster>;
+  centroids: number[][];
+  labelMapping: Record<number, Phase1Cluster>;
+  withinClusterVariance: number;
+}
+
+export interface DailyClusteringRun {
+  date: string;
+  totalPlayers: number;
+  clusterCounts: Record<Phase1Cluster, number>;
+  noDataPlayers: number;
+  withinClusterVariance: number;
+  featureWindowActual: number;
+  labelMapping: Record<number, Phase1Cluster>;
+  computedAt: string;
+  expiresAt: number;
 }
 
 export interface DailyLocationPool {

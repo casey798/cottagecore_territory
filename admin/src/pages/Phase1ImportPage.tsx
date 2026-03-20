@@ -185,9 +185,33 @@ function ClusterImportSection() {
       {result && (
         <div className="mt-4 rounded border border-[#27AE60]/30 bg-[#27AE60]/10 p-4">
           <p className="mb-1 font-semibold text-[#3D2B1F]">Import Complete</p>
-          <p className="text-sm text-[#3D2B1F]">
-            {result.matched ?? 0} matched, {result.notInRoster ?? 0} not in roster, {result.invalid} invalid
-          </p>
+          <div className="flex flex-wrap gap-3 text-sm">
+            {(result.matchedRoster ?? result.matched ?? 0) > 0 && (
+              <span className="rounded bg-green-100 px-2 py-1 text-green-800">
+                {result.matchedRoster ?? result.matched ?? 0} saved to roster
+              </span>
+            )}
+            {(result.alsoUpdatedUsers ?? 0) > 0 && (
+              <span className="rounded bg-blue-100 px-2 py-1 text-blue-800">
+                {result.alsoUpdatedUsers} also updated in users table
+              </span>
+            )}
+            {(result.notInRoster ?? 0) > 0 && (
+              <span className="rounded bg-red-100 px-2 py-1 text-red-800">
+                {result.notInRoster} not in roster
+              </span>
+            )}
+            {result.invalid > 0 && (
+              <span className="rounded bg-yellow-100 px-2 py-1 text-yellow-800">
+                {result.invalid} invalid
+              </span>
+            )}
+          </div>
+          {(result.matchedRoster ?? result.matched ?? 0) > 0 && (result.alsoUpdatedUsers ?? 0) === 0 && (
+            <p className="mt-2 text-xs text-[#3D2B1F]/60">
+              Cluster assignments saved to roster. They will apply automatically when students sign up via Google Sign-In.
+            </p>
+          )}
           {result.errors.length > 0 && (
             <ul className="mt-2 list-inside list-disc text-xs text-red-600">
               {result.errors.slice(0, 10).map((e, i) => <li key={i}>{e}</li>)}

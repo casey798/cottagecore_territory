@@ -97,8 +97,11 @@ describe('startMinigame co-op tests', () => {
     user: Record<string, unknown> | undefined;
     partner: Record<string, unknown> | undefined;
     lock: Record<string, unknown> | undefined;
+    partnerLock: Record<string, unknown> | undefined;
     dailyConfig: Record<string, unknown> | undefined;
     masterConfig: Record<string, unknown> | undefined;
+    partnerAssignment: Record<string, unknown> | undefined;
+    playerAssignment: Record<string, unknown> | undefined;
   }> = {}) {
     const defaults = {
       location: {
@@ -108,12 +111,22 @@ describe('startMinigame co-op tests', () => {
       user: { userId: USER_ID, displayName: 'Alice', clan: 'ember', todayXp: 0 },
       partner: { userId: PARTNER_ID, displayName: 'Bob', clan: 'tide', todayXp: 0 },
       lock: undefined as Record<string, unknown> | undefined,
+      partnerLock: undefined as Record<string, unknown> | undefined,
       dailyConfig: {
         date: TODAY, activeLocationIds: [LOCATION_ID], qrSecret: 'secret',
         targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
         status: 'active', winnerClan: null,
       },
       masterConfig: undefined as Record<string, unknown> | undefined,
+      partnerAssignment: {
+        dateUserId: `${TODAY}#${PARTNER_ID}`,
+        assignedLocationIds: [LOCATION_ID],
+      } as Record<string, unknown> | undefined,
+      playerAssignment: {
+        dateUserId: `${TODAY}#${USER_ID}`,
+        assignedLocationIds: [LOCATION_ID],
+        coopLocationIds: [],
+      } as Record<string, unknown> | undefined,
       ...overrides,
     };
 
@@ -123,9 +136,19 @@ describe('startMinigame co-op tests', () => {
         if (key.userId === PARTNER_ID) return defaults.partner;
         return defaults.user;
       }
-      if (table === 'player-locks') return defaults.lock;
+      if (table === 'player-locks') {
+        const lockKey = key.dateUserLocation as string;
+        if (lockKey?.includes(PARTNER_ID)) return defaults.partnerLock;
+        return defaults.lock;
+      }
       if (table === 'daily-config') return defaults.dailyConfig;
       if (table === 'location-master-config') return defaults.masterConfig;
+      if (table === 'player-assignments') {
+        const dateUserId = key.dateUserId as string;
+        if (dateUserId === `${TODAY}#${USER_ID}`) return defaults.playerAssignment;
+        if (dateUserId === `${TODAY}#${PARTNER_ID}`) return defaults.partnerAssignment;
+        return undefined;
+      }
       return undefined;
     });
   }
@@ -144,9 +167,10 @@ describe('startMinigame co-op tests', () => {
 
   it('rejects solo minigame at coopOnly location', async () => {
     setupGetItem({
-      masterConfig: {
-        locationId: LOCATION_ID, coopOnly: true, spaceFact: null,
-        firstVisitBonus: false, bonusXP: false, minigameAffinity: null,
+      playerAssignment: {
+        dateUserId: `${TODAY}#${USER_ID}`,
+        assignedLocationIds: [LOCATION_ID],
+        coopLocationIds: [LOCATION_ID],
       },
     });
 
@@ -160,9 +184,10 @@ describe('startMinigame co-op tests', () => {
 
   it('returns COOP_REQUIRED at coopOnly location without partner', async () => {
     setupGetItem({
-      masterConfig: {
-        locationId: LOCATION_ID, coopOnly: true, spaceFact: null,
-        firstVisitBonus: false, bonusXP: false, minigameAffinity: null,
+      playerAssignment: {
+        dateUserId: `${TODAY}#${USER_ID}`,
+        assignedLocationIds: [LOCATION_ID],
+        coopLocationIds: [LOCATION_ID],
       },
     });
 
@@ -186,5 +211,115 @@ describe('startMinigame co-op tests', () => {
     expect(body.data.puzzleData.p1Clan).toBe('ember');
     expect(body.data.puzzleData.p2Name).toBe('Bob');
     expect(body.data.puzzleData.p2Clan).toBe('tide');
+  });
+
+  it('sets partnerIsGuest=false when locationId is in partner assignments', async () => {
+    setupGetItem({
+      partnerAssignment: {
+        dateUserId: `${TODAY}#${PARTNER_ID}`,
+        assignedLocationIds: [LOCATION_ID],
+      },
+    });
+
+    const event = makeEvent(makeBody());
+    await handler(event);
+
+    const putCalls = mockPutItem.mock.calls.filter((call) => call[0] === 'game-sessions');
+    expect(putCalls.length).toBe(1);
+    const session = putCalls[0][1] as Record<string, unknown>;
+    expect(session.partnerIsGuest).toBe(false);
+  });
+
+  it('sets partnerIsGuest=true when locationId is NOT in partner assignments', async () => {
+    setupGetItem({
+      partnerAssignment: {
+        dateUserId: `${TODAY}#${PARTNER_ID}`,
+        assignedLocationIds: ['other-location-id'],
+      },
+    });
+
+    const event = makeEvent(makeBody());
+    await handler(event);
+
+    const putCalls = mockPutItem.mock.calls.filter((call) => call[0] === 'game-sessions');
+    expect(putCalls.length).toBe(1);
+    const session = putCalls[0][1] as Record<string, unknown>;
+    expect(session.partnerIsGuest).toBe(true);
+  });
+
+  it('sets partnerIsGuest=true when partner has no assignment record', async () => {
+    setupGetItem({
+      partnerAssignment: undefined,
+    });
+
+    const event = makeEvent(makeBody());
+    await handler(event);
+
+    const putCalls = mockPutItem.mock.calls.filter((call) => call[0] === 'game-sessions');
+    expect(putCalls.length).toBe(1);
+    const session = putCalls[0][1] as Record<string, unknown>;
+    expect(session.partnerIsGuest).toBe(true);
+  });
+
+  it('returns PARTNER_CAP_REACHED when partner todayXp >= 100', async () => {
+    setupGetItem({
+      partner: { userId: PARTNER_ID, displayName: 'Bob', clan: 'tide', todayXp: 100 },
+    });
+
+    const event = makeEvent(makeBody());
+    const result = await handler(event);
+    const body = JSON.parse(result.body);
+
+    expect(result.statusCode).toBe(400);
+    expect(body.error.code).toBe('PARTNER_CAP_REACHED');
+  });
+
+  it('returns PARTNER_LOCATION_LOCKED when partner is locked at this location', async () => {
+    setupGetItem({
+      partnerLock: {
+        dateUserLocation: `${TODAY}#${PARTNER_ID}#${LOCATION_ID}`,
+        lockedAt: '2026-03-07T10:00:00.000Z',
+        ttl: 9999999999,
+      },
+    });
+
+    const event = makeEvent(makeBody());
+    const result = await handler(event);
+    const body = JSON.parse(result.body);
+
+    expect(result.statusCode).toBe(400);
+    expect(body.error.code).toBe('PARTNER_LOCATION_LOCKED');
+  });
+
+  it('returns PARTNER_ALREADY_WON when partner already won this minigame today', async () => {
+    setupGetItem();
+
+    // Override query to return a winning session for the partner
+    mockQuery.mockImplementation(async (_table: string, _keyCondition: string, values: Record<string, unknown>) => {
+      const uid = values[':uid'] as string;
+      if (uid === PARTNER_ID) {
+        return {
+          items: [{
+            sessionId: 'partner-session-1',
+            userId: PARTNER_ID,
+            locationId: LOCATION_ID,
+            minigameId: 'kindred-coop',
+            date: TODAY,
+            startedAt: '2026-03-07T09:00:00.000Z',
+            completedAt: '2026-03-07T09:05:00.000Z',
+            result: 'win',
+            xpEarned: 25,
+          }],
+        };
+      }
+      return { items: [] };
+    });
+
+    const event = makeEvent(makeBody());
+    const result = await handler(event);
+    const body = JSON.parse(result.body);
+
+    expect(result.statusCode).toBe(400);
+    expect(body.error.code).toBe('PARTNER_ALREADY_WON');
   });
 });

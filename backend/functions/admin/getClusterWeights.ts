@@ -1,7 +1,9 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
-import { getItem } from '../../shared/db';
+import { getItem, putItem } from '../../shared/db';
 import type { ClusterWeightConfig } from '../../shared/types';
+
+const CLUSTER_NAMES = ['nomad', 'seeker', 'drifter', 'forced', 'disengaged', 'null'] as const;
 
 const DEFAULT_CONFIG: ClusterWeightConfig = {
   configId: 'current',
@@ -28,6 +30,7 @@ const DEFAULT_CONFIG: ClusterWeightConfig = {
     disengaged: 3,
     null: 4,
   },
+  coopChances: Object.fromEntries(CLUSTER_NAMES.map((c) => [c, 0])),
   updatedAt: '',
   updatedBy: 'default',
 };
@@ -41,11 +44,25 @@ export async function handler(
       return error(ErrorCode.FORBIDDEN, 'Admin access required', 403);
     }
 
-    const config = await getItem<ClusterWeightConfig>('cluster-weight-config', {
+    const stored = await getItem<ClusterWeightConfig>('cluster-weight-config', {
       configId: 'current',
     });
 
-    return success({ config: config ?? DEFAULT_CONFIG });
+    if (!stored) {
+      await putItem('cluster-weight-config', { ...DEFAULT_CONFIG, updatedAt: new Date().toISOString() } as unknown as Record<string, unknown>);
+      return success({ config: DEFAULT_CONFIG });
+    }
+
+    // Normalize legacy records: expand single coopChance into per-cluster coopChances
+    if (!stored.coopChances && stored.coopChance !== undefined) {
+      stored.coopChances = Object.fromEntries(
+        CLUSTER_NAMES.map((c) => [c, stored.coopChance ?? 0]),
+      );
+    } else if (!stored.coopChances) {
+      stored.coopChances = Object.fromEntries(CLUSTER_NAMES.map((c) => [c, 0]));
+    }
+
+    return success({ config: stored });
   } catch (err) {
     console.error('[getClusterWeights] Error:', err);
     return error(ErrorCode.INTERNAL_ERROR, 'Failed to fetch cluster weights', 500);

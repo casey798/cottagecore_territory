@@ -11,10 +11,10 @@ import {
   CheckinResponse,
 } from '@/types';
 
-export function scanQR(qrData: QrData, gpsLat: number, gpsLng: number) {
+export function scanQR(qrData: QrData, gpsLat: number, gpsLng: number, coopPartnerId?: string | null) {
   return apiRequest<ScanQRResponse>(ENDPOINTS.GAME_SCAN, {
     method: 'POST',
-    body: JSON.stringify({ qrData, gpsLat, gpsLng }),
+    body: JSON.stringify({ qrData, gpsLat, gpsLng, ...(coopPartnerId ? { coopPartnerId } : {}) }),
   });
 }
 

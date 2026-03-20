@@ -1,10 +1,14 @@
 export const FONTS = {
   // Headers, titles, dialogue, flavour text
-  headerRegular: 'Caveat_400Regular',
-  headerBold: 'Caveat_700Bold',
+  headerRegular: 'Bungee-Regular',
+  headerBold: 'Bungee-Regular',
 
   // Body, UI, scores, labels
-  bodyRegular: 'Nunito_400Regular',
-  bodySemiBold: 'Nunito_600SemiBold',
-  bodyBold: 'Nunito_700Bold',
+  bodyRegular: 'PixelifySans-VariableFont_wght',
+  bodySemiBold: 'PixelifySans-VariableFont_wght',
+  bodyBold: 'PixelifySans-VariableFont_wght',
+
+  // Aliases (same underlying fonts, kept for semantic clarity)
+  heading: 'Bungee-Regular',
+  pixel: 'PixelifySans-VariableFont_wght',
 } as const;

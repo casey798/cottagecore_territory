@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getClusterWeights, updateClusterWeights, getMasterLocations } from '@/api/locations';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
@@ -26,26 +26,14 @@ const CLASSIFICATIONS: (keyof ClusterWeights)[] = [
   'Unvisited',
 ];
 
-const DEFAULT_WEIGHTS: Record<string, Record<string, number>> = {
-  nomad:      { 'Social Hub': 0.5, 'Transit / Forced Stay': 1.0, 'Hidden Gem': 3.0, 'Dead Zone': 3.0, 'Unvisited': 5.0 },
-  seeker:     { 'Social Hub': 3.0, 'Transit / Forced Stay': 1.0, 'Hidden Gem': 1.0, 'Dead Zone': 0.5, 'Unvisited': 1.0 },
-  drifter:    { 'Social Hub': 2.0, 'Transit / Forced Stay': 1.0, 'Hidden Gem': 1.5, 'Dead Zone': 0.5, 'Unvisited': 1.0 },
-  forced:     { 'Social Hub': 1.5, 'Transit / Forced Stay': 1.5, 'Hidden Gem': 2.0, 'Dead Zone': 1.0, 'Unvisited': 0.5 },
-  disengaged: { 'Social Hub': 2.0, 'Transit / Forced Stay': 1.0, 'Hidden Gem': 1.0, 'Dead Zone': 0.3, 'Unvisited': 0.3 },
-  null:       { 'Social Hub': 1.0, 'Transit / Forced Stay': 1.0, 'Hidden Gem': 1.0, 'Dead Zone': 1.0, 'Unvisited': 1.0 },
-};
-
-const DEFAULT_COUNTS: Record<string, number> = {
-  nomad: 5, seeker: 4, drifter: 4, forced: 4, disengaged: 3, null: 4,
-};
-
 // ── Page ─────────────────────────────────────────────────────────────
 
 export function ClusterConfigPage() {
   const queryClient = useQueryClient();
 
-  const [weights, setWeights] = useState<Record<string, Record<string, number>>>(DEFAULT_WEIGHTS);
-  const [counts, setCounts] = useState<Record<string, number>>(DEFAULT_COUNTS);
+  const [weights, setWeights] = useState<Record<string, Record<string, number>>>({});
+  const [counts, setCounts] = useState<Record<string, number>>({});
+  const [coopChances, setCoopChances] = useState<Record<string, number>>({});
   const [badPairings, setBadPairings] = useState<Record<string, number[]>>({
     nomad: [], seeker: [], drifter: [], forced: [], disengaged: [],
   });
@@ -69,13 +57,18 @@ export function ClusterConfigPage() {
     queryFn: getMasterLocations,
   });
 
-  // Build qr→locationId and locationId→qr maps
-  const locByQr = new Map<number, LocationMasterConfig>();
-  const locById = new Map<string, LocationMasterConfig>();
-  for (const l of masterLocations ?? []) {
-    locByQr.set(l.qrNumber, l);
-    locById.set(l.locationId, l);
-  }
+  // Build qr→locationId and locationId→qr maps (memoized for useEffect dep)
+  const locByQr = useMemo(() => {
+    const m = new Map<number, LocationMasterConfig>();
+    for (const l of masterLocations ?? []) m.set(l.qrNumber, l);
+    return m;
+  }, [masterLocations]);
+
+  const locById = useMemo(() => {
+    const m = new Map<string, LocationMasterConfig>();
+    for (const l of masterLocations ?? []) m.set(l.locationId, l);
+    return m;
+  }, [masterLocations]);
 
   // Hydrate from server data
   useEffect(() => {
@@ -86,6 +79,7 @@ export function ClusterConfigPage() {
     }
     setWeights(w);
     setCounts({ ...config.assignmentCounts });
+    setCoopChances(config.coopChances ? { ...config.coopChances } : {});
 
     // Convert locationId[] back to qrNumber[] for editing
     const bp: Record<string, number[]> = {};
@@ -96,7 +90,7 @@ export function ClusterConfigPage() {
         .filter((n): n is number => n !== undefined);
     }
     setBadPairings(bp);
-  }, [config, masterLocations]);
+  }, [config, locById]);
 
   const saveMut = useMutation({
     mutationFn: () =>
@@ -104,6 +98,7 @@ export function ClusterConfigPage() {
         weights,
         badPairings,
         assignmentCounts: counts,
+        coopChances,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cluster-weights'] });
@@ -117,11 +112,8 @@ export function ClusterConfigPage() {
   });
 
   function resetDefaults() {
-    setWeights(JSON.parse(JSON.stringify(DEFAULT_WEIGHTS)));
-    setCounts({ ...DEFAULT_COUNTS });
-    setBadPairings({
-      nomad: [], seeker: [], drifter: [], forced: [], disengaged: [],
-    });
+    if (!window.confirm('Reset all cluster weights to defaults? This cannot be undone.')) return;
+    queryClient.invalidateQueries({ queryKey: ['cluster-weights'] });
   }
 
   function setWeight(cluster: string, classification: string, value: number) {
@@ -209,13 +201,15 @@ export function ClusterConfigPage() {
                         max={10}
                         step={0.1}
                         value={weights[cluster.key]?.[cl] ?? 1.0}
-                        onChange={(e) =>
+                        onChange={(e) => {
+                          const parsed = parseFloat(e.target.value);
+                          if (Number.isNaN(parsed)) return;
                           setWeight(
                             cluster.key,
                             cl,
-                            parseFloat(e.target.value) || 0.1,
-                          )
-                        }
+                            Math.min(10, Math.max(0.1, parsed)),
+                          );
+                        }}
                         className="w-16 rounded border border-[#8B6914]/20 bg-white px-1.5 py-1 text-center text-sm text-[#3D2B1F] focus:border-[#D4A843] focus:outline-none"
                       />
                     </td>
@@ -243,14 +237,52 @@ export function ClusterConfigPage() {
                 min={1}
                 max={8}
                 value={counts[cluster.key] ?? 4}
-                onChange={(e) =>
-                  setCount(cluster.key, parseInt(e.target.value) || 4)
-                }
+                onChange={(e) => {
+                  const parsed = parseInt(e.target.value);
+                  if (Number.isNaN(parsed)) return;
+                  setCount(cluster.key, Math.min(8, Math.max(1, parsed)));
+                }}
                 className="w-full rounded border border-[#8B6914]/20 bg-white px-2 py-1.5 text-center text-sm text-[#3D2B1F] focus:border-[#D4A843] focus:outline-none"
               />
             </div>
           ))}
         </div>
+      </div>
+
+      {/* Co-op Chance per Cluster */}
+      <div className="mb-6 rounded-lg border border-[#8B6914]/20 bg-white p-4">
+        <h2 className="mb-3 text-lg font-semibold text-[#3D2B1F]">
+          Co-op Chance per Cluster (0&ndash;1)
+        </h2>
+        <div className="grid grid-cols-3 gap-4 sm:grid-cols-6">
+          {CLUSTERS.map((cluster) => (
+            <div key={cluster.key}>
+              <label className="mb-1 block text-xs font-medium text-[#3D2B1F]">
+                {cluster.label}
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={1}
+                step={0.05}
+                value={(coopChances[cluster.key] ?? 0).toFixed(2)}
+                onChange={(e) => {
+                  const parsed = parseFloat(e.target.value);
+                  if (Number.isNaN(parsed)) return;
+                  setCoopChances((prev) => ({
+                    ...prev,
+                    [cluster.key]: Math.min(1, Math.max(0, parsed)),
+                  }));
+                }}
+                className="w-full rounded border border-[#8B6914]/20 bg-white px-2 py-1.5 text-center text-sm text-[#3D2B1F] focus:border-[#D4A843] focus:outline-none"
+              />
+            </div>
+          ))}
+        </div>
+        <p className="mt-2 text-xs text-[#3D2B1F]/50">
+          Probability that one co-op location is injected into a player&apos;s daily
+          assignment. 0&nbsp;=&nbsp;never, 1&nbsp;=&nbsp;always. Recommended: 0.3&ndash;0.4
+        </p>
       </div>
 
       {/* Bad Pairings */}

@@ -7,6 +7,7 @@ import {
   Alert,
   ActivityIndicator,
   Linking,
+  AppState,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -17,7 +18,7 @@ import {
 } from 'react-native-vision-camera';
 import { MainModalParamList } from '@/navigation/MainStack';
 
-import { PALETTE, UI } from '@/constants/colors';
+import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useGameStore } from '@/store/useGameStore';
 import { useMapStore } from '@/store/useMapStore';
@@ -25,12 +26,13 @@ import { useGPS } from '@/hooks/useGPS';
 import { parseQrPayload } from '@/utils/qrValidation';
 import { getTodayISTString } from '@/utils/time';
 import * as gameApi from '@/api/game';
-import { ErrorCode } from '@/types';
+import { ErrorCode, PlayerSearchResult, ScanQRMinigameResponse } from '@/types';
+import PartnerSearchModal from '@/components/common/PartnerSearchModal';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type Route = RouteProp<MainModalParamList, 'QRScanner'>;
 
-const ERROR_MESSAGES: Record<string, string> = {
+export const ERROR_MESSAGES: Record<string, string> = {
   [ErrorCode.QrExpired]:
     "This QR code is from a previous day. Ask admin for today's code.",
   [ErrorCode.QrInvalid]:
@@ -47,6 +49,18 @@ const ERROR_MESSAGES: Record<string, string> = {
     "You've mastered all challenges here today — try another location!",
   [ErrorCode.AllMinigamesPlayed]:
     "You've played all available challenges for today. Come back tomorrow!",
+  [ErrorCode.GameInactive]:
+    "The grove is resting right now. Come back during game hours.",
+  [ErrorCode.SeasonEnded]:
+    "This season has ended. Watch for the next season announcement!",
+  [ErrorCode.RateLimited]:
+    "Too many attempts. Wait a moment and try again.",
+  [ErrorCode.PartnerCapReached]:
+    "Your partner has already earned full XP today. Find another partner.",
+  [ErrorCode.PartnerLocationLocked]:
+    "Your partner has already lost at this location today.",
+  [ErrorCode.PartnerAlreadyWon]:
+    "Your partner has already won here today.",
 };
 
 const ERROR_RESUME_MS = 3000;
@@ -64,7 +78,44 @@ export default function QRScannerScreen() {
   const [cameraPermission, setCameraPermission] = useState<string | null>(null);
   const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Co-op partner modal state
+  const [showPartnerModal, setShowPartnerModal] = useState(false);
+  const [coopLocationName, setCoopLocationName] = useState('');
+  const pendingQrRef = useRef<{ v: number; l: string; d: string; h: string } | null>(null);
+
+  const [gpsTimedOut, setGpsTimedOut] = useState(false);
+  const mountedRef = useRef(true);
+
   const device = useCameraDevice('back');
+
+  // Track mounted state for async safety
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  // GPS timeout — show persistent guidance after 15 seconds with no fix
+  useEffect(() => {
+    if (gps.latitude !== null) {
+      setGpsTimedOut(false);
+      return;
+    }
+    const t = setTimeout(() => {
+      if (gps.latitude === null) setGpsTimedOut(true);
+    }, 15000);
+    return () => clearTimeout(t);
+  }, [gps.latitude]);
+
+  // Re-check camera permission when returning from Settings
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', async (state) => {
+      if (state === 'active' && cameraPermission !== 'granted') {
+        const status = await Camera.getCameraPermissionStatus();
+        setCameraPermission(status);
+      }
+    });
+    return () => sub.remove();
+  }, [cameraPermission]);
 
   // Check if location is locked — redirect back immediately
   useEffect(() => {
@@ -105,6 +156,22 @@ export default function QRScannerScreen() {
     }, ERROR_RESUME_MS);
   }, []);
 
+  const navigateToMinigameSelect = useCallback(
+    (data: ScanQRMinigameResponse, coopPartner?: { userId: string; displayName: string }) => {
+      setScanResult(data);
+      navigation.replace('MinigameSelect', {
+        locationId: data.locationId,
+        locationName: data.locationName,
+        ...(coopPartner ? {
+          isCoopSession: true,
+          coopPartnerId: coopPartner.userId,
+          coopPartnerDisplayName: coopPartner.displayName,
+        } : {}),
+      });
+    },
+    [setScanResult, navigation],
+  );
+
   const handleScanResult = useCallback(
     async (qrData: { v: number; l: string; d: string; h: string }) => {
       // Client-side lock guard
@@ -121,12 +188,21 @@ export default function QRScannerScreen() {
 
       try {
         const result = await gameApi.scanQR(qrData, gps.latitude, gps.longitude);
+        if (!mountedRef.current) return;
         if (result.success && result.data) {
-          setScanResult(result.data);
-          navigation.replace('MinigameSelect', {
-            locationId: result.data.locationId,
-            locationName: result.data.locationName,
-          });
+          // Check if co-op partner is required
+          if ('partnerRequired' in result.data && result.data.partnerRequired) {
+            pendingQrRef.current = qrData;
+            setCoopLocationName(result.data.locationName);
+            setShowPartnerModal(true);
+            setProcessing(false);
+            return;
+          }
+
+          // Normal flow — navigate to minigame select
+          const data = result.data as ScanQRMinigameResponse;
+          setProcessing(false);
+          navigateToMinigameSelect(data);
         } else {
           const code = result.error?.code || '';
           const message =
@@ -139,12 +215,52 @@ export default function QRScannerScreen() {
         showErrorAndResume('Something went wrong. Please try again.');
       }
     },
-    [setScanResult, navigation, showErrorAndResume, todayLocations, gps.latitude, gps.longitude],
+    [navigateToMinigameSelect, showErrorAndResume, todayLocations, gps.latitude, gps.longitude],
   );
+
+  const handlePartnerConfirm = useCallback(
+    async (partner: PlayerSearchResult) => {
+      setShowPartnerModal(false);
+      setProcessing(true);
+
+      const qrData = pendingQrRef.current;
+      if (!qrData || gps.latitude === null || gps.longitude === null) {
+        showErrorAndResume('Something went wrong. Please scan again.');
+        return;
+      }
+
+      try {
+        const result = await gameApi.scanQR(qrData, gps.latitude, gps.longitude, partner.userId);
+        if (!mountedRef.current) return;
+        if (result.success && result.data && !('partnerRequired' in result.data)) {
+          const data = result.data as ScanQRMinigameResponse;
+          setProcessing(false);
+          navigateToMinigameSelect(data, {
+            userId: partner.userId,
+            displayName: partner.displayName,
+          });
+        } else {
+          const message = result.error?.message || 'Failed to start co-op session.';
+          showErrorAndResume(message);
+          setShowPartnerModal(true);
+        }
+      } catch {
+        showErrorAndResume('Something went wrong. Please try again.');
+        setShowPartnerModal(true);
+      }
+    },
+    [gps.latitude, gps.longitude, navigateToMinigameSelect, showErrorAndResume],
+  );
+
+  const handlePartnerCancel = useCallback(() => {
+    setShowPartnerModal(false);
+    pendingQrRef.current = null;
+    setProcessing(false);
+  }, []);
 
   const handleQRDetected = useCallback(
     async (rawData: string) => {
-      if (processing || errorMsg) return;
+      if (processing || errorMsg || showPartnerModal) return;
       setProcessing(true);
 
       const qrData = parseQrPayload(rawData);
@@ -155,7 +271,7 @@ export default function QRScannerScreen() {
 
       await handleScanResult(qrData);
     },
-    [processing, errorMsg, showErrorAndResume, handleScanResult],
+    [processing, errorMsg, showPartnerModal, showErrorAndResume, handleScanResult],
   );
 
   const codeScanner = useCodeScanner({
@@ -209,7 +325,7 @@ export default function QRScannerScreen() {
       <Camera
         style={styles.camera}
         device={device}
-        isActive={!processing}
+        isActive={!processing && !showPartnerModal}
         codeScanner={codeScanner}
       />
     );
@@ -217,16 +333,11 @@ export default function QRScannerScreen() {
 
   return (
     <View style={styles.container}>
-      {locationName && (
-        <View style={styles.locationHeader}>
-          <Text style={styles.locationHeaderText}>{locationName}</Text>
-        </View>
-      )}
       {renderCamera()}
       <View style={styles.overlay}>
         <View style={styles.frameCorner} />
       </View>
-      {processing && (
+      {processing && !showPartnerModal && (
         <View style={styles.processingOverlay}>
           <ActivityIndicator size="large" color={PALETTE.honeyGold} />
           <Text style={styles.processingText}>Verifying...</Text>
@@ -237,12 +348,32 @@ export default function QRScannerScreen() {
           <Text style={styles.errorText}>{errorMsg}</Text>
         </View>
       )}
-      <TouchableOpacity
-        style={styles.backButton}
-        onPress={() => navigation.goBack()}
-      >
-        <Text style={styles.backButtonText}>Back</Text>
-      </TouchableOpacity>
+      {gpsTimedOut && (
+        <View style={styles.gpsTimeoutBanner}>
+          <Text style={styles.gpsTimeoutText}>
+            GPS signal not found. Move to an open area or check that location
+            permission is set to "Allow all the time" in Settings.
+          </Text>
+        </View>
+      )}
+      <View style={styles.scanHeader}>
+        <TouchableOpacity style={styles.scanBackBtn} onPress={() => navigation.goBack()}>
+          <Text style={styles.scanBackText}>Back</Text>
+        </TouchableOpacity>
+        <Text style={styles.scanLocationName} numberOfLines={1} ellipsizeMode="tail">
+          {locationName ?? 'Scan QR Code'}
+        </Text>
+        <View style={styles.scanHeaderSpacer} />
+      </View>
+
+      {/* Partner search modal for co-op locations */}
+      <PartnerSearchModal
+        visible={showPartnerModal}
+        locationName={coopLocationName}
+        onConfirm={handlePartnerConfirm}
+        onCancel={handlePartnerCancel}
+      />
+
       {/* DEV: Simulate QR scan */}
       {__DEV__ && (
         <TouchableOpacity
@@ -250,7 +381,7 @@ export default function QRScannerScreen() {
           onPress={() => {
             if (processing) return;
 
-            const todayLocations = useGameStore.getState().todayLocations;
+            const todayLocations = useMapStore.getState().todayLocations;
             if (!todayLocations || todayLocations.length === 0) {
               Alert.alert('No locations', 'No locations assigned today');
               return;
@@ -294,21 +425,34 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: PALETTE.darkBrown,
   },
-  locationHeader: {
+  scanHeader: {
     position: 'absolute',
-    top: 16,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(61, 43, 31, 0.85)',
-    paddingHorizontal: 20,
-    paddingVertical: 8,
-    borderRadius: 8,
+    top: 0,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     zIndex: 10,
   },
-  locationHeaderText: {
+  scanBackBtn: {
+    width: 64,
+  },
+  scanBackText: {
+    fontFamily: FONTS.pixel,
+    fontSize: 14,
     color: PALETTE.cream,
-    fontSize: 16,
-    fontFamily: FONTS.headerBold,
+  },
+  scanLocationName: {
+    flex: 1,
     textAlign: 'center',
+    fontFamily: FONTS.heading,
+    fontSize: 16,
+    color: PALETTE.cream,
+  },
+  scanHeaderSpacer: {
+    width: 64,
   },
   camera: {
     ...StyleSheet.absoluteFillObject,
@@ -378,19 +522,22 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     textAlign: 'center',
   },
-  backButton: {
+  gpsTimeoutBanner: {
     position: 'absolute',
-    top: 16,
+    top: 48,
     left: 16,
-    backgroundColor: UI.overlay,
+    right: 16,
+    backgroundColor: 'rgba(61, 43, 31, 0.85)',
     paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 8,
+    paddingVertical: 12,
+    borderRadius: 10,
+    zIndex: 9,
   },
-  backButtonText: {
+  gpsTimeoutText: {
+    fontFamily: FONTS.pixel,
+    fontSize: 13,
     color: PALETTE.cream,
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
+    textAlign: 'center',
   },
   devButton: {
     position: 'absolute',

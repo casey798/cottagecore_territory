@@ -1,8 +1,8 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
-import { scan } from '../../shared/db';
+import { scan, getItem } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
-import type { LocationMasterConfig, LocationClassification } from '../../shared/types';
+import type { LocationMasterConfig, LocationClassification, DailyClusteringRun, ClusterWeightConfig, Phase1Cluster } from '../../shared/types';
 
 // SDT deficit weight: higher deficit = more important to activate
 function sdtWeight(deficit: number): number {
@@ -54,6 +54,7 @@ interface ScoredLocation {
   warning?: string;
   recentDailyAverage: number;
   last3DaysVisits: [number, number, number];
+  clusterDemand?: Record<string, number>;
 }
 
 export async function handler(
@@ -80,6 +81,59 @@ export async function handler(
 
     const activeLocations = allLocations.filter((l) => l.active);
 
+    // Load today's clustering run and cluster weights (if available) for demand scoring
+    const clusteringRun = await getItem<DailyClusteringRun>('clustering-runs', { date: today });
+    const clusterConfig = await getItem<ClusterWeightConfig>('cluster-weight-config', { configId: 'current' });
+
+    // Compute raw cluster demand scores per location
+    const ALL_CLUSTERS: Phase1Cluster[] = ['nomad', 'seeker', 'drifter', 'forced', 'disengaged'];
+    const rawDemandScores = new Map<string, number>();
+    const clusterDemandDetails = new Map<string, Record<string, number>>();
+
+    if (clusteringRun && clusterConfig) {
+      const totalPlayers = clusteringRun.totalPlayers + clusteringRun.noDataPlayers;
+
+      for (const loc of activeLocations) {
+        const classification = loc.classification as keyof typeof clusterConfig.weights.nomad;
+        let demandSum = 0;
+        const demandPerCluster: Record<string, number> = {};
+
+        for (const cluster of ALL_CLUSTERS) {
+          const count = clusteringRun.clusterCounts[cluster] ?? 0;
+          const weight = clusterConfig.weights[cluster]?.[classification] ?? 1.0;
+          const contribution = count * weight;
+          demandSum += contribution;
+          demandPerCluster[cluster] = Math.round(count * weight);
+        }
+        // Add null cluster contribution
+        const nullCount = clusteringRun.noDataPlayers;
+        const nullWeight = clusterConfig.weights['null']?.[classification] ?? 1.0;
+        demandSum += nullCount * nullWeight;
+
+        const normalizedDemand = totalPlayers > 0 ? demandSum / totalPlayers : 1.0;
+        rawDemandScores.set(loc.locationId, normalizedDemand);
+        clusterDemandDetails.set(loc.locationId, demandPerCluster);
+      }
+
+      // Normalize demand scores to 0.5–1.5 range using min-max
+      let minDemand = Infinity;
+      let maxDemand = -Infinity;
+      for (const d of rawDemandScores.values()) {
+        if (d < minDemand) minDemand = d;
+        if (d > maxDemand) maxDemand = d;
+      }
+      const demandRange = maxDemand - minDemand;
+      if (demandRange > 0) {
+        for (const [locId, d] of rawDemandScores) {
+          rawDemandScores.set(locId, 0.5 + ((d - minDemand) / demandRange));
+        }
+      } else {
+        for (const locId of rawDemandScores.keys()) {
+          rawDemandScores.set(locId, 1.0);
+        }
+      }
+    }
+
     // Score each location
     const scored: ScoredLocation[] = activeLocations.map((loc) => {
       const visits = loc.last3DaysVisits ?? [0, 0, 0] as [number, number, number];
@@ -90,8 +144,9 @@ export async function handler(
       const classWeight = CLASSIFICATION_WEIGHT[loc.classification] ?? 1.0;
       const activation = activationNeed(visits);
       const priority = priorityBoost(loc.priorityTier);
+      const clusterDemandScore = rawDemandScores.get(loc.locationId) ?? 1.0;
 
-      const score = sdt * classWeight * activation * priority;
+      const score = sdt * classWeight * activation * priority * clusterDemandScore;
 
       let warning: string | undefined;
       if (dailyAverage === 0 && !loc.isNewSpace) {
@@ -110,6 +165,7 @@ export async function handler(
         warning,
         recentDailyAverage: Math.round(dailyAverage * 10) / 10,
         last3DaysVisits: visits,
+        clusterDemand: clusterDemandDetails.get(loc.locationId),
       };
     });
 

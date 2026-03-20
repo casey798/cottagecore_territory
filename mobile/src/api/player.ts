@@ -4,6 +4,7 @@ import {
   PlayerProfile,
   AvatarConfig,
   PlayerAsset,
+  PlayerSearchResult,
 } from '@/types';
 
 export function getProfile() {
@@ -30,4 +31,10 @@ export function updateFcmToken(fcmToken: string) {
     method: 'PUT',
     body: JSON.stringify({ fcmToken }),
   });
+}
+
+export function searchPlayer(query: string) {
+  return apiRequest<{ players: PlayerSearchResult[] }>(
+    `${ENDPOINTS.PLAYER_SEARCH}?q=${encodeURIComponent(query)}`,
+  );
 }

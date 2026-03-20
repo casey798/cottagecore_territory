@@ -1,10 +1,13 @@
 import React, { useCallback, useMemo } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, View, Image } from 'react-native';
 import {
   Canvas,
   Image as SkiaImage,
-  Rect,
   Circle,
+  Group,
+  Skia,
+  RadialGradient,
+  vec,
 } from '@shopify/react-native-skia';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -14,20 +17,26 @@ import { gpsToPixel } from '@/utils/affineTransform';
 import { useMapStore } from '@/store/useMapStore';
 import { AffineMatrix, ClanId, Location, CapturedSpace } from '@/types';
 
-// Minimap dimensions — 16:9 to match campus map ratio
-const MINIMAP_W = 160;
-const MINIMAP_H = 90;
-const FRAME_PAD = 4;
+const FRAME_MINIMAP = require('../../assets/ui/frames/frame_minimap.png');
 
-// Scale factors from full map to minimap
-const SCALE_X = MINIMAP_W / MAP_WIDTH;
-const SCALE_Y = MINIMAP_H / MAP_HEIGHT;
+const MINIMAP_SIZE = 150;
+const FRAME_PAD = 4;
+const OUTER_SIZE = MINIMAP_SIZE + FRAME_PAD * 2;
+const HALF = MINIMAP_SIZE / 2;
+
+// Fixed scale: how many minimap pixels per map pixel.
+// Show roughly 1/3.5 of the map width in the minimap diameter.
+const SCALE = MINIMAP_SIZE / (MAP_WIDTH / 3.5);
+
+// Circular clip path for the Skia canvas content
+const clipPath = Skia.Path.Make();
+clipPath.addCircle(HALF, HALF, HALF);
 
 interface ViewportRect {
-  x: number; // map-pixel left edge
-  y: number; // map-pixel top edge
-  width: number; // map-pixel visible width
-  height: number; // map-pixel visible height
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 interface Props {
@@ -55,18 +64,32 @@ export function MapMinimap({
 }: Props) {
   const mapImage = useMapStore((s) => s.skiaMapImage);
 
-  // Convert minimap tap to full-map coordinates
+  // The viewport center in map-pixel coords — this is what we center the minimap on
+  const focusX = viewport.x + viewport.width / 2;
+  const focusY = viewport.y + viewport.height / 2;
+
+  // Convert a map-pixel coordinate to minimap-canvas coordinate.
+  // The focus point maps to the canvas center (HALF, HALF).
+  const toMinimapX = (mapX: number) => HALF + (mapX - focusX) * SCALE;
+  const toMinimapY = (mapY: number) => HALF + (mapY - focusY) * SCALE;
+
+  // Map image: rendered at scale, offset so focusX/Y lands at canvas center
+  const mapRenderW = MAP_WIDTH * SCALE;
+  const mapRenderH = MAP_HEIGHT * SCALE;
+  const mapOffsetX = HALF - focusX * SCALE;
+  const mapOffsetY = HALF - focusY * SCALE;
+
   const handleTap = useCallback(
     (x: number, y: number) => {
-      // Offset by frame padding
-      const minimapX = x - FRAME_PAD;
-      const minimapY = y - FRAME_PAD;
-      if (minimapX < 0 || minimapY < 0 || minimapX > MINIMAP_W || minimapY > MINIMAP_H) return;
-      const mapX = minimapX / SCALE_X;
-      const mapY = minimapY / SCALE_Y;
+      const canvasX = x - FRAME_PAD;
+      const canvasY = y - FRAME_PAD;
+      if (canvasX < 0 || canvasY < 0 || canvasX > MINIMAP_SIZE || canvasY > MINIMAP_SIZE) return;
+      // Reverse: canvas coord → map coord
+      const mapX = focusX + (canvasX - HALF) / SCALE;
+      const mapY = focusY + (canvasY - HALF) / SCALE;
       onNavigate(mapX, mapY);
     },
-    [onNavigate],
+    [onNavigate, focusX, focusY],
   );
 
   const tapGesture = Gesture.Tap().onEnd((e) => {
@@ -74,143 +97,146 @@ export function MapMinimap({
     runOnJS(handleTap)(e.x, e.y);
   });
 
-  // Pin positions on minimap
+  // Pin positions in minimap coords
   const pinPositions = useMemo(() => {
     if (!transformMatrix) return [];
     return locations.map((loc) => {
       const pixel = gpsToPixel(loc.gpsLat, loc.gpsLng, transformMatrix);
-      // Snap to tile grid then scale
       const snappedX = Math.round(pixel.x / MAP_TILE_SIZE) * MAP_TILE_SIZE;
       const snappedY = Math.round(pixel.y / MAP_TILE_SIZE) * MAP_TILE_SIZE;
-      return { x: snappedX * SCALE_X, y: snappedY * SCALE_Y };
+      const dotX = toMinimapX(snappedX);
+      const dotY = toMinimapY(snappedY);
+      const visible = dotX > -5 && dotX < MINIMAP_SIZE + 5 && dotY > -5 && dotY < MINIMAP_SIZE + 5;
+      return { x: dotX, y: dotY, visible };
     });
-  }, [locations, transformMatrix]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locations, transformMatrix, focusX, focusY]);
 
-  // Player position on minimap
+  // Player position in minimap coords
   const playerMini = useMemo(() => {
     if (playerX == null || playerY == null) return null;
-    return { x: playerX * SCALE_X, y: playerY * SCALE_Y };
-  }, [playerX, playerY]);
+    return { x: toMinimapX(playerX), y: toMinimapY(playerY) };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playerX, playerY, focusX, focusY]);
 
-  // Viewport rectangle on minimap
-  const vpRect = useMemo(() => ({
-    x: viewport.x * SCALE_X,
-    y: viewport.y * SCALE_Y,
-    width: viewport.width * SCALE_X,
-    height: viewport.height * SCALE_Y,
-  }), [viewport]);
+  // Viewport circle: its center is exactly HALF,HALF since we center on it
+  const vpRadius = Math.min(viewport.width, viewport.height) / 2 * SCALE;
 
   const dotColor = (__DEV__ && isDebugMode) ? '#FFD700' : (clan ? CLAN_COLORS[clan] : '#FFFFFF');
 
   return (
     <GestureDetector gesture={tapGesture}>
-      <View style={styles.frame}>
+      <View style={styles.container}>
         <Canvas style={styles.canvas}>
-          {/* Map thumbnail */}
-          {mapImage && (
-            <SkiaImage
-              image={mapImage}
-              x={0}
-              y={0}
-              width={MINIMAP_W}
-              height={MINIMAP_H}
-              fit="fill"
-            />
-          )}
+          <Group clip={clipPath} invertClip={false}>
+            {mapImage && (
+              <SkiaImage
+                image={mapImage}
+                x={mapOffsetX}
+                y={mapOffsetY}
+                width={mapRenderW}
+                height={mapRenderH}
+                fit="fill"
+              />
+            )}
 
-          {/* Captured space overlays */}
-          {capturedSpaces.map((space) => {
-            const clanColor = CLAN_COLORS[space.clan];
-            if (!clanColor) return null;
-            // Use spaceId hash to place overlay — placeholder until overlay geometry exists
-            return null;
-          })}
+            {pinPositions.map((pos, i) =>
+              pos.visible ? (
+                <Circle
+                  key={i}
+                  cx={pos.x}
+                  cy={pos.y}
+                  r={3}
+                  color={PALETTE.honeyGold}
+                  style="fill"
+                />
+              ) : null,
+            )}
 
-          {/* Location pin dots */}
-          {pinPositions.map((pos, i) => (
+            {playerMini && (
+              <>
+                <Circle
+                  cx={playerMini.x}
+                  cy={playerMini.y}
+                  r={5}
+                  color={dotColor + '30'}
+                  style="fill"
+                />
+                <Circle
+                  cx={playerMini.x}
+                  cy={playerMini.y}
+                  r={3}
+                  color={dotColor + 'AA'}
+                  style="fill"
+                />
+              </>
+            )}
+
+            {/* Viewport circle — always centered since minimap is centered on viewport */}
             <Circle
-              key={i}
-              cx={pos.x}
-              cy={pos.y}
-              r={3}
-              color={PALETTE.honeyGold}
+              cx={HALF}
+              cy={HALF}
+              r={vpRadius}
+              color="rgba(255, 255, 255, 0.45)"
+              style="stroke"
+              strokeWidth={1.5}
+            />
+            <Circle
+              cx={HALF}
+              cy={HALF}
+              r={vpRadius}
+              color="rgba(255, 255, 255, 0.06)"
               style="fill"
             />
-          ))}
 
-          {/* Player dot with glow */}
-          {playerMini && (
-            <>
-              <Circle
-                cx={playerMini.x}
-                cy={playerMini.y}
-                r={6}
-                color={dotColor + '40'}
-                style="fill"
+            {/* Vignette gradient inside circular clip */}
+            <Circle cx={75} cy={75} r={75}>
+              <RadialGradient
+                c={vec(75, 75)}
+                r={75}
+                colors={['transparent', 'rgba(0,0,0,0.0)', 'rgba(0,0,0,0.75)']}
+                positions={[0, 0.55, 1]}
               />
-              <Circle
-                cx={playerMini.x}
-                cy={playerMini.y}
-                r={4}
-                color={dotColor}
-                style="fill"
-              />
-              <Circle
-                cx={playerMini.x}
-                cy={playerMini.y}
-                r={1.5}
-                color="rgba(255,255,255,0.8)"
-                style="fill"
-              />
-            </>
-          )}
-
-          {/* Viewport rectangle */}
-          <Rect
-            x={vpRect.x}
-            y={vpRect.y}
-            width={vpRect.width}
-            height={vpRect.height}
-            color="rgba(255, 255, 255, 0.5)"
-            style="stroke"
-            strokeWidth={1.5}
-          />
-          <Rect
-            x={vpRect.x}
-            y={vpRect.y}
-            width={vpRect.width}
-            height={vpRect.height}
-            color="rgba(255, 255, 255, 0.08)"
-            style="fill"
-          />
+            </Circle>
+          </Group>
         </Canvas>
+
+        <Image
+          source={FRAME_MINIMAP}
+          style={styles.frameImage}
+          resizeMode="contain"
+        />
       </View>
     </GestureDetector>
   );
 }
 
 const styles = StyleSheet.create({
-  frame: {
+  container: {
     position: 'absolute',
     top: 68,
-    left: 8,
-    width: MINIMAP_W + FRAME_PAD * 2,
-    height: MINIMAP_H + FRAME_PAD * 2,
-    backgroundColor: PALETTE.warmBrown,
-    borderRadius: 6,
-    padding: FRAME_PAD,
+    right: 8,
+    width: OUTER_SIZE,
+    height: OUTER_SIZE,
     zIndex: 15,
     elevation: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 2, height: 2 },
+    shadowOffset: { width: 1, height: 2 },
     shadowOpacity: 0.35,
     shadowRadius: 4,
-    borderWidth: 1.5,
-    borderColor: PALETTE.darkBrown,
   },
   canvas: {
-    width: MINIMAP_W,
-    height: MINIMAP_H,
-    borderRadius: 3,
+    position: 'absolute',
+    top: FRAME_PAD,
+    left: FRAME_PAD,
+    width: MINIMAP_SIZE,
+    height: MINIMAP_SIZE,
+  },
+  frameImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: OUTER_SIZE,
+    height: OUTER_SIZE,
   },
 });

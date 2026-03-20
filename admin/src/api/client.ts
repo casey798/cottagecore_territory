@@ -32,7 +32,7 @@ class ApiClient {
       headers,
     });
 
-    if (response.status === 401) {
+    if (response.status === 401 || response.status === 403) {
       useAuthStore.getState().logout();
       window.location.href = '/login';
       throw new Error('Session expired. Please log in again.');

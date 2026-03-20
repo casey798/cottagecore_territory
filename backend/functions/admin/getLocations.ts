@@ -25,7 +25,10 @@ export async function handler(
 
     allLocations.sort((a, b) => a.qrNumber - b.qrNumber);
 
-    return success({ locations: allLocations });
+    // Strip large/sensitive fields to reduce response size (~10KB per qrImageBase64)
+    const locations = allLocations.map(({ qrImageBase64, qrSecret, ...rest }) => rest);
+
+    return success({ locations });
   } catch (err) {
     console.error('[getLocations] Error:', err);
     return error(ErrorCode.INTERNAL_ERROR, 'Failed to fetch locations', 500);

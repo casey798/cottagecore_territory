@@ -8,7 +8,7 @@ jest.mock('../../../shared/auth');
 
 import { getItem, query, updateItem } from '../../../shared/db';
 import { getTodayISTString } from '../../../shared/time';
-import { verifyQrPayload } from '../../../shared/hmac';
+import { verifyQrPayload, verifyPermanentQrPayload } from '../../../shared/hmac';
 import { extractUserId } from '../../../shared/auth';
 
 const mockGetItem = getItem as jest.MockedFunction<typeof getItem>;
@@ -16,6 +16,7 @@ const mockQuery = query as jest.MockedFunction<typeof query>;
 const mockUpdateItem = updateItem as jest.MockedFunction<typeof updateItem>;
 const mockGetTodayISTString = getTodayISTString as jest.MockedFunction<typeof getTodayISTString>;
 const mockVerifyQrPayload = verifyQrPayload as jest.MockedFunction<typeof verifyQrPayload>;
+const mockVerifyPermanentQrPayload = verifyPermanentQrPayload as jest.MockedFunction<typeof verifyPermanentQrPayload>;
 const mockExtractUserId = extractUserId as jest.MockedFunction<typeof extractUserId>;
 
 const TODAY = '2026-03-07';
@@ -156,16 +157,20 @@ describe('scanQR handler', () => {
         return {
           locationId: LOCATION_ID, name: 'Co-op Location', gpsLat: 13.0, gpsLng: 80.2,
           geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1,
-          notes: '', coopOnly: true,
+          notes: '',
         };
       }
       if (table === 'player-assignments') {
-        return { dateUserId: `${TODAY}#${USER_ID}`, assignedLocationIds: [LOCATION_ID] };
+        return {
+          dateUserId: `${TODAY}#${USER_ID}`,
+          assignedLocationIds: [LOCATION_ID],
+          coopLocationIds: [LOCATION_ID],
+        };
       }
       if (table === 'player-locks') return undefined;
-      if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember' };
+      if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember', displayName: 'TestPlayer' };
       if (table === 'location-master-config') {
-        return { locationId: LOCATION_ID, coopOnly: true, spaceFact: null, firstVisitBonus: false, bonusXP: false, minigameAffinity: null };
+        return { locationId: LOCATION_ID, spaceFact: null, firstVisitBonus: false, bonusXP: false, minigameAffinity: null };
       }
       return undefined;
     });
@@ -282,14 +287,16 @@ describe('scanQR handler', () => {
       expect(responseBody.error.code).toBe('NOT_ASSIGNED');
     });
 
-    it('returns COOP_REQUIRED when scanning co-op-only location without partner', async () => {
+    it('returns partnerRequired when scanning co-op-only location without partner', async () => {
       setupCoopOnlyPath();
       const event = makeEvent(makeValidBody());
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
-      expect(result.statusCode).toBe(400);
-      expect(responseBody.error.code).toBe('COOP_REQUIRED');
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.data.partnerRequired).toBe(true);
+      expect(responseBody.data.locationId).toBe(LOCATION_ID);
+      expect(responseBody.data.locationName).toBe('Co-op Location');
     });
 
     it('returns LOCATION_LOCKED when player has a lock record for this location', async () => {
@@ -599,6 +606,69 @@ describe('scanQR handler', () => {
       }
     });
 
+    it('returns partnerRequired when locationId is in coopLocationIds', async () => {
+      setupCoopOnlyPath(); // player-assignments has coopLocationIds: [LOCATION_ID]
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.data.partnerRequired).toBe(true);
+      expect(responseBody.data.locationId).toBe(LOCATION_ID);
+    });
+
+    it('proceeds normally when locationId is NOT in coopLocationIds', async () => {
+      // Assignment has coopLocationIds for a DIFFERENT location
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'daily-config') {
+          return {
+            date: TODAY, activeLocationIds: [LOCATION_ID], qrSecret: 'test-secret',
+            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
+            status: 'active', winnerClan: null,
+          };
+        }
+        if (table === 'locations') {
+          return {
+            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
+            geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1,
+            notes: '',
+          };
+        }
+        if (table === 'player-assignments') {
+          return {
+            dateUserId: `${TODAY}#${USER_ID}`,
+            assignedLocationIds: [LOCATION_ID],
+            coopLocationIds: ['some-other-location'],  // NOT our locationId
+          };
+        }
+        if (table === 'player-locks') return undefined;
+        if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember' };
+        if (table === 'location-master-config') return undefined;
+        return undefined;
+      });
+      mockQuery.mockResolvedValue({ items: [] });
+
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.data.partnerRequired).toBeUndefined();
+      expect(responseBody.data.locationModifiers.coopOnly).toBe(false);
+      expect(responseBody.data.availableMinigames.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('v1 daily QR still works on old path', async () => {
+      setupSuccessPath();
+      const event = makeEvent(makeValidBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.success).toBe(true);
+      expect(responseBody.data.locationId).toBe(LOCATION_ID);
+    });
+
     it('returns ALL_MINIGAMES_PLAYED when all 12 minigames played today', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'daily-config') {
@@ -646,6 +716,182 @@ describe('scanQR handler', () => {
 
       expect(result.statusCode).toBe(400);
       expect(responseBody.error.code).toBe('ALL_MINIGAMES_PLAYED');
+    });
+  });
+
+  describe('persistent QR (v2)', () => {
+    const PERMANENT_HMAC = 'b'.repeat(64);
+
+    function makePermanentBody() {
+      return {
+        qrData: {
+          v: 2,
+          l: LOCATION_ID,
+          d: 'permanent',
+          h: PERMANENT_HMAC,
+        },
+        gpsLat: 13.0,
+        gpsLng: 80.2,
+      };
+    }
+
+    function setupPermanentSuccessPath(): void {
+      mockVerifyPermanentQrPayload.mockReturnValue(true);
+      mockGetItem.mockImplementation(async (table: string, key?: Record<string, unknown>) => {
+        if (table === 'location-master-config') {
+          return {
+            locationId: LOCATION_ID,
+            qrSecret: 'per-location-secret',
+            coopOnly: false,
+            spaceFact: null,
+            firstVisitBonus: false,
+            bonusXP: false,
+            minigameAffinity: null,
+          };
+        }
+        if (table === 'daily-config') {
+          return {
+            date: TODAY, activeLocationIds: [LOCATION_ID], qrSecret: 'daily-secret',
+            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
+            status: 'active', winnerClan: null,
+          };
+        }
+        if (table === 'locations') {
+          return {
+            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
+            geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1, notes: '',
+          };
+        }
+        if (table === 'player-assignments') {
+          return {
+            dateUserId: `${TODAY}#${USER_ID}`,
+            assignedLocationIds: [LOCATION_ID],
+          };
+        }
+        if (table === 'player-locks') return undefined;
+        if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember' };
+        return undefined;
+      });
+      mockQuery.mockResolvedValue({ items: [] });
+    }
+
+    it('accepts a valid v2 permanent QR', async () => {
+      setupPermanentSuccessPath();
+      const event = makeEvent(makePermanentBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.success).toBe(true);
+      expect(responseBody.data.locationId).toBe(LOCATION_ID);
+      expect(responseBody.data.availableMinigames.length).toBeGreaterThanOrEqual(3);
+    });
+
+    it('rejects v2 QR with tampered HMAC', async () => {
+      mockVerifyPermanentQrPayload.mockReturnValue(false);
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
+        return undefined;
+      });
+
+      const event = makeEvent(makePermanentBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(400);
+      expect(responseBody.error.code).toBe('QR_INVALID');
+    });
+
+    it('rejects v2 QR for location not in today active set', async () => {
+      mockVerifyPermanentQrPayload.mockReturnValue(true);
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
+        if (table === 'daily-config') {
+          return {
+            date: TODAY, activeLocationIds: [LOCATION_ID], qrSecret: 'daily-secret',
+            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
+            status: 'active', winnerClan: null,
+          };
+        }
+        if (table === 'locations') {
+          return {
+            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
+            geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1, notes: '',
+          };
+        }
+        if (table === 'player-assignments') {
+          return {
+            dateUserId: `${TODAY}#${USER_ID}`,
+            assignedLocationIds: ['other-location-id'],
+          };
+        }
+        return undefined;
+      });
+
+      const event = makeEvent(makePermanentBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(400);
+      expect(responseBody.error.code).toBe('NOT_ASSIGNED');
+    });
+
+    it('rejects v2 QR when location has no qrSecret', async () => {
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID }; // no qrSecret
+        }
+        return undefined;
+      });
+
+      const event = makeEvent(makePermanentBody());
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(400);
+      expect(responseBody.error.code).toBe('QR_INVALID');
+    });
+
+    it('dev bypass works on v2 permanent QRs', async () => {
+      process.env.STAGE = 'dev';
+      mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'daily-config') {
+          return {
+            date: TODAY, activeLocationIds: [LOCATION_ID], qrSecret: 'daily-secret',
+            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
+            status: 'active', winnerClan: null,
+          };
+        }
+        if (table === 'locations') {
+          return {
+            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
+            geofenceRadius: 100, category: 'courtyard', active: true, chestDropModifier: 1, notes: '',
+          };
+        }
+        if (table === 'player-assignments') {
+          return { dateUserId: `${TODAY}#${USER_ID}`, assignedLocationIds: [LOCATION_ID] };
+        }
+        if (table === 'player-locks') return undefined;
+        if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember' };
+        if (table === 'location-master-config') return undefined;
+        return undefined;
+      });
+      mockQuery.mockResolvedValue({ items: [] });
+
+      const body = makePermanentBody();
+      body.qrData.h = 'dev-bypass';
+      const event = makeEvent(body);
+      const result = await handler(event);
+      const responseBody = JSON.parse(result.body);
+
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.success).toBe(true);
+
+      delete process.env.STAGE;
     });
   });
 });

@@ -11,6 +11,7 @@ import { lockPortrait } from './src/hooks/useScreenOrientation';
 import { RootNavigator } from './src/navigation/RootNavigator';
 import { registerFcmToken } from './src/utils/notifications';
 import { useGameStore } from './src/store/useGameStore';
+import { useAuthStore } from './src/store/useAuthStore';
 
 function App(): React.JSX.Element {
   useEffect(() => {
@@ -29,6 +30,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     const msg = getMessaging();
     const unsubscribe = onMessage(msg, async (remoteMessage) => {
+      const isAuthenticated = useAuthStore.getState().isAuthenticated;
+      if (!isAuthenticated) return;
       if (remoteMessage.data?.type === 'CAPTURE_RESULT') {
         const clan = remoteMessage.data.winnerClan as string;
         const spaceName = remoteMessage.data.spaceName as string;
@@ -44,6 +47,8 @@ function App(): React.JSX.Element {
   useEffect(() => {
     const msg = getMessaging();
     getInitialNotification(msg).then((remoteMessage) => {
+      const isAuthenticated = useAuthStore.getState().isAuthenticated;
+      if (!isAuthenticated) return;
       if (remoteMessage?.data?.type === 'CAPTURE_RESULT') {
         const clan = remoteMessage.data.winnerClan as string;
         const spaceName = remoteMessage.data.spaceName as string;

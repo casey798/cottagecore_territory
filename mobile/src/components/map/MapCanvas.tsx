@@ -6,6 +6,8 @@ import {
   Circle,
   Group,
   Path as SkiaPath,
+  Image as SkiaImage,
+  useImage,
 } from '@shopify/react-native-skia';
 import {
   GestureDetector,
@@ -27,6 +29,7 @@ import { useDebugStore } from '@/store/useDebugStore';
 import { ClanId, Location, CapturedSpace } from '@/types';
 import { isWithinMapBounds, getEdgeIndicator } from '@/utils/mapBounds';
 import { pixelToGps } from '@/utils/affineTransform';
+import { PLAYER_DOT_IMAGES, GPS_RING_COLORS } from '@/constants/playerAssets';
 import { MapPinsLayer } from './MapPinsLayer';
 import { MapOverlay } from './MapOverlay';
 
@@ -56,6 +59,9 @@ interface Props {
   onFollowChange?: (following: boolean) => void;
   selectedSpaceId?: string | null;
   onSpaceTap?: (space: CapturedSpace | null, screenX: number, screenY: number) => void;
+  onMapTap?: (pixelX: number, pixelY: number) => void;
+  pinColor?: string;
+  pinRingColor?: string;
 }
 
 function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
@@ -73,10 +79,17 @@ function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: n
   return inside;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap }: Props) {
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
   const tapToSetMode = useDebugStore((s) => s.tapToSetMode);
+
+  // Load player clan badge as a Skia image (pass require() result directly)
+  // PLAYER_DOT_IMAGES values are require() numbers at runtime; cast for Skia's DataSourceParam
+  const playerBadgeImage = useImage(
+    clan ? (PLAYER_DOT_IMAGES[clan] as number) : null,
+  );
+  const gpsRingColors = GPS_RING_COLORS[clan ?? 'ember'];
 
   // Brief toast after tap-to-set
   const [tapToast, setTapToast] = useState(false);
@@ -423,11 +436,32 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       runOnJS(handleSpaceTap)(e.x, e.y);
     });
 
-  // Pan + Pinch simultaneous; debug tap, double-tap, or space tap
+  // --- Map tap: generic tap callback for external consumers ---
+  const handleMapTapInternal = useCallback((screenX: number, screenY: number) => {
+    if (!onMapTap) return;
+    const mapPixelX = (screenX - translateX.value) / scale.value;
+    const mapPixelY = (screenY - translateY.value) / scale.value;
+    onMapTap(mapPixelX, mapPixelY);
+  }, [onMapTap, translateX, translateY, scale]);
+
+  const mapTapGesture = Gesture.Tap()
+    .numberOfTaps(1)
+    .enabled(!!onMapTap && !(__DEV__ && tapToSetMode))
+    .onEnd((e) => {
+      'worklet';
+      runOnJS(handleMapTapInternal)(e.x, e.y);
+    });
+
+  // Pan + Pinch simultaneous; debug tap, double-tap, space tap, or map tap
+  // mapTapGesture is last in the Exclusive race so pin/space taps take priority
+  const singleTapGesture = onSpaceTap
+    ? Gesture.Exclusive(spaceTapGesture, mapTapGesture)
+    : mapTapGesture;
+
   const composedGesture = Gesture.Race(
     debugTapGesture,
     Gesture.Simultaneous(pinchGesture, panGesture),
-    Gesture.Exclusive(doubleTapGesture, spaceTapGesture),
+    Gesture.Exclusive(doubleTapGesture, singleTapGesture),
   );
 
   // Animated style for the canvas wrapper — applies transform
@@ -520,7 +554,9 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
   }
 
   const DEBUG_COLOR = '#FFD700';
-  const dotColor = (__DEV__ && isDebugMode) ? DEBUG_COLOR : (clan ? CLAN_COLORS[clan] : null);
+  const dotColor = (__DEV__ && isDebugMode) ? DEBUG_COLOR : (clan ? CLAN_COLORS[clan] : (pinColor ?? null));
+  const ringFill = pinRingColor ? pinRingColor + '2E' : gpsRingColors.fill;
+  const ringStroke = pinRingColor ? pinRingColor + '73' : gpsRingColors.stroke;
 
   return (
     <GestureDetector gesture={composedGesture}>
@@ -567,46 +603,60 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
               )}
               {playerX != null && playerY != null && dotColor && inBounds && (
                 <Group>
-                  {/* Accuracy ring */}
+                  {/* GPS accuracy ring — outer glow (0.8x) */}
                   <Circle
                     cx={playerX}
                     cy={playerY}
-                    r={32}
-                    color={dotColor + '30'}
+                    r={29}
+                    color={isDebugMode ? dotColor + '30' : ringFill}
                     style="fill"
                   />
                   <Circle
                     cx={playerX}
                     cy={playerY}
-                    r={32}
-                    color={dotColor + '60'}
+                    r={29}
+                    color={isDebugMode ? dotColor + '60' : ringStroke}
                     style="stroke"
-                    strokeWidth={2}
+                    strokeWidth={1.5}
                   />
-                  {/* Player dot */}
+                  {/* GPS inner ring — hugs the badge (0.8x) */}
                   <Circle
                     cx={playerX}
                     cy={playerY}
                     r={14}
-                    color={dotColor}
-                    style="fill"
-                  />
-                  <Circle
-                    cx={playerX}
-                    cy={playerY}
-                    r={14}
-                    color="rgba(255, 255, 255, 0.6)"
+                    color={isDebugMode ? dotColor + '60' : ringStroke}
                     style="stroke"
-                    strokeWidth={2}
+                    strokeWidth={1.5}
                   />
-                  {/* Inner white dot */}
-                  <Circle
-                    cx={playerX}
-                    cy={playerY}
-                    r={4}
-                    color="rgba(255, 255, 255, 0.8)"
-                    style="fill"
-                  />
+                  {/* Player clan badge image (0.8x) */}
+                  {!isDebugMode && playerBadgeImage ? (
+                    <SkiaImage
+                      image={playerBadgeImage}
+                      x={playerX - 11}
+                      y={playerY - 11}
+                      width={22}
+                      height={22}
+                      fit="contain"
+                    />
+                  ) : (
+                    <>
+                      <Circle
+                        cx={playerX}
+                        cy={playerY}
+                        r={11}
+                        color={dotColor}
+                        style="fill"
+                      />
+                      <Circle
+                        cx={playerX}
+                        cy={playerY}
+                        r={11}
+                        color="rgba(255, 255, 255, 0.6)"
+                        style="stroke"
+                        strokeWidth={1.5}
+                      />
+                    </>
+                  )}
                 </Group>
               )}
               {/* Out-of-bounds edge indicator */}
@@ -696,7 +746,7 @@ const styles = StyleSheet.create({
   loadingText: {
     color: PALETTE.cream,
     fontSize: 14,
-    fontFamily: FONTS.bodyRegular,
+    fontFamily: FONTS.pixel,
     marginTop: 12,
   },
   overlayCanvas: {
@@ -719,7 +769,7 @@ const styles = StyleSheet.create({
   mapLoadingText: {
     color: PALETTE.cream,
     fontSize: 13,
-    fontFamily: FONTS.bodySemiBold,
+    fontFamily: FONTS.pixel,
     marginTop: 10,
     letterSpacing: 0.5,
   },
@@ -736,7 +786,7 @@ const styles = StyleSheet.create({
   debugBadgeText: {
     color: '#1E140F',
     fontSize: 10,
-    fontFamily: FONTS.bodySemiBold,
+    fontFamily: FONTS.pixel,
   },
   oobLabel: {
     width: 100,
@@ -745,7 +795,7 @@ const styles = StyleSheet.create({
   oobLabelText: {
     color: '#FFFFFF',
     fontSize: 9,
-    fontFamily: FONTS.bodySemiBold,
+    fontFamily: FONTS.pixel,
     letterSpacing: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.6)',
     paddingHorizontal: 8,
@@ -776,7 +826,7 @@ const styles = StyleSheet.create({
   tapModeBannerText: {
     color: '#1E140F',
     fontSize: 10,
-    fontFamily: FONTS.bodySemiBold,
+    fontFamily: FONTS.pixel,
     letterSpacing: 0.5,
   },
   crosshair: {
@@ -792,6 +842,7 @@ const styles = StyleSheet.create({
     color: 'rgba(255, 215, 0, 0.5)',
     fontSize: 48,
     fontWeight: '200',
+    fontFamily: FONTS.pixel,
   },
   tapToast: {
     position: 'absolute',
@@ -805,6 +856,6 @@ const styles = StyleSheet.create({
   tapToastText: {
     color: '#FFFFFF',
     fontSize: 11,
-    fontFamily: FONTS.bodySemiBold,
+    fontFamily: FONTS.pixel,
   },
 });

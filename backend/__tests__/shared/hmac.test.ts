@@ -1,6 +1,8 @@
 import {
   generateQrPayload,
   verifyQrPayload,
+  generatePermanentQrPayload,
+  verifyPermanentQrPayload,
   generateCompletionHash,
   verifyCompletionHash,
 } from '../../shared/hmac';
@@ -81,6 +83,70 @@ describe('HMAC Utilities', () => {
       const payload = generateQrPayload(LOCATION_ID, DATE, SECRET);
 
       expect(verifyQrPayload(payload, 'wrong-secret')).toBe(false);
+    });
+  });
+
+  describe('generatePermanentQrPayload', () => {
+    it('produces a v2 payload with d=permanent', () => {
+      const payload = generatePermanentQrPayload(LOCATION_ID, SECRET);
+
+      expect(payload).toHaveProperty('v', 2);
+      expect(payload).toHaveProperty('l', LOCATION_ID);
+      expect(payload).toHaveProperty('d', 'permanent');
+      expect(payload).toHaveProperty('h');
+      expect(payload.h.length).toBe(64);
+    });
+
+    it('produces deterministic output', () => {
+      const p1 = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      const p2 = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      expect(p1).toEqual(p2);
+    });
+
+    it('produces different hashes for different locations', () => {
+      const p1 = generatePermanentQrPayload('loc-001', SECRET);
+      const p2 = generatePermanentQrPayload('loc-002', SECRET);
+      expect(p1.h).not.toBe(p2.h);
+    });
+
+    it('produces different hash than v1 for same location+secret', () => {
+      const permanent = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      const daily = generateQrPayload(LOCATION_ID, DATE, SECRET);
+      expect(permanent.h).not.toBe(daily.h);
+    });
+  });
+
+  describe('verifyPermanentQrPayload', () => {
+    it('returns true for a valid permanent payload', () => {
+      const payload = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      expect(verifyPermanentQrPayload(payload, SECRET)).toBe(true);
+    });
+
+    it('returns false for tampered location', () => {
+      const payload = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      const tampered: QrPayload = { ...payload, l: 'tampered-loc' };
+      expect(verifyPermanentQrPayload(tampered, SECRET)).toBe(false);
+    });
+
+    it('returns false for tampered hash', () => {
+      const payload = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      const tampered: QrPayload = { ...payload, h: 'b'.repeat(64) };
+      expect(verifyPermanentQrPayload(tampered, SECRET)).toBe(false);
+    });
+
+    it('returns false for wrong secret', () => {
+      const payload = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      expect(verifyPermanentQrPayload(payload, 'wrong-secret')).toBe(false);
+    });
+
+    it('returns false for a v1 daily payload', () => {
+      const dailyPayload = generateQrPayload(LOCATION_ID, DATE, SECRET);
+      expect(verifyPermanentQrPayload(dailyPayload, SECRET)).toBe(false);
+    });
+
+    it('v1 verifier rejects a permanent payload', () => {
+      const permPayload = generatePermanentQrPayload(LOCATION_ID, SECRET);
+      expect(verifyQrPayload(permPayload, SECRET)).toBe(false);
     });
   });
 

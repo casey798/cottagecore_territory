@@ -2,22 +2,13 @@ import crypto from 'crypto';
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
 import { extractUserId } from '../../shared/auth';
-import { getItem, putItem } from '../../shared/db';
+import { getItem, putItem, query } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
-import type { CheckIn, User, ActivityCategory, Satisfaction, Sentiment, Floor } from '../../shared/types';
+import { submitCheckinSchema } from '../../shared/schemas';
+import type { CheckIn, User } from '../../shared/types';
 
-const VALID_ACTIVITIES: ActivityCategory[] = [
-  'high_effort_personal',
-  'low_effort_personal',
-  'high_effort_social',
-  'low_effort_social',
-];
-
-const VALID_SATISFACTIONS: Satisfaction[] = [0, 0.25, 0.5, 0.75, 1];
-
-const VALID_SENTIMENTS: Sentiment[] = ['yes', 'maybe', 'no'];
-
-const VALID_FLOORS: Floor[] = ['outdoor', 'ground', 'first', 'second', 'third'];
+const RATE_LIMIT_SECONDS = 30;
+const CAP_MINUTES = 600; // 10 hours
 
 export async function handler(
   event: APIGatewayProxyEvent
@@ -27,31 +18,53 @@ export async function handler(
 
     const body = JSON.parse(event.body || '{}');
 
-    // Validate required fields
-    const { gpsLat, gpsLng, pixelX, pixelY, activityCategory, satisfaction, sentiment, floor } = body;
-
-    if (typeof gpsLat !== 'number' || typeof gpsLng !== 'number' || !isFinite(gpsLat) || !isFinite(gpsLng)) {
-      return error(ErrorCode.VALIDATION_ERROR, 'gpsLat and gpsLng must be valid numbers', 400);
+    // Validate with Zod schema
+    const parsed = submitCheckinSchema.safeParse(body);
+    if (!parsed.success) {
+      const firstError = parsed.error.errors[0]?.message ?? 'Invalid request';
+      return error(ErrorCode.VALIDATION_ERROR, firstError, 400);
     }
 
-    if (typeof pixelX !== 'number' || typeof pixelY !== 'number' || pixelX < 0 || pixelY < 0) {
-      return error(ErrorCode.VALIDATION_ERROR, 'pixelX and pixelY must be non-negative numbers', 400);
+    const { gpsLat, gpsLng, pixelX, pixelY, pixelAvailable, activityCategory, satisfaction, sentiment, floor, durationMinutes, activityTime } = parsed.data;
+
+    const today = getTodayISTString();
+
+    // Query today's check-ins for rate limit and duration cap
+    const { items: todayCheckins } = await query<CheckIn>(
+      'checkins',
+      'userId = :uid AND #d = :date',
+      { ':uid': userId, ':date': today },
+      {
+        indexName: 'UserDateIndex',
+        expressionNames: { '#d': 'date' },
+        limit: 600,
+      }
+    );
+
+    // Rate limit: check if any check-in was created in the last 30 seconds
+    const now = new Date();
+    const recentCutoff = new Date(now.getTime() - RATE_LIMIT_SECONDS * 1000).toISOString();
+    const hasRecentCheckin = todayCheckins.some(
+      (c) => c.timestamp > recentCutoff
+    );
+    if (hasRecentCheckin) {
+      return error(ErrorCode.RATE_LIMITED, 'Please wait before checking in again.', 429);
     }
 
-    if (!VALID_ACTIVITIES.includes(activityCategory)) {
-      return error(ErrorCode.VALIDATION_ERROR, 'Invalid activityCategory', 400);
-    }
-
-    if (!VALID_SATISFACTIONS.includes(satisfaction)) {
-      return error(ErrorCode.VALIDATION_ERROR, 'Invalid satisfaction value', 400);
-    }
-
-    if (!VALID_SENTIMENTS.includes(sentiment)) {
-      return error(ErrorCode.VALIDATION_ERROR, 'Invalid sentiment value', 400);
-    }
-
-    if (!VALID_FLOORS.includes(floor)) {
-      return error(ErrorCode.VALIDATION_ERROR, 'Invalid floor value', 400);
+    // Cumulative duration cap: 10 hours (600 minutes) per day
+    const totalExistingMinutes = todayCheckins.reduce((sum, c) => {
+      const mins = (c as Record<string, unknown>).durationMinutes;
+      return sum + (typeof mins === 'number' ? mins : 0);
+    }, 0);
+    if (totalExistingMinutes + durationMinutes > CAP_MINUTES) {
+      const remainingMinutes = CAP_MINUTES - totalExistingMinutes;
+      return error(
+        ErrorCode.DURATION_CAP_EXCEEDED,
+        remainingMinutes <= 0
+          ? 'You have reached the 10-hour daily activity limit.'
+          : `Adding this would exceed your 10-hour daily limit. You have ${remainingMinutes} minutes remaining today.`,
+        429
+      );
     }
 
     // Get user's clan
@@ -59,8 +72,7 @@ export async function handler(
     const clanId = user?.clan ?? 'unknown';
 
     const checkInId = crypto.randomUUID();
-    const timestamp = new Date().toISOString();
-    const date = getTodayISTString();
+    const timestamp = now.toISOString();
 
     const checkIn: CheckIn = {
       checkInId,
@@ -68,14 +80,17 @@ export async function handler(
       clanId,
       gpsLat,
       gpsLng,
-      pixelX,
-      pixelY,
+      pixelX: pixelAvailable ? pixelX : null,
+      pixelY: pixelAvailable ? pixelY : null,
+      pixelAvailable,
       activityCategory,
       satisfaction,
       sentiment,
       floor,
+      durationMinutes,
+      activityTime,
       timestamp,
-      date,
+      date: today,
     };
 
     await putItem('checkins', checkIn as unknown as Record<string, unknown>);

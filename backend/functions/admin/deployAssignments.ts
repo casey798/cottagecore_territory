@@ -3,6 +3,12 @@ import { success, error, ErrorCode } from '../../shared/response';
 import { getItem, scan, query, putItem } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
 import {
+  buildAdjacencyMap,
+  scoreLocationForUser,
+  assignLocationsWithSpread,
+} from '../../shared/weightedAssignment';
+import { ROTATION_HISTORY_WINDOW_DAYS } from '../../shared/constants';
+import {
   DailyLocationPool,
   LocationMasterConfig,
   User,
@@ -10,132 +16,34 @@ import {
   PlayerAssignment,
   GameSession,
   Phase1Cluster,
-  LocationClassification,
-  ClusterWeights,
 } from '../../shared/types';
+import { isQuietModeActive } from '../../shared/quietMode';
+import { addDays } from 'date-fns';
+import { toZonedTime } from 'date-fns-tz';
 
-// ── Haversine ────────────────────────────────────────────────────────
+// ── Paginated helpers ────────────────────────────────────────────────
 
-function haversineDistance(
-  lat1: number, lng1: number,
-  lat2: number, lng2: number
-): number {
-  const R = 6371000;
-  const dLat = (lat2 - lat1) * Math.PI / 180;
-  const dLng = (lng2 - lng1) * Math.PI / 180;
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(lat1 * Math.PI / 180) *
-    Math.cos(lat2 * Math.PI / 180) *
-    Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-// ── Adjacency Map ────────────────────────────────────────────────────
-
-const ADJACENCY_RADIUS_METERS = 15;
-
-function buildAdjacencyMap(
-  locations: LocationMasterConfig[]
-): Record<string, string[]> {
-  const adjacency: Record<string, string[]> = {};
-
-  for (const loc of locations) {
-    adjacency[loc.locationId] = [];
-
-    if (loc.gpsLat === 0 && loc.gpsLng === 0) continue;
-
-    for (const other of locations) {
-      if (other.locationId === loc.locationId) continue;
-      if (other.gpsLat === 0 && other.gpsLng === 0) continue;
-
-      const dist = haversineDistance(
-        loc.gpsLat, loc.gpsLng,
-        other.gpsLat, other.gpsLng
-      );
-      if (dist <= ADJACENCY_RADIUS_METERS) {
-        adjacency[loc.locationId].push(other.locationId);
-      }
-    }
-  }
-
-  return adjacency;
-}
-
-// ── Weighted Random Pick ─────────────────────────────────────────────
-
-function weightedRandomPick(
-  candidates: Array<{ locationId: string; score: number }>
-): { locationId: string; score: number } {
-  const totalWeight = candidates.reduce((sum, c) => sum + c.score, 0);
-  let r = Math.random() * totalWeight;
-  for (const c of candidates) {
-    r -= c.score;
-    if (r <= 0) return c;
-  }
-  return candidates[candidates.length - 1];
-}
-
-// ── Spatial Spread Assignment ────────────────────────────────────────
-
-function assignLocationsWithSpread(
-  candidates: Array<{ locationId: string; score: number }>,
-  adjacencyByLocationId: Record<string, string[]>,
-  count: number
-): string[] {
-  const selected: string[] = [];
-  let pool = [...candidates];
-
-  while (selected.length < count && pool.length > 0) {
-    const picked = weightedRandomPick(pool);
-    selected.push(picked.locationId);
-
-    const excluded = new Set([
-      picked.locationId,
-      ...(adjacencyByLocationId[picked.locationId] ?? []),
-    ]);
-    pool = pool.filter(c => !excluded.has(c.locationId));
-  }
-
-  // Fallback: pool exhausted before count reached
-  if (selected.length < count) {
-    const selectedSet = new Set(selected);
-    const fallback = candidates
-      .filter(c => !selectedSet.has(c.locationId))
-      .sort((a, b) => b.score - a.score);
-    while (selected.length < count && fallback.length > 0) {
-      selected.push(fallback.shift()!.locationId);
-    }
-  }
-
-  return selected;
-}
-
-// ── Paginated scan helper ────────────────────────────────────────────
-
-async function scanAll<T>(table: string): Promise<T[]> {
+async function scanAll<T>(table: string, options?: Parameters<typeof scan>[1]): Promise<T[]> {
   const all: T[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
-    const result = await scan<T>(table, { exclusiveStartKey: lastKey });
+    const result = await scan<T>(table, { ...options, exclusiveStartKey: lastKey });
     all.push(...result.items);
     lastKey = result.lastEvaluatedKey;
   } while (lastKey);
   return all;
 }
 
-// ── Paginated query helper ───────────────────────────────────────────
-
 async function queryAll<T>(
   table: string,
-  keyConditionExpression: string,
-  expressionValues: Record<string, unknown>,
-  options?: { indexName?: string }
+  keyCondition: string,
+  values: Record<string, unknown>,
+  options?: { indexName?: string; filterExpression?: string; expressionNames?: Record<string, string> },
 ): Promise<T[]> {
   const all: T[] = [];
   let lastKey: Record<string, unknown> | undefined;
   do {
-    const result = await query<T>(table, keyConditionExpression, expressionValues, {
+    const result = await query<T>(table, keyCondition, values, {
       ...options,
       exclusiveStartKey: lastKey,
     });
@@ -143,6 +51,21 @@ async function queryAll<T>(
     lastKey = result.lastEvaluatedKey;
   } while (lastKey);
   return all;
+}
+
+// ── Compute window dates ─────────────────────────────────────────────
+
+function getWindowDates(today: string): string[] {
+  const nowIST = toZonedTime(new Date(), 'Asia/Kolkata');
+  const dates: string[] = [];
+  for (let d = 0; d < ROTATION_HISTORY_WINDOW_DAYS; d++) {
+    const date = addDays(nowIST, -d);
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    dates.push(`${y}-${m}-${day}`);
+  }
+  return dates;
 }
 
 // ── Handler ──────────────────────────────────────────────────────────
@@ -157,8 +80,10 @@ export async function handler(
     }
 
     const today = getTodayISTString();
+    const windowDates = getWindowDates(today);
+    const windowDateSet = new Set(windowDates);
 
-    // 1. Read today's DailyLocationPool
+    // 1. Read today's config
     const pool = await getItem<DailyLocationPool>('daily-config', { date: today });
     if (!pool) {
       return error(ErrorCode.NOT_FOUND, 'No daily config found for today', 404);
@@ -178,18 +103,10 @@ export async function handler(
       return error(ErrorCode.VALIDATION_ERROR, 'No location master configs found for active locations', 400);
     }
 
-    // Build lookup maps
-    const locById = new Map<string, LocationMasterConfig>();
-    const locIdByQrNumber = new Map<number, string>();
-    for (const loc of locationConfigs) {
-      locById.set(loc.locationId, loc);
-      locIdByQrNumber.set(loc.qrNumber, loc.locationId);
-    }
-
     // 3. Build adjacency map
     const adjacencyMap = buildAdjacencyMap(locationConfigs);
 
-    // 4. Read all users (paginated)
+    // 4. Read all users
     const allUsers = await scanAll<User>('users');
 
     // 5. Read ClusterWeightConfig
@@ -198,12 +115,21 @@ export async function handler(
       return error(ErrorCode.NOT_FOUND, 'Cluster weight config not found. Run seed:cluster-weights first.', 404);
     }
 
-    // 6. Read all existing PlayerAssignments this season (for rotation history)
-    const allAssignments = await scanAll<PlayerAssignment>('player-assignments');
+    // 6. Read player-assignments within the 3-day window only
+    // player-assignments PK is dateUserId (YYYY-MM-DD#userId), hash key only.
+    // Scan with FilterExpression on begins_with for each window date.
+    const windowAssignments: PlayerAssignment[] = [];
+    for (const dateStr of windowDates) {
+      const dateAssignments = await scanAll<PlayerAssignment>('player-assignments', {
+        filterExpression: 'begins_with(dateUserId, :prefix)',
+        expressionValues: { ':prefix': `${dateStr}#` },
+      });
+      windowAssignments.push(...dateAssignments);
+    }
 
-    // Build rotation counts: userId → locationId → count
+    // Build rotation counts: userId → locationId → count (within window only)
     const rotationCounts = new Map<string, Map<string, number>>();
-    for (const assignment of allAssignments) {
+    for (const assignment of windowAssignments) {
       const userId = assignment.dateUserId.split('#')[1];
       if (!userId) continue;
       if (!rotationCounts.has(userId)) {
@@ -215,42 +141,46 @@ export async function handler(
       }
     }
 
-    // 7. Read all GameSessions (for visit-response modifier)
-    //    Build set of userId#locationId pairs that have sessions
-    const allSessions = await scanAll<GameSession>('game-sessions');
+    // 7. Read game-sessions within the 3-day window (for visit-response modifier)
+    // Use UserDateIndex GSI: query per user with date >= windowStart
+    // More efficient approach: scan with filter on date field for the window dates
+    const windowSessions: GameSession[] = [];
+    for (const dateStr of windowDates) {
+      const dateSessions = await scanAll<GameSession>('game-sessions', {
+        filterExpression: '#d = :dateVal',
+        expressionValues: { ':dateVal': dateStr },
+        expressionNames: { '#d': 'date' },
+      });
+      windowSessions.push(...dateSessions);
+    }
+
+    // Build session pairs within window: userId#locationId → played
     const sessionPairs = new Set<string>();
-    for (const session of allSessions) {
+    for (const session of windowSessions) {
       sessionPairs.add(`${session.userId}#${session.locationId}`);
     }
 
-    // Build set of locationIds each user was ever assigned
-    const everAssigned = new Map<string, Set<string>>();
-    for (const assignment of allAssignments) {
-      const assignDate = assignment.dateUserId.split('#')[0];
-      if (assignDate === today) continue; // Skip today's (being replaced)
-      const userId = assignment.dateUserId.split('#')[1];
-      if (!userId) continue;
-      if (!everAssigned.has(userId)) {
-        everAssigned.set(userId, new Set());
+    // Build set of locationIds each user was assigned in window (excluding today)
+    const windowAssigned = new Map<string, Set<string>>();
+    for (const assignment of windowAssignments) {
+      const [assignDate, userId] = assignment.dateUserId.split('#');
+      if (!userId || assignDate === today) continue;
+      if (!windowAssigned.has(userId)) {
+        windowAssigned.set(userId, new Set());
       }
-      const userSet = everAssigned.get(userId)!;
       for (const locId of assignment.assignedLocationIds) {
-        userSet.add(locId);
+        windowAssigned.get(userId)!.add(locId);
       }
     }
 
     // Build bad pairing locationId sets per cluster
     const badPairingLocIds = new Map<Phase1Cluster, Set<string>>();
-    for (const [cluster, qrNumbers] of Object.entries(clusterConfig.badPairings)) {
-      const locIds = new Set<string>();
-      for (const idStr of qrNumbers) {
-        // badPairings values are locationId strings (resolved from QR numbers at seed time)
-        locIds.add(idStr);
-      }
-      badPairingLocIds.set(cluster as Phase1Cluster, locIds);
+    for (const [cluster, locIds] of Object.entries(clusterConfig.badPairings)) {
+      badPairingLocIds.set(cluster as Phase1Cluster, new Set(locIds));
     }
 
     // 8. Process users in batches of 50
+    const MAX_COOP_SLOTS_PER_PLAYER = 2;
     const USER_BATCH_SIZE = 50;
     let assigned = 0;
     let failed = 0;
@@ -259,47 +189,35 @@ export async function handler(
       const batch = allUsers.slice(i, i + USER_BATCH_SIZE);
       const results = await Promise.allSettled(
         batch.map(async (user) => {
-          const clusterKey: Phase1Cluster | 'null' = user.phase1Cluster ?? 'null';
-          const weights: ClusterWeights = clusterConfig.weights[clusterKey]
-            ?? clusterConfig.weights['null'];
+          const clusterKey: Phase1Cluster | 'null' =
+            user.computedCluster ?? user.phase1Cluster ?? 'null';
           const assignmentCount = clusterConfig.assignmentCounts[clusterKey] ?? 4;
+          const coopChance = clusterConfig.coopChances?.[clusterKey]
+            ?? clusterConfig.coopChance ?? 0;
 
           const userRotation = rotationCounts.get(user.userId);
-          const userEverAssigned = everAssigned.get(user.userId);
-          const userBadPairings = clusterKey !== 'null'
-            ? badPairingLocIds.get(clusterKey as Phase1Cluster)
-            : undefined;
+          const userWindowAssigned = windowAssigned.get(user.userId);
 
           // Score each candidate location
           const candidates: Array<{ locationId: string; score: number }> = [];
           const weightsUsed: Record<string, number> = {};
 
           for (const loc of locationConfigs) {
-            const classification = loc.classification as keyof ClusterWeights;
-            const baseWeight = weights[classification] ?? 1.0;
+            const rotationCount = userRotation?.get(loc.locationId) ?? 0;
+            // Visit-response: assigned in window but never played in window
+            const wasAssignedNeverPlayed =
+              (userWindowAssigned?.has(loc.locationId) ?? false) &&
+              !sessionPairs.has(`${user.userId}#${loc.locationId}`);
 
-            // Rotation modifier
-            const timesAssigned = userRotation?.get(loc.locationId) ?? 0;
-            let rotationMod: number;
-            if (timesAssigned === 0) rotationMod = 3.0;
-            else if (timesAssigned === 1) rotationMod = 1.5;
-            else if (timesAssigned === 2) rotationMod = 1.0;
-            else rotationMod = 0.7;
+            const finalScore = scoreLocationForUser(
+              user,
+              loc,
+              rotationCount,
+              wasAssignedNeverPlayed,
+              clusterConfig,
+              badPairingLocIds,
+            );
 
-            // Visit-response modifier
-            let visitResponseMod = 1.0;
-            if (
-              userEverAssigned?.has(loc.locationId) &&
-              !sessionPairs.has(`${user.userId}#${loc.locationId}`)
-            ) {
-              visitResponseMod = 0.5;
-            }
-
-            // Bad pairing modifier
-            const badPairingMod =
-              userBadPairings?.has(loc.locationId) ? 0.1 : 1.0;
-
-            const finalScore = baseWeight * rotationMod * visitResponseMod * badPairingMod;
             candidates.push({ locationId: loc.locationId, score: finalScore });
             weightsUsed[loc.locationId] = finalScore;
           }
@@ -308,13 +226,31 @@ export async function handler(
           const assignedLocations = assignLocationsWithSpread(
             candidates,
             adjacencyMap,
-            assignmentCount
+            assignmentCount,
+            user.userId,
           );
+
+          // Designate co-op slots from already-assigned locations
+          const coopLocationIds: string[] = [];
+          if (coopChance > 0 && assignedLocations.length > 0) {
+            const shuffled = [...assignedLocations].sort(() => Math.random() - 0.5);
+            for (const locId of shuffled) {
+              if (coopLocationIds.length >= MAX_COOP_SLOTS_PER_PLAYER) break;
+              if (Math.random() < coopChance) {
+                coopLocationIds.push(locId);
+              }
+            }
+          }
+
+          if (coopChance > 0 && coopLocationIds.length === 0) {
+            console.warn('[deployAssignments] coopChance is', coopChance, 'for cluster', clusterKey, 'but no co-op slots designated for user', user.userId);
+          }
 
           // Write PlayerAssignment
           const assignment: PlayerAssignment = {
             dateUserId: `${today}#${user.userId}`,
             assignedLocationIds: assignedLocations,
+            coopLocationIds,
             weightsUsed,
           };
 
@@ -332,13 +268,18 @@ export async function handler(
       }
     }
 
-    console.log(`[deployAssignments] ${today}: assigned=${assigned}, failed=${failed}, total=${allUsers.length}`);
+    const quietActive = await isQuietModeActive();
+    console.log(`[deployAssignments] ${today}: assigned=${assigned}, failed=${failed}, total=${allUsers.length}, window=${ROTATION_HISTORY_WINDOW_DAYS}d, quietMode=${quietActive}`);
 
     return success({
       totalUsers: allUsers.length,
       assigned,
       failed,
       date: today,
+      ...(quietActive ? {
+        quietModeWarning: true,
+        message: 'Assignments deployed but quiet mode is active — players cannot scan until quiet mode is disabled',
+      } : {}),
     });
   } catch (err) {
     console.error('[deployAssignments] Error:', err);
