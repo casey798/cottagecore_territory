@@ -288,7 +288,7 @@ describe('dailyScoring handler', () => {
       expect(mockSendToAll).toHaveBeenCalledWith(
         expect.objectContaining({
           notification: expect.objectContaining({
-            title: 'Ember wins!',
+            title: 'Seekers wins!',
           }),
           data: expect.objectContaining({ type: 'CAPTURE_RESULT', winnerClan: 'ember' }),
         })

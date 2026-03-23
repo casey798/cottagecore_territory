@@ -28,6 +28,8 @@ function makeUser(id: string): User {
     bestStreak: 0,
     lastActiveDate: '2026-03-18',
     tutorialDone: true,
+    tcAcceptedAt: null,
+    tcVersion: null,
     fcmToken: '',
     playerCode: 'ABC123',
     createdAt: '2026-01-01T00:00:00Z',

@@ -30,6 +30,7 @@ describe('minigames metadata', () => {
     expect(MINIGAME_POOL['word-clusters']).toEqual({
       name: 'Word Clusters',
       timeLimit: 180,
+      difficulty: 'medium',
       description: 'Sort 16 words into 4 groups. 8 mistakes allowed.',
     });
   });

@@ -72,7 +72,22 @@ function makeEvent(body: Record<string, unknown>): APIGatewayProxyEvent {
   };
 }
 
+const PERMANENT_VALID_HMAC = 'b'.repeat(64);
+
 function makeValidBody() {
+  return {
+    qrData: {
+      v: 2 as const,
+      l: LOCATION_ID,
+      d: 'permanent' as const,
+      h: PERMANENT_VALID_HMAC,
+    },
+    gpsLat: 13.0,
+    gpsLng: 80.2,
+  };
+}
+
+function makeV1Body() {
   return {
     qrData: {
       v: 1,
@@ -91,11 +106,15 @@ describe('scanQR handler', () => {
     mockExtractUserId.mockReturnValue(USER_ID);
     mockGetTodayISTString.mockReturnValue(TODAY);
     mockVerifyQrPayload.mockReturnValue(true);
+    mockVerifyPermanentQrPayload.mockReturnValue(true);
     mockUpdateItem.mockResolvedValue(undefined);
   });
 
   function setupSuccessPath(): void {
     mockGetItem.mockImplementation(async (table: string) => {
+      if (table === 'location-master-config') {
+        return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+      }
       if (table === 'daily-config') {
         return {
           date: TODAY,
@@ -135,9 +154,6 @@ describe('scanQR handler', () => {
           clan: 'ember',
         };
       }
-      if (table === 'location-master-config') {
-        return undefined; // default: no master config
-      }
       return undefined;
     });
 
@@ -146,6 +162,9 @@ describe('scanQR handler', () => {
 
   function setupCoopOnlyPath(): void {
     mockGetItem.mockImplementation(async (table: string) => {
+      if (table === 'location-master-config') {
+        return { locationId: LOCATION_ID, qrSecret: 'per-location-secret', spaceFact: null, firstVisitBonus: false, bonusXP: false, minigameAffinity: null };
+      }
       if (table === 'daily-config') {
         return {
           date: TODAY, activeLocationIds: [LOCATION_ID], qrSecret: 'test-secret',
@@ -169,40 +188,29 @@ describe('scanQR handler', () => {
       }
       if (table === 'player-locks') return undefined;
       if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember', displayName: 'TestPlayer' };
-      if (table === 'location-master-config') {
-        return { locationId: LOCATION_ID, spaceFact: null, firstVisitBonus: false, bonusXP: false, minigameAffinity: null };
-      }
       return undefined;
     });
     mockQuery.mockResolvedValue({ items: [] });
   }
 
   describe('failure codes', () => {
-    it('returns QR_EXPIRED when qrData.d is not today', async () => {
-      const body = makeValidBody();
-      body.qrData.d = '2026-03-06';
+    it('returns QR_INVALID for v1 daily-rotating QR (no longer supported)', async () => {
+      const body = makeV1Body();
       const event = makeEvent(body);
 
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
       expect(result.statusCode).toBe(400);
-      expect(responseBody.error.code).toBe('QR_EXPIRED');
+      expect(responseBody.error.code).toBe('QR_INVALID');
     });
 
     it('returns QR_INVALID when HMAC verification fails', async () => {
-      mockVerifyQrPayload.mockReturnValue(false);
+      mockVerifyPermanentQrPayload.mockReturnValue(false);
 
       mockGetItem.mockImplementation(async (table: string) => {
-        if (table === 'daily-config') {
-          return {
-            date: TODAY,
-            qrSecret: 'test-secret',
-            activeLocationIds: [LOCATION_ID],
-            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active',
-                       winnerClan: null,
-          };
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
         }
         return undefined;
       });
@@ -215,38 +223,28 @@ describe('scanQR handler', () => {
       expect(responseBody.error.code).toBe('QR_INVALID');
     });
 
-    it('returns GPS_OUT_OF_RANGE when player is outside geofence', async () => {
-      mockGetItem.mockImplementation(async (table: string) => {
-        if (table === 'daily-config') {
-          return {
-            date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
-            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active', winnerClan: null,
-          };
-        }
-        if (table === 'locations') {
-          return {
-            locationId: LOCATION_ID, name: 'Test Location', gpsLat: 13.0, gpsLng: 80.2,
-            geofenceRadius: 15, category: 'courtyard', active: true, chestDropModifier: 1, notes: '',
-          };
-        }
-        return undefined;
-      });
-
-      // GPS coordinates ~1km away from location
+    it('scan proceeds past GPS check (GPS no longer enforced server-side)', async () => {
+      // GPS coordinates ~1km away from location — scan should still proceed
+      // because server-side GPS enforcement was removed in favour of client-side only.
+      setupSuccessPath();
       const body = makeValidBody();
-      body.gpsLat = 13.01;
+      body.gpsLat = 13.01; // ~1km away from location at 13.0
       body.gpsLng = 80.2;
       const event = makeEvent(body);
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
-      expect(result.statusCode).toBe(400);
-      expect(responseBody.error.code).toBe('GPS_OUT_OF_RANGE');
+      // Scan proceeds normally — no GPS_OUT_OF_RANGE error
+      expect(result.statusCode).toBe(200);
+      expect(responseBody.success).toBe(true);
+      expect(responseBody.data.locationId).toBe(LOCATION_ID);
     });
 
     it('returns NOT_ASSIGNED when location is not in player assignments', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
         if (table === 'daily-config') {
           return {
             date: TODAY,
@@ -279,7 +277,9 @@ describe('scanQR handler', () => {
         return undefined;
       });
 
-      const event = makeEvent(makeValidBody());
+      const body = makeValidBody();
+      body.qrData = { v: 2, l: LOCATION_ID, d: 'permanent', h: 'b'.repeat(64) } as typeof body.qrData;
+      const event = makeEvent(body);
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
@@ -289,7 +289,9 @@ describe('scanQR handler', () => {
 
     it('returns partnerRequired when scanning co-op-only location without partner', async () => {
       setupCoopOnlyPath();
-      const event = makeEvent(makeValidBody());
+      const body = makeValidBody();
+      body.qrData = { v: 2, l: LOCATION_ID, d: 'permanent', h: 'b'.repeat(64) } as typeof body.qrData;
+      const event = makeEvent(body);
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
@@ -301,6 +303,9 @@ describe('scanQR handler', () => {
 
     it('returns LOCATION_LOCKED when player has a lock record for this location', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
         if (table === 'daily-config') {
           return {
             date: TODAY,
@@ -352,6 +357,9 @@ describe('scanQR handler', () => {
 
     it('returns capReached when user todayXp is 100', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
         if (table === 'daily-config') {
           return {
             date: TODAY,
@@ -460,6 +468,9 @@ describe('scanQR handler', () => {
       const savedMinigameIds = ['grove-words', 'word-clusters', 'stone-pairs', 'pips', 'vine-trail'];
 
       mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
         if (table === 'daily-config') {
           return {
             date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
@@ -523,6 +534,9 @@ describe('scanQR handler', () => {
 
     it('excludes already-played minigames across locations when rolling new set', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
         if (table === 'daily-config') {
           return {
             date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],
@@ -645,7 +659,7 @@ describe('scanQR handler', () => {
         }
         if (table === 'player-locks') return undefined;
         if (table === 'users') return { userId: USER_ID, todayXp: 0, clan: 'ember' };
-        if (table === 'location-master-config') return undefined;
+        if (table === 'location-master-config') return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
         return undefined;
       });
       mockQuery.mockResolvedValue({ items: [] });
@@ -660,19 +674,21 @@ describe('scanQR handler', () => {
       expect(responseBody.data.availableMinigames.length).toBeGreaterThanOrEqual(3);
     });
 
-    it('v1 daily QR still works on old path', async () => {
+    it('v1 daily QR is rejected with QR_INVALID (v1 no longer supported)', async () => {
       setupSuccessPath();
-      const event = makeEvent(makeValidBody());
+      const event = makeEvent(makeV1Body()); // makeV1Body uses v:1
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 
-      expect(result.statusCode).toBe(200);
-      expect(responseBody.success).toBe(true);
-      expect(responseBody.data.locationId).toBe(LOCATION_ID);
+      expect(result.statusCode).toBe(400);
+      expect(responseBody.error.code).toBe('QR_INVALID');
     });
 
     it('returns ALL_MINIGAMES_PLAYED when all 12 minigames played today', async () => {
       mockGetItem.mockImplementation(async (table: string) => {
+        if (table === 'location-master-config') {
+          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
+        }
         if (table === 'daily-config') {
           return {
             date: TODAY, qrSecret: 'secret', activeLocationIds: [LOCATION_ID],

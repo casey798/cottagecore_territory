@@ -125,7 +125,7 @@ describe('startMinigame co-op tests', () => {
       playerAssignment: {
         dateUserId: `${TODAY}#${USER_ID}`,
         assignedLocationIds: [LOCATION_ID],
-        coopLocationIds: [],
+        coopLocationIds: [LOCATION_ID],
       } as Record<string, unknown> | undefined,
       ...overrides,
     };

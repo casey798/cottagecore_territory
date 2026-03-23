@@ -177,7 +177,7 @@ describe('ResultScreen', () => {
     const { getByText } = render(<ResultScreen />);
 
     // Sorted by todayXp desc: tide (750) > ember (500)
-    expect(getByText('Tide')).toBeTruthy();
-    expect(getByText('Ember')).toBeTruthy();
+    expect(getByText('Guardians')).toBeTruthy();
+    expect(getByText('Seekers')).toBeTruthy();
   });
 });

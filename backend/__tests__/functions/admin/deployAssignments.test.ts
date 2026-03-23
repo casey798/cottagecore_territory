@@ -15,6 +15,8 @@ function makeUser(overrides: Partial<User> = {}): User {
     bestStreak: 0,
     lastActiveDate: '',
     tutorialDone: true,
+    tcAcceptedAt: null,
+    tcVersion: null,
     fcmToken: '',
     playerCode: '',
     createdAt: '',

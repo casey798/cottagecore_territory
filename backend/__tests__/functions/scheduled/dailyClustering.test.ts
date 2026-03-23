@@ -5,6 +5,10 @@ jest.mock('../../../shared/db', () => ({
   updateItem: jest.fn(),
   putItem: jest.fn(),
   query: jest.fn(),
+  tableName: jest.fn((name: string) => name),
+  docClient: {
+    send: jest.fn().mockResolvedValue({}),
+  },
 }));
 
 jest.mock('../../../shared/time', () => ({
@@ -50,15 +54,25 @@ function makeLocation(locationId: string, classification: string): Partial<Locat
   };
 }
 
+// Use a fixed "today" of 2026-03-19 so window dates are deterministic.
+// The time mock sets getTodayISTString() = '2026-03-19'.
+// We also need to pin new Date() so that addDays(nowIST, -1) = 2026-03-18.
+const FIXED_NOW = new Date('2026-03-19T08:00:00.000Z'); // 8 AM UTC = 1:30 PM IST (within 2026-03-19 IST)
+
 describe('Daily Clustering Pipeline', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    jest.useFakeTimers({ now: FIXED_NOW });
 
     // Default: scan returns empty, getItem returns undefined
     mockScan.mockResolvedValue({ items: [], lastEvaluatedKey: undefined });
     mockGetItem.mockResolvedValue(undefined);
     mockUpdateItem.mockResolvedValue(undefined);
     mockPutItem.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   it('writes DailyClusteringRun after successful run', async () => {
