@@ -20,7 +20,7 @@ import Reanimated, {
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
-import { PALETTE, CLAN_COLORS } from '@/constants/colors';
+import { PALETTE, CLAN_COLORS, CLAN_LABELS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { ASSET_MAP } from '@/constants/assets';
 import { useClanStore } from '@/store/useClanStore';
@@ -452,7 +452,7 @@ export default function ResultScreen() {
                     ]}
                   />
                   <Text style={styles.miniClanName}>
-                    {clan.clanId.charAt(0).toUpperCase() + clan.clanId.slice(1)}
+                    {CLAN_LABELS[clan.clanId] ?? clan.clanId}
                   </Text>
                   <Text style={styles.miniClanXp}>{clan.todayXp}</Text>
                 </View>

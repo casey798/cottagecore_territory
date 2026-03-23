@@ -13,20 +13,13 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { useAuthStore } from '@/store/useAuthStore';
-import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
+import { CLAN_COLORS, PALETTE, UI, CLAN_LABELS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { ClanId, SeasonSummaryData } from '@/types';
 import * as scoresApi from '@/api/scores';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 
-const CLAN_LABELS: Record<ClanId, string> = {
-  ember: 'Ember',
-  tide: 'Tide',
-  bloom: 'Bloom',
-  gale: 'Gale',
-  hearth: 'Hearth',
-};
 
 const CLAN_EMOJIS: Record<ClanId, string> = {
   ember: '\uD83D\uDD25',

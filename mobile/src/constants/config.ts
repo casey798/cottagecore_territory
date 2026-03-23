@@ -41,6 +41,9 @@ export const CIPHER_STONES_TIME_LIMIT = 150;
 // Word Clusters
 export const WORD_CLUSTERS_TIME_LIMIT = 180;
 
+// Word Groups (Connections)
+export const WORD_GROUPS_TIME_LIMIT = 180;
+
 // Word Hunt (Vine Trail)
 export const VINE_TRAIL_TIME_LIMIT = 180;
 

@@ -32,11 +32,11 @@ export const CHARACTER_PRESETS: CharacterPreset[] = [
     avatarConfig: { hairStyle: 2, hairColor: 0, skinTone: 5, outfit: 4, accessory: 1 },
   },
   {
-    id: 3,
-    name: 'Wren',
-    icon: require('../assets/sprites/character/wren.png'),
-    fullBody: require('../assets/sprites/character/wren_big.png'),
-    avatarConfig: { hairStyle: 3, hairColor: 7, skinTone: 2, outfit: 6, accessory: 3 },
+    id: 7,
+    name: 'Cob',
+    icon: require('../assets/sprites/character/cob.png'),
+    fullBody: require('../assets/sprites/character/cob_big.png'),
+    avatarConfig: { hairStyle: 7, hairColor: 6, skinTone: 7, outfit: 7, accessory: 0 },
   },
   {
     id: 4,
@@ -60,11 +60,11 @@ export const CHARACTER_PRESETS: CharacterPreset[] = [
     avatarConfig: { hairStyle: 6, hairColor: 4, skinTone: 0, outfit: 2, accessory: 5 },
   },
   {
-    id: 7,
-    name: 'Cob',
-    icon: require('../assets/sprites/character/cob.png'),
-    fullBody: require('../assets/sprites/character/cob_big.png'),
-    avatarConfig: { hairStyle: 7, hairColor: 6, skinTone: 7, outfit: 7, accessory: 0 },
+    id: 3,
+    name: 'Wren',
+    icon: require('../assets/sprites/character/wren.png'),
+    fullBody: require('../assets/sprites/character/wren_big.png'),
+    avatarConfig: { hairStyle: 3, hairColor: 7, skinTone: 2, outfit: 6, accessory: 3 },
   },
 ];
 

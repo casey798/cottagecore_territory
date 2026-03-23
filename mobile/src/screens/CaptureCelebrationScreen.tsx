@@ -11,7 +11,7 @@ import {
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
-import { PALETTE, CLAN_COLORS } from '@/constants/colors';
+import { PALETTE, CLAN_COLORS, CLAN_LABELS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useMapStore } from '@/store/useMapStore';
@@ -47,7 +47,7 @@ export default function CaptureCelebrationScreen() {
 
   const isOwnClan = !!playerClan && playerClan === winnerClan;
   const clanColor = CLAN_COLORS[winnerClan as ClanId] ?? '#D4A843';
-  const clanDisplayName = winnerClan.charAt(0).toUpperCase() + winnerClan.slice(1);
+  const clanDisplayName = CLAN_LABELS[winnerClan] ?? winnerClan;
   const crestSource = CLAN_CRESTS[winnerClan as ClanId] ?? CREST_FALLBACK;
 
   // Spritesheet animation (only used when isOwnClan)

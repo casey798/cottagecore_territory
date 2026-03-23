@@ -11,7 +11,6 @@ import { generateCompletionHash, generateClientCompletionHash } from '@/utils/hm
 import * as gameApi from '@/api/game';
 import { GameResult, ChestDrop } from '@/types';
 import { MinigameResult, MinigamePlayProps } from '@/types/minigame';
-import { lockLandscape, lockPortrait } from '@/hooks/useScreenOrientation';
 import GroveWordsGame from '@/minigames/grove-words/GroveWordsGame';
 import WordClustersGame from '@/minigames/word-clusters/WordClustersGame';
 import StonePairsGame from '@/minigames/stone-pairs/StonePairsGame';
@@ -92,15 +91,16 @@ interface MinigameCompleteData {
   solutionData: Record<string, unknown>;
 }
 
-const LANDSCAPE_MINIGAMES = new Set<string>([]);
-
 function MinigamePlaceholder({
   minigameId,
+  sessionId,
   onComplete,
 }: {
   minigameId: string;
+  sessionId: string;
   onComplete: (data: MinigameCompleteData) => void;
 }) {
+  const startTimeRef = useRef(Date.now());
   return (
     <View style={placeholderStyles.container}>
       <Text style={placeholderStyles.name}>
@@ -110,13 +110,21 @@ function MinigamePlaceholder({
       <View style={placeholderStyles.buttons}>
         <TouchableOpacity
           style={[placeholderStyles.btn, placeholderStyles.btnWin]}
-          onPress={() => onComplete({ result: 'win', completionHash: '', timeTaken: 0, solutionData: {} })}
+          onPress={() => {
+            const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
+            const completionHash = generateClientCompletionHash(sessionId, 'win', timeTaken);
+            onComplete({ result: 'win', completionHash, timeTaken, solutionData: {} });
+          }}
         >
           <Text style={placeholderStyles.btnText}>Simulate Win</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[placeholderStyles.btn, placeholderStyles.btnLose]}
-          onPress={() => onComplete({ result: 'lose', completionHash: '', timeTaken: 0, solutionData: {} })}
+          onPress={() => {
+            const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
+            const completionHash = generateClientCompletionHash(sessionId, 'lose', timeTaken);
+            onComplete({ result: 'lose', completionHash, timeTaken, solutionData: {} });
+          }}
         >
           <Text style={placeholderStyles.btnText}>Simulate Lose</Text>
         </TouchableOpacity>
@@ -170,13 +178,6 @@ export default function MinigamePlayScreen() {
   const route = useRoute<PlayRoute>();
   const { sessionId, minigameId, timeLimit, salt, locationId, locationName, xpAvailable, puzzleData } = route.params;
 
-  // Lock landscape for the 4 landscape minigames, restore portrait on unmount
-  useEffect(() => {
-    if (LANDSCAPE_MINIGAMES.has(minigameId)) {
-      lockLandscape();
-      return () => { lockPortrait(); };
-    }
-  }, [minigameId]);
   const userId = useAuthStore((s) => s.userId) || '';
   const todayXp = useGameStore((s) => s.todayXp);
   const recordWin = useGameStore((s) => s.recordWin);
@@ -368,6 +369,7 @@ export default function MinigamePlayScreen() {
         ) : (
           <MinigamePlaceholder
             minigameId={minigameId}
+            sessionId={sessionId}
             onComplete={handleComplete}
           />
         )}

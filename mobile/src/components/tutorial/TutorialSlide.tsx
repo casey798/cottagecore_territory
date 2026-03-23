@@ -1,15 +1,15 @@
 import React from 'react';
 import {
   View,
-  ImageBackground,
+  Image,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   Text,
   StyleSheet,
 } from 'react-native';
 import type { ImageSourcePropType } from 'react-native';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { CottageButton } from '@/components/common/CottageButton';
 
 interface TutorialSlideProps {
   image: ImageSourcePropType;
@@ -25,27 +25,37 @@ export default function TutorialSlide({
   showSkip = true,
 }: TutorialSlideProps) {
   return (
-    <ImageBackground source={image} style={styles.container} resizeMode="cover">
-      {showSkip && (
-        <TouchableOpacity
-          style={styles.skipBtn}
-          onPress={onSkip}
-          activeOpacity={0.7}
-          hitSlop={8}
-        >
-          <Text style={styles.skipText}>Skip</Text>
-        </TouchableOpacity>
-      )}
-      <View style={styles.nextRow}>
-        <CottageButton title="Next →" onPress={onNext} style={styles.nextBtn} />
+    <TouchableWithoutFeedback onPress={onNext}>
+      <View style={styles.container}>
+        <Image source={image} style={styles.slideImage} resizeMode="contain" />
+        {showSkip && (
+          <TouchableOpacity
+            style={styles.skipBtn}
+            onPress={onSkip}
+            activeOpacity={0.7}
+            hitSlop={8}
+          >
+            <Text style={styles.skipText}>Skip</Text>
+          </TouchableOpacity>
+        )}
       </View>
-    </ImageBackground>
+    </TouchableWithoutFeedback>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    backgroundColor: '#1C2E1A',
+  },
+  slideImage: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    width: '100%',
+    height: '100%',
   },
   skipBtn: {
     position: 'absolute',
@@ -61,15 +71,5 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     fontSize: 13,
     color: PALETTE.white,
-  },
-  nextRow: {
-    position: 'absolute',
-    bottom: 32,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  nextBtn: {
-    paddingHorizontal: 40,
   },
 });

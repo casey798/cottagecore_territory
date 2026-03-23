@@ -1,5 +1,5 @@
 import React from 'react';
-import { TouchableOpacity, Text, StyleSheet, ViewStyle } from 'react-native';
+import { TouchableOpacity, Text, StyleSheet, ViewStyle, TextStyle } from 'react-native';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 
@@ -9,6 +9,7 @@ interface Props {
   variant?: 'primary' | 'secondary' | 'choice';
   disabled?: boolean;
   style?: ViewStyle;
+  textStyle?: TextStyle;
   selected?: boolean;
   accentColor?: string;
 }
@@ -19,6 +20,7 @@ export function CottageButton({
   variant = 'primary',
   disabled = false,
   style,
+  textStyle,
   selected = false,
   accentColor,
 }: Props) {
@@ -54,6 +56,7 @@ export function CottageButton({
                 ? styles.choiceSelectedText
                 : styles.choiceText
               : styles.secondaryText,
+          textStyle,
         ]}
       >
         {title}

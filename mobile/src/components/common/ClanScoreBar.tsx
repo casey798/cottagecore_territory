@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet } from 'react-native';
-import { CLAN_COLORS, PALETTE } from '@/constants/colors';
+import { CLAN_COLORS, PALETTE, CLAN_LABELS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { ClanScore, ClanId } from '@/types';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -35,7 +35,7 @@ export function ClanScoreBar({ scores }: Props) {
               ]}
             />
             <Text style={[styles.clanName, isPlayerClan && { color: CLAN_COLORS[clan.clanId] }]}>
-              {clan.clanId.charAt(0).toUpperCase() + clan.clanId.slice(1)}
+              {CLAN_LABELS[clan.clanId] ?? clan.clanId}
             </Text>
             <Text style={[styles.clanXp, isPlayerClan && { color: PALETTE.darkBrown }]}>
               {clan.todayXp}

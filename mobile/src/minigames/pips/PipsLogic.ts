@@ -105,6 +105,9 @@ export function generatePuzzle(): PipsPuzzle {
       }
     }
 
+    // Reject if deduplication reduced below minimum solution length
+    if (deduplicatedTaps.length < 5) continue;
+
     return {
       startGrid: grid,
       solutionTaps: deduplicatedTaps,

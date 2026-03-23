@@ -368,8 +368,8 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete, practi
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const key = `${r},${c}`;
-        let bg = PALETTE.parchmentBg;
-        let letterColor = PALETTE.darkBrown;
+        let bg: string = PALETTE.parchmentBg;
+        let letterColor: string = PALETTE.darkBrown;
         let border = false;
 
         if (flashCells.has(key)) {

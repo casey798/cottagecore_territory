@@ -48,13 +48,13 @@ const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 const TILE_COLORS: Record<string, string> = {
   mo_tile_leaf:     PALETTE.softGreen,
-  mo_tile_mushroom: '#C0392B',
+  mo_tile_mushroom: PALETTE.mushroomRed,
   mo_tile_stone:    PALETTE.stoneGrey,
   mo_tile_acorn:    PALETTE.honeyGold,
 };
 
-const GHOST_VALID   = 'rgba(122, 188, 94, 0.45)';
-const GHOST_INVALID = 'rgba(226, 75, 74, 0.45)';
+const GHOST_VALID   = PALETTE.ghostValidFill;
+const GHOST_INVALID = PALETTE.ghostInvalidFill;
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 const TRAY_PREVIEW_CELL = 14;
@@ -214,7 +214,7 @@ export default function MosaicGame(props: MinigamePlayProps): React.JSX.Element 
     );
   }
 
-  return <MosaicGameInner puzzle={puzzle} sessionId={sessionId} timeLimit={timeLimit} onComplete={onComplete} />;
+  return <MosaicGameInner puzzle={puzzle} sessionId={sessionId} timeLimit={timeLimit} onComplete={onComplete} practiceMode={practiceMode} />;
 }
 
 // ─── Inner game (puzzle guaranteed) ──────────────────────────────────────────
@@ -224,9 +224,10 @@ interface InnerProps {
   sessionId: string;
   timeLimit: number;
   onComplete: (result: MinigameResult) => void;
+  practiceMode?: boolean;
 }
 
-function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProps): React.JSX.Element {
+function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete, practiceMode }: InnerProps): React.JSX.Element {
   const gameDuration = timeLimit > 0 ? timeLimit : 120;
 
   // ── Game state ──
@@ -727,7 +728,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
             <SkiaRect
               x={0} y={0}
               width={gridWidth} height={gridHeight}
-              color="#F0E6D0"
+              color={PALETTE.mosaicGridBg}
             />
 
             {/* Target cells (unfilled) */}
@@ -736,14 +737,14 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
                 key={cell.key}
                 x={cell.x} y={cell.y}
                 width={cellSize} height={cellSize}
-                color="#E8E0D0"
+                color={PALETTE.mosaicTargetCell}
               />
             ))}
 
             {/* Grid lines */}
             <SkiaPath
               path={gridOutlinePath}
-              color="rgba(160, 147, 125, 0.35)"
+              color={PALETTE.stoneGreyMid}
               style="stroke"
               strokeWidth={1}
             />
@@ -759,7 +760,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
                     y={cell.row * cellSize + 2}
                     width={cellSize}
                     height={cellSize}
-                    color="rgba(0, 0, 0, 0.12)"
+                    color={PALETTE.blackOverlay12}
                   />
                 ))}
                 {/* Tile fill */}
@@ -791,7 +792,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
                 y={cell.row * cellSize}
                 width={cellSize}
                 height={cellSize}
-                color="rgba(226, 75, 74, 0.5)"
+                color={PALETTE.overlapRed50}
               />
             ))}
 
@@ -815,7 +816,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
             {ghostBorderPath && (
               <SkiaPath
                 path={ghostBorderPath}
-                color={ghostValid ? 'rgba(45, 90, 39, 0.7)' : 'rgba(180, 50, 50, 0.7)'}
+                color={ghostValid ? PALETTE.ghostValidBorder : PALETTE.ghostInvalidBorder}
                 style="stroke"
                 strokeWidth={2}
               />
@@ -979,9 +980,9 @@ const styles = StyleSheet.create({
     borderColor: PALETTE.stoneGrey,
     borderRadius: 6,
     padding: 2,
-    backgroundColor: '#F0E6D0',
+    backgroundColor: PALETTE.mosaicGridBg,
     elevation: 3,
-    shadowColor: '#000',
+    shadowColor: PALETTE.black,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
     shadowRadius: 4,
@@ -1011,7 +1012,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     elevation: 1,
-    shadowColor: '#000',
+    shadowColor: PALETTE.black,
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.1,
     shadowRadius: 1,
@@ -1020,7 +1021,7 @@ const styles = StyleSheet.create({
     borderColor: PALETTE.honeyGold,
     borderWidth: 3,
     elevation: 6,
-    shadowColor: '#000',
+    shadowColor: PALETTE.black,
     shadowOffset: { width: 0, height: 3 },
     shadowOpacity: 0.25,
     shadowRadius: 5,
@@ -1039,7 +1040,7 @@ const styles = StyleSheet.create({
   // ── How to Play modal ──
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
+    backgroundColor: PALETTE.blackOverlay50,
     justifyContent: 'flex-end',
   },
   modalPanel: {

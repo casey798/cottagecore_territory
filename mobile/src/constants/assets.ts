@@ -19,11 +19,11 @@ export interface DecorationAssetDef {
 
 export const DECORATION_ASSETS: readonly DecorationAssetDef[] = [
   // BANNERS (clan-locked, common, drop weight 30)  — 64×64 = 2×2 grid
-  { id: 'banner_ember',   name: 'Ember Banner',   filename: 'red_flag.png',    image: require('../assets/decoration/red_flag.png'),    displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'ember',  dropWeight: 30 },
-  { id: 'banner_bloom',   name: 'Bloom Banner',   filename: 'yellow_flag.png', image: require('../assets/decoration/yellow_flag.png'), displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'bloom',  dropWeight: 30 },
-  { id: 'banner_tide',    name: 'Tide Banner',    filename: 'blue_flag.png',   image: require('../assets/decoration/blue_flag.png'),   displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'tide',   dropWeight: 30 },
-  { id: 'banner_gale',    name: 'Gale Banner',    filename: 'green_flag.png',  image: require('../assets/decoration/green_flag.png'),  displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'gale',   dropWeight: 30 },
-  { id: 'banner_hearth',  name: 'Hearth Banner',  filename: 'purple_flag.png', image: require('../assets/decoration/purple_flag.png'), displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'hearth', dropWeight: 30 },
+  { id: 'banner_ember',   name: 'Seekers Banner',     filename: 'red_flag.png',    image: require('../assets/decoration/red_flag.png'),    displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'ember',  dropWeight: 30 },
+  { id: 'banner_bloom',   name: 'Wardens Banner',     filename: 'yellow_flag.png', image: require('../assets/decoration/yellow_flag.png'), displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'bloom',  dropWeight: 30 },
+  { id: 'banner_tide',    name: 'Guardians Banner',   filename: 'blue_flag.png',   image: require('../assets/decoration/blue_flag.png'),   displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'tide',   dropWeight: 30 },
+  { id: 'banner_gale',    name: 'Keepers Banner',     filename: 'green_flag.png',  image: require('../assets/decoration/green_flag.png'),  displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'gale',   dropWeight: 30 },
+  { id: 'banner_hearth',  name: 'Chroniclers Banner', filename: 'purple_flag.png', image: require('../assets/decoration/purple_flag.png'), displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'banner', rarity: 'common',    clanLocked: 'hearth', dropWeight: 30 },
 
   // STATUES (any clan, uncommon, drop weight 15)
   { id: 'statue_fox',      name: 'Stone Fox',        filename: 'fox_stat.png',   image: require('../assets/decoration/fox_stat.png'),   displayWidth: 64, displayHeight: 64, gridW: 2, gridH: 2, category: 'statue', rarity: 'uncommon', dropWeight: 15 },

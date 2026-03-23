@@ -32,7 +32,7 @@ type RootStackParamList = {
 
 const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 const APP_VERSION = '1.0.0 (beta)';
-const ADMIN_EMAIL = 'wayn3945@gmail.com';
+const ADMIN_EMAIL = 'karthikrajak@student.tce.edu';
 
 // ── Section Divider ──────────────────────────────────────────────────
 
@@ -345,7 +345,7 @@ export default function SettingsScreen() {
             <Text style={styles.rowValueSubdued}>Season 1</Text>
           </View>
           <View style={styles.row}>
-            <Text style={styles.rowLabel}>Administrator</Text>
+            <Text style={styles.rowLabel}>Contact Email</Text>
             <Pressable onPress={handleAdminEmail}>
               <Text style={[styles.emergencyValue, { color: clanColor }]}>
                 {ADMIN_EMAIL}

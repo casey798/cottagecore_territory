@@ -53,14 +53,27 @@ export const PALETTE = {
   clueHighlight: '#FFF8E7',
   glassWhite30: 'rgba(255, 255, 255, 0.3)',
   borderBlack15: 'rgba(0, 0, 0, 0.15)',
+  // Mosaic minigame colors
+  mosaicGridBg: '#F0E6D0',
+  mosaicTargetCell: '#E8E0D0',
+  stoneGreyMid: 'rgba(160, 147, 125, 0.35)',
+  blackOverlay12: 'rgba(0, 0, 0, 0.12)',
+  blackOverlay50: 'rgba(0, 0, 0, 0.5)',
+  black: '#000000',
+  ghostValidFill: 'rgba(122, 188, 94, 0.45)',
+  ghostInvalidFill: 'rgba(226, 75, 74, 0.45)',
+  overlapRed50: 'rgba(226, 75, 74, 0.5)',
+  ghostValidBorder: 'rgba(45, 90, 39, 0.7)',
+  ghostInvalidBorder: 'rgba(180, 50, 50, 0.7)',
+  mushroomRed: '#C0392B',
 } as const;
 
 export const CLAN_LABELS: Record<ClanId, string> = {
-  ember: 'Ember',
-  tide: 'Tide',
-  bloom: 'Bloom',
-  gale: 'Gale',
-  hearth: 'Hearth',
+  ember: 'Seekers',
+  tide: 'Guardians',
+  bloom: 'Wardens',
+  gale: 'Keepers',
+  hearth: 'Chroniclers',
 };
 
 export const LORE_CLANS = [
@@ -70,7 +83,7 @@ export const LORE_CLANS = [
     element: 'Paths & Discovery',
     description: 'Wandered the paths and discovered hidden places.',
     emoji: '🧭',
-    color: '#4A9966',
+    color: '#9E5550',
   },
   {
     id: 'guardians',
@@ -78,15 +91,15 @@ export const LORE_CLANS = [
     element: 'Balance & Ground',
     description: 'Watched the grounds and protected the balance of the land.',
     emoji: '🛡️',
-    color: '#6E5082',
+    color: '#4E7FA3',
   },
   {
-    id: 'makers',
-    name: 'Makers',
+    id: 'keepers',
+    name: 'Keepers',
     element: 'Craft & Wonders',
     description: 'Shaped tools, crafted wonders, turned simple things into treasures.',
     emoji: '⚒️',
-    color: '#C4A832',
+    color: '#4A9966',
   },
   {
     id: 'wardens',
@@ -94,7 +107,7 @@ export const LORE_CLANS = [
     element: 'Wind & Trees',
     description: 'Listened to the wind and the trees, learning the quiet language of nature.',
     emoji: '🌿',
-    color: '#9E5550',
+    color: '#C4A832',
   },
   {
     id: 'chroniclers',
@@ -102,16 +115,16 @@ export const LORE_CLANS = [
     element: 'Memory & Story',
     description: 'Remembered everything — every path walked, every story told.',
     emoji: '📜',
-    color: '#4E7FA3',
+    color: '#6E5082',
   },
 ] as const;
 
 export const CLAN_TO_LORE_MAP: Record<string, string> = {
-  ember: 'wardens',
-  tide: 'chroniclers',
-  bloom: 'makers',
-  gale: 'seekers',
-  hearth: 'guardians',
+  ember: 'seekers',
+  tide: 'guardians',
+  bloom: 'wardens',
+  gale: 'keepers',
+  hearth: 'chroniclers',
 };
 
 /** Keyboard / tile feedback colors shared by Wordle and Cipher Stones. */

@@ -8,6 +8,7 @@ import {
   Easing,
   StyleSheet,
   Dimensions,
+  TouchableWithoutFeedback,
 } from 'react-native';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
@@ -19,6 +20,12 @@ import { TUTORIAL_IMAGES } from '@/assets/tutorial/tutorialAssets';
 import { useMapStore } from '@/store/useMapStore';
 import type { Location } from '@/types';
 import type { MinigameResult } from '@/types/minigame';
+
+// ─── Screen dimensions for overlay image sizing ───────────────────────────────
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const IMG_ASPECT = 1920 / 1080;
+const imgHeight = SCREEN_WIDTH * IMG_ASPECT;
 
 // ─── Tutorial pin fake location ───────────────────────────────────────────────
 
@@ -34,7 +41,7 @@ const TUTORIAL_FAKE_LOCATION: Location = {
 
 // ─── Phase types ──────────────────────────────────────────────────────────────
 
-type MapPhase = 'intro' | 'map' | 'minigame' | 'result';
+type MapPhase = 'map' | 'gamePreview' | 'minigame' | 'result';
 
 // ─── PulsePin ─────────────────────────────────────────────────────────────────
 
@@ -56,7 +63,7 @@ interface TutorialMapSceneProps {
 }
 
 export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) {
-  const [phase, setPhase] = useState<MapPhase>('intro');
+  const [phase, setPhase] = useState<MapPhase>('map');
   const [gameResult, setGameResult] = useState<'win' | 'lose' | null>(null);
 
   const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
@@ -121,35 +128,21 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
     setPhase('result');
   };
 
-  // ── Phase: intro ────────────────────────────────────────────────────────────
-
-  if (phase === 'intro') {
-    return (
-      <View style={styles.container}>
-        <MapCanvas />
-        <Image
-          source={TUTORIAL_IMAGES.s7}
-          style={styles.overlayImageBottom}
-          resizeMode="contain"
-          pointerEvents="none"
-        />
-        <View style={styles.introButtonRow}>
-          <CottageButton
-            title="Next →"
-            onPress={() => setPhase('map')}
-            style={styles.overlayBtn}
-          />
-        </View>
-      </View>
-    );
-  }
-
   // ── Phase: map ──────────────────────────────────────────────────────────────
 
   if (phase === 'map') {
     return (
       <View style={styles.container}>
-        <MapCanvas />
+        <MapCanvas interactive={false} />
+
+        {/* s7 Moss overlay — transparent PNG, map shows through */}
+        <View style={styles.s7Overlay} pointerEvents="none">
+          <Image
+            source={TUTORIAL_IMAGES.s7}
+            style={{ width: '100%', height: '100%' }}
+            resizeMode="contain"
+          />
+        </View>
 
         {/* Tutorial instruction label */}
         <View style={styles.mapInstructionRow}>
@@ -174,10 +167,28 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
           location={TUTORIAL_FAKE_LOCATION}
           pixelX={pinX}
           pixelY={pinY}
-          onPress={() => setPhase('minigame')}
+          onPress={() => setPhase('gamePreview')}
           inRange
         />
       </View>
+    );
+  }
+
+  // ── Phase: gamePreview ──────────────────────────────────────────────────────
+
+  if (phase === 'gamePreview') {
+    return (
+      <TouchableWithoutFeedback onPress={() => setPhase('minigame')}>
+        <View style={styles.gamePreviewBackdrop}>
+          <View style={styles.gamePreviewCard}>
+            <Text style={styles.gamePreviewTitle}>Grove Words</Text>
+            <Text style={styles.gamePreviewSubtitle}>
+              Guess the hidden 5-letter word. You have 6 tries.
+            </Text>
+            <Text style={styles.gamePreviewHint}>Tap anywhere to begin</Text>
+          </View>
+        </View>
+      </TouchableWithoutFeedback>
     );
   }
 
@@ -208,7 +219,7 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
 
   return (
     <View style={styles.container}>
-      <MapCanvas />
+      <MapCanvas interactive={false} />
       <View style={styles.resultBackdrop}>
         <View style={styles.resultCard}>
           <Text style={styles.resultTitle}>{isWin ? 'Well done!' : 'A fine attempt!'}</Text>
@@ -230,32 +241,20 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const { height: SCREEN_H } = Dimensions.get('window');
-
 const styles = StyleSheet.create({
   container: {
     flex: 1,
   },
-  // Intro phase
-  overlayImageBottom: {
+  // Map phase — s7 overlay (explicit pixel dimensions required for transparent PNG)
+  s7Overlay: {
     position: 'absolute',
     bottom: 0,
     left: 0,
-    right: 0,
-    width: '100%',
-    height: SCREEN_H * 0.5,
+    width: SCREEN_WIDTH,
+    height: imgHeight,
+    zIndex: 10,
   },
-  introButtonRow: {
-    position: 'absolute',
-    bottom: SCREEN_H * 0.5 + 16,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-  },
-  overlayBtn: {
-    paddingHorizontal: 40,
-  },
-  // Map phase
+  // Map phase — instruction label
   mapInstructionRow: {
     position: 'absolute',
     top: 20,
@@ -287,6 +286,43 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: PALETTE.honeyGold,
     backgroundColor: 'transparent',
+  },
+  // Game preview phase
+  gamePreviewBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 32,
+  },
+  gamePreviewCard: {
+    backgroundColor: PALETTE.parchment,
+    borderRadius: 12,
+    padding: 24,
+    alignItems: 'center',
+    width: '100%',
+  },
+  gamePreviewTitle: {
+    fontFamily: FONTS.headerBold,
+    fontSize: 28,
+    color: PALETTE.darkBrown,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  gamePreviewSubtitle: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 16,
+  },
+  gamePreviewHint: {
+    fontFamily: FONTS.bodyRegular,
+    fontStyle: 'italic',
+    fontSize: 14,
+    color: PALETTE.warmGreyBrown,
+    textAlign: 'center',
   },
   // Minigame phase
   practiceBar: {

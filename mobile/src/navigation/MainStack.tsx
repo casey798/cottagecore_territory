@@ -103,8 +103,14 @@ export function MainStack() {
 
     // Issue #19: If user skipped tutorial without creating a character,
     // redirect to CharacterCreation before anything else.
-    const { displayName, selectedPresetId } = useAuthStore.getState();
-    if (!displayName || selectedPresetId == null) {
+    // Guard on isHydrated so we never fire before AsyncStorage has been read —
+    // displayName/selectedPresetId are transiently null during rehydration and
+    // would otherwise redirect every returning user on first render.
+    // Also guard on tutorialSkipped: only users who bailed out of the tutorial
+    // before Scene 6 need this redirect; tutorialDone users already have a character.
+    const { isHydrated, tutorialSkipped, displayName, selectedPresetId } =
+      useAuthStore.getState();
+    if (isHydrated && tutorialSkipped && (!displayName || selectedPresetId == null)) {
       navigation.navigate('CharacterCreation');
     }
 

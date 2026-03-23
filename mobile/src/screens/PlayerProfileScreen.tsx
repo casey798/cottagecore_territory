@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { PALETTE, CLAN_COLORS, UI } from '@/constants/colors';
+import { PALETTE, CLAN_COLORS, UI, CLAN_LABELS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { DAILY_XP_CAP } from '@/constants/config';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -105,7 +105,7 @@ export default function PlayerProfileScreen() {
 
   const clanColor = CLAN_COLORS[profile.clan] ?? PALETTE.honeyGold;
   const xpFraction = Math.min(profile.todayXp / DAILY_XP_CAP, 1);
-  const clanLabel = profile.clan.charAt(0).toUpperCase() + profile.clan.slice(1);
+  const clanLabel = CLAN_LABELS[profile.clan] ?? profile.clan;
   const streak = profile.currentStreak ?? 0;
   const bestStreak = profile.bestStreak ?? 0;
 

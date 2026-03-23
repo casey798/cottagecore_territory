@@ -47,7 +47,7 @@ export default function TutorialCharacterScene({
       <View style={styles.mossHeader}>
         <MossPortrait mood="neutral" />
         <View style={styles.mossSpeech}>
-          <Text style={styles.mossLabel}>Moss</Text>
+          <Text style={styles.mossLabel}>Elder Moss</Text>
           <Text style={styles.mossLine}>
             Before the grove knows you&hellip; tell me your name.
           </Text>

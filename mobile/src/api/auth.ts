@@ -21,6 +21,8 @@ export interface AuthResult {
   token: string;
   clan: ClanId | null;
   tutorialDone: boolean;
+  tcAcceptedAt?: string | null;
+  tcVersion?: string | null;
   email: string | null;
 }
 

@@ -214,26 +214,6 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
   // ── Timer ───────────────────────────────────────────────────────
   const effectiveTimeLimit = timeLimit > 0 ? timeLimit : 60;
 
-  // Stable ref so the timer interval always calls the latest finishGame
-  const finishGameRef = useRef<((result: 'win' | 'lose' | 'timeout') => void) | null>(null);
-  useEffect(() => { finishGameRef.current = finishGame; }, [finishGame]);
-
-  useEffect(() => {
-    if (gameOver) return;
-    const interval = setInterval(() => {
-      if (isPausedRef.current) return;
-      const elapsed = (Date.now() - startTimeRef.current) / 1000;
-      const remaining = Math.max(0, effectiveTimeLimit - elapsed);
-      setTimeLeft(remaining);
-
-      if (remaining <= 0) {
-        clearInterval(interval);
-        finishGameRef.current?.('timeout');
-      }
-    }, 250);
-    return () => clearInterval(interval);
-  }, [gameOver, effectiveTimeLimit]);
-
   // ── Finish game ─────────────────────────────────────────────────
   const finishGame = useCallback(
     (result: 'win' | 'lose' | 'timeout') => {
@@ -264,6 +244,26 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
     },
     [sessionId],
   );
+
+  // Stable ref so the timer interval always calls the latest finishGame
+  const finishGameRef = useRef<((result: 'win' | 'lose' | 'timeout') => void) | null>(null);
+  useEffect(() => { finishGameRef.current = finishGame; }, [finishGame]);
+
+  useEffect(() => {
+    if (gameOver) return;
+    const interval = setInterval(() => {
+      if (isPausedRef.current) return;
+      const elapsed = (Date.now() - startTimeRef.current) / 1000;
+      const remaining = Math.max(0, effectiveTimeLimit - elapsed);
+      setTimeLeft(remaining);
+
+      if (remaining <= 0) {
+        clearInterval(interval);
+        finishGameRef.current?.('timeout');
+      }
+    }, 250);
+    return () => clearInterval(interval);
+  }, [gameOver, effectiveTimeLimit]);
 
   const handleContinue = useCallback(() => {
     if (pendingResultRef.current) {

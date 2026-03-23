@@ -77,7 +77,7 @@ export default function MossDialogueBox({
           style={styles.nameplate}
           resizeMode="stretch"
         >
-          <Text style={styles.speakerLabel}>Moss</Text>
+          <Text style={styles.speakerLabel}>Elder Moss</Text>
         </ImageBackground>
       </View>
 

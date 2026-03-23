@@ -68,7 +68,7 @@ function withAlpha(hex: string, alpha: number): string {
  * (or the same object reference if nothing changed).
  * Exported for unit testing.
  */
-function applyKeyToMappings(
+export function applyKeyToMappings(
   mappings: Record<string, string>,
   selectedEncoded: string | null,
   key: string,
@@ -96,7 +96,7 @@ function applyKeyToMappings(
  * Check if every encoded letter that appears in the quote has a mapping.
  * Exported for unit testing.
  */
-function allQuoteLettersMapped(
+export function allQuoteLettersMapped(
   quoteEncodedSet: ReadonlySet<string>,
   mappings: Record<string, string>,
 ): boolean {

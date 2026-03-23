@@ -262,7 +262,6 @@ export const useAuthStore = create<AuthState>()(
         displayName: state.displayName,
         selectedPresetId: state.selectedPresetId,
         avatarConfig: state.avatarConfig,
-        isAuthenticated: state.isAuthenticated,
       }),
       onRehydrateStorage: () => {
         return () => {

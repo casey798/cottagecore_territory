@@ -70,6 +70,7 @@ interface Props {
   pinColor?: string;
   pinRingColor?: string;
   pinProximities?: Map<string, { distance: number; geofenceRadius: number }>;
+  interactive?: boolean;
 }
 
 function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
@@ -87,7 +88,7 @@ function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: n
   return inside;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, lockedUntilMap, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor, pinProximities }: Props) {
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, lockedUntilMap, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor, pinProximities, interactive = true }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
   const spaceDecorations = useMapStore((s) => s.spaceDecorations);
   const assetCategories = useMapStore((s) => s.assetCategories);
@@ -308,6 +309,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
 
   // --- Pinch gesture: zoom toward focal point + two-finger drag ---
   const pinchGesture = Gesture.Pinch()
+    .enabled(interactive)
     .onStart((e) => {
       'worklet';
       savedScale.value = scale.value;
@@ -358,6 +360,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
   const panGesture = Gesture.Pan()
     .minPointers(1)
     .maxPointers(1)
+    .enabled(interactive)
     .onStart(() => {
       'worklet';
       savedTranslateX.value = translateX.value;
