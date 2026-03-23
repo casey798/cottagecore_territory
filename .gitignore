@@ -36,3 +36,10 @@ backend/item.json
 # Firebase / Google Services
 **/google-services.json
 **/GoogleService-Info.plist
+
+# Android
+*.keystore
+mobile/android/local.properties
+mobile/android/.gradle/
+mobile/android/app/build/
+mobile/android/build/
