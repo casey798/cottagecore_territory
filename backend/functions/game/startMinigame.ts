@@ -8,6 +8,7 @@ import { generatePuzzle as generatePathWeaverPuzzle } from '../../shared/minigam
 import { getRandomPuzzle as getRandomMosaicPuzzle } from './mosaic/puzzleLibrary';
 import { generatePuzzle as generateGroveEquationsPuzzle } from '../../shared/minigames/groveEquationsGenerator';
 import { generateGame as generateBloomSequenceGame } from '../../shared/minigames/bloomSequenceGenerator';
+import { generatePotionLogicPuzzle } from '../../shared/minigames/potionLogicGenerator';
 import { success, error, ErrorCode } from '../../shared/response';
 import { startMinigameSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
@@ -57,12 +58,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.NOT_FOUND, 'User not found', 404);
     }
 
-    // Check location lock
+    // Check location lock (compare lockedUntil to handle DynamoDB TTL lag)
     const today = getTodayISTString();
     const dateUserLocation = `${today}#${userId}#${locationId}`;
     const lock = await getItem<PlayerLock>('player-locks', { dateUserLocation });
-    if (lock) {
-      return error(ErrorCode.LOCATION_LOCKED, 'This location is locked for you until tomorrow', 403);
+    if (lock && lock.lockedUntil && new Date(lock.lockedUntil) > new Date()) {
+      return error(ErrorCode.LOCATION_LOCKED, 'This location is locked for 1 hour', 403, { lockedUntil: lock.lockedUntil });
     }
 
     // Check if player already won this minigame today (across any location)
@@ -96,6 +97,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     if (coopOnly && !COOP_MINIGAME_IDS.includes(minigameId)) {
       return error(ErrorCode.VALIDATION_ERROR, 'Solo minigames are not available at this location.', 400);
     }
+    if (!coopOnly && COOP_MINIGAME_IDS.includes(minigameId)) {
+      return error(ErrorCode.VALIDATION_ERROR, 'Co-op minigames are not available at this location.', 400);
+    }
 
     // Co-op partner validation
     const stage = process.env.STAGE || 'dev';
@@ -117,12 +121,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           return error(ErrorCode.PARTNER_CAP_REACHED, 'Your partner has already reached the daily XP cap', 400);
         }
 
-        // Check partner lock at this location
+        // Check partner lock at this location (compare lockedUntil to handle TTL lag)
         const partnerLock = await getItem<PlayerLock>('player-locks', {
           dateUserLocation: `${today}#${coopPartnerId}#${locationId}`,
         });
-        if (partnerLock) {
-          return error(ErrorCode.PARTNER_LOCATION_LOCKED, 'Your partner is locked at this location today', 400);
+        if (partnerLock && partnerLock.lockedUntil && new Date(partnerLock.lockedUntil) > new Date()) {
+          return error(ErrorCode.PARTNER_LOCATION_LOCKED, 'Your partner is locked at this location', 400);
         }
 
         // Check partner already won this minigame today
@@ -226,12 +230,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       (session as unknown as Record<string, unknown>).puzzleSolution = {
         rounds: bsGame.rounds,
       };
-      // Send rounds with correctAnswer — the client needs it for local
-      // validation. Server-side validation via stored puzzleSolution is
-      // the anti-cheat layer (verifies chosen indices match correct answers).
+      // Strip correctAnswer from client payload — server validates by index
+      // against stored puzzleSolution, so the client never sees the answers.
+      const clientRounds = bsGame.rounds.map(({ correctAnswer: _ca, ...rest }) => rest);
       puzzleData = {
         type: minigameId,
-        rounds: bsGame.rounds,
+        rounds: clientRounds,
       };
     }
 
@@ -247,6 +251,20 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         type: minigameId,
         imageId,
         scrambleSeed,
+      };
+    }
+
+    if (minigameId === 'potion-logic' || minigameId === 'potion-logic-coop') {
+      const plPuzzle = generatePotionLogicPuzzle();
+      (session as unknown as Record<string, unknown>).puzzleSolution = {
+        ingredients: plPuzzle.solution.ingredients,
+        effects: plPuzzle.solution.effects,
+      };
+      puzzleData = {
+        ...puzzleData,
+        clueTexts: plPuzzle.clueTexts,
+        // Solution sent to client for local auto-win UX; server validates independently
+        solution: plPuzzle.solution,
       };
     }
 

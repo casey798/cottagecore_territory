@@ -68,7 +68,7 @@ export function generatePuzzle(): Jars {
     }
   }
 
-  throw new Error('Failed to generate valid Leaf Sort puzzle');
+  throw new Error('Failed to generate valid Color Sort puzzle');
 }
 
 // Win condition: every TARGET jar (isBuffer === false) must contain exactly

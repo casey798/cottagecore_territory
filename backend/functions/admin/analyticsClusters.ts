@@ -31,8 +31,8 @@ function matchCheckinToLocation(
   let bestId: string | null = null;
   let bestDist = Infinity;
   for (const loc of locations) {
-    const dx = checkin.pixelX - loc.mapPixelX;
-    const dy = checkin.pixelY - loc.mapPixelY;
+    const dx = (checkin.pixelX ?? 0) - loc.mapPixelX;
+    const dy = (checkin.pixelY ?? 0) - loc.mapPixelY;
     const dist = Math.sqrt(dx * dx + dy * dy);
     if (dist < bestDist && dist <= PIXEL_MATCH_THRESHOLD) {
       bestDist = dist;

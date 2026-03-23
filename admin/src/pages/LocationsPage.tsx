@@ -53,7 +53,7 @@ const MINIGAMES = [
   { id: 'cipher-stones', name: 'Cipher Stones' },
   { id: 'firefly-flow', name: 'Firefly Flow' },
   { id: 'grove-equations', name: 'Grove Equations' },
-  { id: 'grove-words', name: 'Grove Words' },
+  { id: 'grove-words', name: 'Wordle' },
   { id: 'kindred', name: 'Kindred' },
   { id: 'leaf-sort', name: 'Leaf Sort' },
   { id: 'mosaic', name: 'Mosaic' },
@@ -63,7 +63,7 @@ const MINIGAMES = [
   { id: 'potion-logic', name: 'Potion Logic' },
   { id: 'shift-slide', name: 'Shift Slide' },
   { id: 'stone-pairs', name: 'Stone Pairs' },
-  { id: 'vine-trail', name: 'Vine Trail' },
+  { id: 'vine-trail', name: 'Word Hunt' },
 ];
 
 // ── Notification hook ────────────────────────────────────────────────

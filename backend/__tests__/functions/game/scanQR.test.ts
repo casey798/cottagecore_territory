@@ -334,7 +334,8 @@ describe('scanQR handler', () => {
           return {
             dateUserLocation: `${TODAY}#${USER_ID}#${LOCATION_ID}`,
             lockedAt: '2026-03-07T10:00:00.000Z',
-            ttl: 1741363800,
+            lockedUntil: new Date(Date.now() + 3600 * 1000).toISOString(),
+            ttl: Math.floor((Date.now() + 3600 * 1000) / 1000),
           };
         }
         return undefined;
@@ -346,6 +347,7 @@ describe('scanQR handler', () => {
 
       expect(result.statusCode).toBe(403);
       expect(responseBody.error.code).toBe('LOCATION_LOCKED');
+      expect(responseBody.error.lockedUntil).toBeDefined();
     });
 
     it('returns capReached when user todayXp is 100', async () => {
@@ -455,7 +457,7 @@ describe('scanQR handler', () => {
     });
 
     it('returns the saved set on re-scan with live completed flags from sessions', async () => {
-      const savedMinigameIds = ['grove-words', 'kindred', 'stone-pairs', 'pips', 'vine-trail'];
+      const savedMinigameIds = ['grove-words', 'word-clusters', 'stone-pairs', 'pips', 'vine-trail'];
 
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'daily-config') {
@@ -513,10 +515,10 @@ describe('scanQR handler', () => {
       expect(groveWords.completed).toBe(true);
 
       // Others should not be completed
-      const kindred = responseBody.data.availableMinigames.find(
-        (m: { minigameId: string }) => m.minigameId === 'kindred',
+      const wordGroups = responseBody.data.availableMinigames.find(
+        (m: { minigameId: string }) => m.minigameId === 'word-clusters',
       );
-      expect(kindred.completed).toBe(false);
+      expect(wordGroups.completed).toBe(false);
     });
 
     it('excludes already-played minigames across locations when rolling new set', async () => {
@@ -698,7 +700,7 @@ describe('scanQR handler', () => {
 
       // All 15 solo minigames played today at various locations
       const allMinigames = [
-        'grove-words', 'kindred', 'stone-pairs', 'pips', 'vine-trail', 'mosaic',
+        'grove-words', 'word-clusters', 'stone-pairs', 'pips', 'vine-trail', 'mosaic',
         'number-grove', 'potion-logic', 'leaf-sort', 'cipher-stones', 'path-weaver',
         'firefly-flow', 'grove-equations', 'bloom-sequence', 'shift-slide',
       ];

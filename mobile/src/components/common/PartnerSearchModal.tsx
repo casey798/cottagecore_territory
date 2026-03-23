@@ -19,11 +19,12 @@ interface Props {
   locationName: string;
   onConfirm: (partner: PlayerSearchResult) => void;
   onCancel: () => void;
+  onDevSkip?: () => void;
 }
 
 const DEBOUNCE_MS = 400;
 
-export default function PartnerSearchModal({ visible, locationName, onConfirm, onCancel }: Props) {
+export default function PartnerSearchModal({ visible, locationName, onConfirm, onCancel, onDevSkip }: Props) {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<PlayerSearchResult[]>([]);
   const [selected, setSelected] = useState<PlayerSearchResult | null>(null);
@@ -145,12 +146,14 @@ export default function PartnerSearchModal({ visible, locationName, onConfirm, o
             <TouchableOpacity
               style={styles.devSkipBtn}
               onPress={() =>
-                onConfirm({
-                  userId: 'dev-partner',
-                  displayName: 'Dev Partner',
-                  playerCode: 'GRV-0000',
-                  clan: 'ember',
-                })
+                onDevSkip
+                  ? onDevSkip()
+                  : onConfirm({
+                      userId: 'dev-partner',
+                      displayName: 'Dev Partner',
+                      playerCode: 'GRV-0000',
+                      clan: 'ember',
+                    })
               }
             >
               <Text style={styles.devSkipBtnText}>DEV: Skip Partner</Text>

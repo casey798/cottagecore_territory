@@ -13,6 +13,7 @@ const NAV_ITEMS = [
   { to: '/capture-history', label: 'History' },
   { to: '/notifications', label: 'Notifications' },
   { to: '/analytics', label: 'Analytics' },
+  { to: '/exports', label: 'Exports' },
   { to: '/users', label: 'Users' },
   { to: '/season', label: 'Season' },
   { to: '/cluster-config', label: 'Clusters' },

@@ -14,7 +14,7 @@ export interface Progress {
 
 export const MINIGAME_CONFIG = {
   preRevealCount: 5,
-  timeLimit: 120,
+  timeLimit: 150,
   hintCooldown: 60,
 } as const;
 
@@ -41,6 +41,9 @@ function randomPermutation(): string[] {
  * Returns encoded quote, pre-revealed hint letters (always E and T + random others), and the full solution map.
  */
 export function generatePuzzle(): CipherPuzzle {
+  if (!quoteDatabase || quoteDatabase.length === 0) {
+    throw new Error('Cipher Stones: quoteDatabase is empty');
+  }
   const quote = quoteDatabase[Math.floor(Math.random() * quoteDatabase.length)];
   const upperQuote = quote.toUpperCase();
 
@@ -119,12 +122,26 @@ export function checkGuess(
 
 /**
  * Count how many unique encoded letters in the quote are correctly decoded vs total.
- * Only counts letter characters (not spaces/punctuation).
+ * Only counts encoded letters that actually appear in the quote (not all 26).
  */
 export function getProgress(
   solution: Record<string, string>,
   userMappings: Record<string, string>,
+  quoteEncodedSet?: ReadonlySet<string>,
 ): Progress {
+  // If a quoteEncodedSet is provided, count only letters appearing in the quote
+  if (quoteEncodedSet) {
+    let total = 0;
+    let decoded = 0;
+    for (const enc of quoteEncodedSet) {
+      total++;
+      if (userMappings[enc] === solution[enc]) {
+        decoded++;
+      }
+    }
+    return { total, decoded };
+  }
+  // Fallback: count all 26 solution entries (backwards compat)
   let total = 0;
   let decoded = 0;
   for (const [encoded, plain] of Object.entries(solution)) {

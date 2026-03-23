@@ -16,7 +16,7 @@ export const handler = async (
       return error(ErrorCode.NOT_FOUND, 'User not found', 404);
     }
 
-    const { email: _email, fcmToken: _fcm, ...profile } = user;
+    const { fcmToken: _fcm, ...profile } = user;
 
     return success(profile);
   } catch (err) {

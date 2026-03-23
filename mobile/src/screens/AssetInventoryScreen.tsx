@@ -7,23 +7,24 @@ import {
   RefreshControl,
   ActivityIndicator,
   Pressable,
-  ScrollView,
   Modal,
   Dimensions,
   Image,
   ImageBackground,
   TextStyle,
+  ScrollView,
 } from 'react-native';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { PlayerAsset, AssetRarity, AssetCategory } from '@/types';
+import { PlayerAsset, AssetCategory, AssetRarity } from '@/types';
 import { MainModalParamList } from '@/navigation/MainStack';
 import * as playerApi from '@/api/player';
 import { useAuthStore } from '@/store/useAuthStore';
 import { getTimeUntilExpiry } from '@/utils/assetExpiry';
 import { useAssetStore } from '@/store/useAssetStore';
+import { ASSET_MAP } from '@/constants/assets';
 
 const chestImage = require('@/assets/ui/icons/pin_chest.png');
 const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
@@ -51,15 +52,12 @@ const RARITY_LABELS: Record<AssetRarity, string> = {
   legendary: 'Legendary',
 };
 
-const CATEGORY_TABS: Array<{ key: AssetCategory | 'all'; label: string }> = [
-  { key: 'all', label: 'All' },
-  { key: 'banner', label: 'Banner' },
-  { key: 'statue', label: 'Statue' },
-  { key: 'furniture', label: 'Furniture' },
-  { key: 'mural', label: 'Mural' },
-  { key: 'pet', label: 'Pet' },
-  { key: 'special', label: 'Special' },
-];
+const RARITY_ORDER: Record<string, number> = {
+  legendary: 0,
+  rare: 1,
+  uncommon: 2,
+  common: 3,
+};
 
 const CATEGORY_LABELS: Record<AssetCategory, string> = {
   banner: 'Banner',
@@ -75,6 +73,18 @@ const SOURCE_LABELS: Record<string, string> = {
   reward: 'Reward',
   event: 'Event',
 };
+
+function hexToRgba(hex: string, alpha: number): string {
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// ISSUE 8 — Filter predicate for non-expired assets
+function isAssetActive(asset: PlayerAsset): boolean {
+  return !asset.expired;
+}
 
 // ── Countdown label component (updates every 60s) ──────────────────
 
@@ -123,25 +133,36 @@ interface AssetCardProps {
 }
 
 const AssetCard = React.memo(function AssetCard({ asset, onPress }: AssetCardProps) {
-  const rarityColor = RARITY_COLORS[asset.rarity];
+  const rarityColor = RARITY_COLORS[asset.rarity] ?? RARITY_COLORS['common'];
+  const def = ASSET_MAP[asset.assetId];
 
   return (
     <Pressable onPress={() => onPress(asset)} style={styles.card}>
-      {/* Image placeholder — swap for <Image source={{ uri: ... }} /> when asset CDN is ready */}
-      <View style={[styles.imagePlaceholder, { backgroundColor: rarityColor + '40' }]} />
+      {def ? (
+        <Image
+          source={def.image}
+          style={styles.assetImage}
+          resizeMode="contain"
+        />
+      ) : (
+        <View style={[styles.imagePlaceholder, { backgroundColor: hexToRgba(rarityColor, 0.25) }]} />
+      )}
 
       <Text style={styles.assetName} numberOfLines={1}>
-        {asset.name}
+        {asset.name || 'Unnamed Item'}
       </Text>
 
       {/* Rarity badge — bottom-left */}
       <View style={[styles.rarityBadge, { backgroundColor: rarityColor }]}>
-        <Text style={styles.rarityText}>{RARITY_LABELS[asset.rarity]}</Text>
+        <Text style={styles.rarityText}>{RARITY_LABELS[asset.rarity] ?? asset.rarity}</Text>
       </View>
 
       {/* Status — bottom-right */}
       {asset.placed ? (
         <Text style={styles.placedLabel}>{'\u2713'} Placed</Text>
+      ) : asset.permanent ? (
+        // ISSUE 9 — Permanent asset badge
+        <Text style={styles.permanentLabel}>{'\u2726'} Permanent</Text>
       ) : asset.expiresAt ? (
         <View style={styles.expiryContainer}>
           <ExpiryCountdown expiresAt={asset.expiresAt} />
@@ -151,10 +172,16 @@ const AssetCard = React.memo(function AssetCard({ asset, onPress }: AssetCardPro
   );
 });
 
+// ── Route type ──────────────────────────────────────────────────────
+
+type AssetInventoryRoute = RouteProp<MainModalParamList, 'AssetInventory'>;
+
 // ── Main screen ─────────────────────────────────────────────────────
 
 export default function AssetInventoryScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<MainModalParamList>>();
+  const route = useRoute<AssetInventoryRoute>();
+  const fromSpaceId = (route.params as { fromSpaceId?: string } | undefined)?.fromSpaceId;
   const playerClan = useAuthStore((s) => s.clan);
 
   const [assets, setAssets] = useState<PlayerAsset[]>([]);
@@ -162,7 +189,6 @@ export default function AssetInventoryScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<AssetCategory | 'all'>('all');
   const [selectedItem, setSelectedItem] = useState<PlayerAsset | null>(null);
   const mountedRef = useRef(false);
   const setUnplacedCount = useAssetStore((s) => s.setUnplacedCount);
@@ -181,11 +207,8 @@ export default function AssetInventoryScreen() {
       const result = await playerApi.getAssets();
       if (!mountedRef.current) return;
       if (result.success && result.data) {
-        // Filter out expired assets client-side
-        const now = Date.now();
-        const active = result.data.assets.filter(
-          (a) => !a.expiresAt || new Date(a.expiresAt).getTime() > now,
-        );
+        // ISSUE 8 — Filter out expired assets
+        const active = result.data.assets.filter(isAssetActive);
         setAssets(active);
         setUnplacedCount(active.filter((a) => !a.placed).length);
         setError(null);
@@ -193,7 +216,6 @@ export default function AssetInventoryScreen() {
       } else {
         const msg = result.error?.message || 'Failed to load assets';
         if (!mountedRef.current) return;
-        // If we already have assets, show refresh error instead
         setAssets((prev) => {
           if (prev.length > 0) {
             setRefreshError(msg);
@@ -240,27 +262,49 @@ export default function AssetInventoryScreen() {
     [assets],
   );
 
-  const filteredAssets = useMemo(
-    () => activeTab === 'all' ? assets : assets.filter((a) => a.category === activeTab),
-    [assets, activeTab],
+  const sortedAssets = useMemo(
+    () => [...assets].sort((a, b) =>
+      (RARITY_ORDER[a.rarity] ?? 99) - (RARITY_ORDER[b.rarity] ?? 99)
+    ),
+    [assets],
   );
 
   const handleItemPress = useCallback((item: PlayerAsset) => {
     setSelectedItem(item);
   }, []);
 
+  // ISSUE 7 — Fixed "Place Item" flow
   const handlePlaceItem = useCallback(() => {
     if (!selectedItem) return;
     setSelectedItem(null);
-    // TODO: replace with space picker flow — spaceId/gridCells unknown at inventory context
-    navigation.navigate('SpaceDecoration', {
-      spaceId: '',
-      spaceName: '',
-      clan: playerClan ?? 'ember',
-      gridCells: [],
-      userAssetId: selectedItem.userAssetId,
-    });
-  }, [selectedItem, navigation, playerClan]);
+
+    if (fromSpaceId) {
+      // Came from SpaceDecorationScreen — check if the previous route is SpaceDecoration
+      const parentState = navigation.getParent()?.getState();
+      const routes = parentState?.routes ?? [];
+      const prevRoute = routes.length >= 2 ? routes[routes.length - 2] : undefined;
+      const isFromDecoration =
+        prevRoute?.name === 'SpaceDecoration' &&
+        (prevRoute.params as Record<string, unknown> | undefined)?.spaceId === fromSpaceId;
+
+      if (isFromDecoration) {
+        // SpaceDecorationScreen is on the stack — go back; it will pick up userAssetId via focus
+        navigation.goBack();
+      } else {
+        // Not from SpaceDecoration — navigate to map in selectSpace mode
+        navigation.navigate('Map', {
+          mode: 'selectSpace',
+          userAssetId: selectedItem.userAssetId,
+        } as never);
+      }
+    } else {
+      // No space context — navigate to map in selectSpace mode
+      navigation.navigate('Map', {
+        mode: 'selectSpace',
+        userAssetId: selectedItem.userAssetId,
+      } as never);
+    }
+  }, [selectedItem, navigation, fromSpaceId]);
 
   const renderItem = useCallback(
     ({ item }: { item: PlayerAsset }) => (
@@ -271,10 +315,7 @@ export default function AssetInventoryScreen() {
 
   const keyExtractor = useCallback((item: PlayerAsset) => item.userAssetId, []);
 
-  const emptyMessage =
-    activeTab === 'all'
-      ? 'No items yet \u2014 win minigames for a chance at chest drops!'
-      : `No ${CATEGORY_LABELS[activeTab as AssetCategory].toLowerCase()} items yet`;
+  const emptyMessage = 'No items yet \u2014 win minigames for a chance at chest drops!';
 
   return (
     <ImageBackground source={plainBg} style={styles.container} resizeMode="cover">
@@ -326,36 +367,8 @@ export default function AssetInventoryScreen() {
             </View>
           )}
 
-          {/* Category filter tabs */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.tabBar}
-            style={styles.tabBarScroll}
-          >
-            {CATEGORY_TABS.map((tab) => (
-              <Pressable
-                key={tab.key}
-                onPress={() => setActiveTab(tab.key)}
-                style={[
-                  styles.tab,
-                  activeTab === tab.key && styles.tabActive,
-                ]}
-              >
-                <Text
-                  style={[
-                    styles.tabText,
-                    activeTab === tab.key && styles.tabTextActive,
-                  ]}
-                >
-                  {tab.label}
-                </Text>
-              </Pressable>
-            ))}
-          </ScrollView>
-
           {/* Grid or empty state */}
-          {filteredAssets.length === 0 ? (
+          {sortedAssets.length === 0 ? (
             <ScrollView
               contentContainerStyle={styles.emptyScrollContent}
               style={styles.emptyScroll}
@@ -370,7 +383,7 @@ export default function AssetInventoryScreen() {
             </ScrollView>
           ) : (
             <FlatList
-              data={filteredAssets}
+              data={sortedAssets}
               renderItem={renderItem}
               keyExtractor={keyExtractor}
               numColumns={NUM_COLUMNS}
@@ -411,24 +424,24 @@ export default function AssetInventoryScreen() {
                   numberOfLines={2}
                   ellipsizeMode="tail"
                 >
-                  {selectedItem.name}
+                  {selectedItem.name || 'Unnamed Item'}
                 </Text>
 
                 {/* Rarity badge */}
                 <View
                   style={[
                     styles.modalRarityBadge,
-                    { backgroundColor: RARITY_COLORS[selectedItem.rarity] },
+                    { backgroundColor: RARITY_COLORS[selectedItem.rarity] ?? RARITY_COLORS['common'] },
                   ]}
                 >
                   <Text style={styles.modalRarityText}>
-                    {RARITY_LABELS[selectedItem.rarity]}
+                    {RARITY_LABELS[selectedItem.rarity] ?? selectedItem.rarity}
                   </Text>
                 </View>
 
                 {/* Category */}
                 <Text style={styles.modalDetail}>
-                  Category: {CATEGORY_LABELS[selectedItem.category]}
+                  Category: {CATEGORY_LABELS[selectedItem.category] ?? selectedItem.category}
                 </Text>
 
                 {/* Source */}
@@ -438,8 +451,12 @@ export default function AssetInventoryScreen() {
                   </Text>
                 )}
 
-                {/* Expiry */}
-                {selectedItem.expiresAt && (
+                {/* ISSUE 9 — Permanent badge or Expiry countdown in modal */}
+                {selectedItem.permanent ? (
+                  <Text style={styles.modalPermanentText}>
+                    {'\u2726'} Permanent
+                  </Text>
+                ) : selectedItem.expiresAt ? (
                   <View style={styles.modalExpiryRow}>
                     <Text style={styles.modalDetail}>Expires: </Text>
                     <ExpiryCountdown
@@ -447,7 +464,7 @@ export default function AssetInventoryScreen() {
                       textStyle={styles.modalExpiryText}
                     />
                   </View>
-                )}
+                ) : null}
 
                 {/* Placed status / Place button */}
                 {selectedItem.placed ? (
@@ -550,34 +567,6 @@ const styles = StyleSheet.create({
     color: PALETTE.cream,
   },
 
-  // ── Category tabs ──
-  tabBarScroll: {
-    flexGrow: 0,
-    marginBottom: 12,
-  },
-  tabBar: {
-    gap: 8,
-    paddingVertical: 4,
-  },
-  tab: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: 16,
-    backgroundColor: 'transparent',
-  },
-  tabActive: {
-    backgroundColor: PALETTE.warmBrown,
-  },
-  tabText: {
-    fontSize: 13,
-    fontFamily: FONTS.bodySemiBold,
-    color: PALETTE.stoneGrey,
-  },
-  tabTextActive: {
-    fontFamily: FONTS.bodyBold,
-    color: PALETTE.cream,
-  },
-
   // ── Card ──
   card: {
     width: CARD_WIDTH,
@@ -594,6 +583,11 @@ const styles = StyleSheet.create({
     width: '65%',
     aspectRatio: 1,
     borderRadius: 8,
+    marginBottom: 6,
+  },
+  assetImage: {
+    width: '65%',
+    aspectRatio: 1,
     marginBottom: 6,
   },
   assetName: {
@@ -627,6 +621,16 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontFamily: FONTS.bodyBold,
     color: PALETTE.softGreen,
+  },
+
+  // ── Permanent label (bottom-right) ──
+  permanentLabel: {
+    position: 'absolute',
+    bottom: 5,
+    right: 5,
+    fontSize: 9,
+    fontFamily: FONTS.bodyBold,
+    color: PALETTE.honeyGold,
   },
 
   // ── Expiry countdown (bottom-right) ──
@@ -712,7 +716,7 @@ const styles = StyleSheet.create({
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: PALETTE.stoneGrey + '30',
+    backgroundColor: PALETTE.stoneGreyLight,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -755,6 +759,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.warmBrown,
+  },
+  modalPermanentText: {
+    fontSize: 14,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.honeyGold,
+    marginBottom: 6,
   },
   modalPlacedText: {
     fontSize: 15,

@@ -5,6 +5,7 @@ import {
   AvatarConfig,
   PlayerAsset,
   PlayerSearchResult,
+  DayJournal,
 } from '@/types';
 
 export function getProfile() {
@@ -37,4 +38,23 @@ export function searchPlayer(query: string) {
   return apiRequest<{ players: PlayerSearchResult[] }>(
     `${ENDPOINTS.PLAYER_SEARCH}?q=${encodeURIComponent(query)}`,
   );
+}
+
+/** Persists tutorialDone=true to the backend user record. */
+export function updateTutorialDone(): Promise<void> {
+  return apiRequest<{ updated: boolean }>(ENDPOINTS.PLAYER_TUTORIAL_DONE, {
+    method: 'PUT',
+    body: JSON.stringify({}),
+  }).then(() => undefined);
+}
+
+export async function getJournal(date?: string): Promise<DayJournal> {
+  const endpoint = date
+    ? `${ENDPOINTS.PLAYER_JOURNAL}?date=${date}`
+    : ENDPOINTS.PLAYER_JOURNAL;
+  const response = await apiRequest<DayJournal>(endpoint);
+  if (!response.success || !response.data) {
+    throw new Error(response.error?.message ?? 'Failed to load journal');
+  }
+  return response.data;
 }

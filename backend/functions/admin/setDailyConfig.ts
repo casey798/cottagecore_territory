@@ -60,6 +60,7 @@ export async function handler(
       date,
       qrSecret,
       status: DailyConfigStatus.Active,
+      quietMode: quietMode ?? false,
     });
   } catch (err) {
     console.error('[setDailyConfig] Error:', err);

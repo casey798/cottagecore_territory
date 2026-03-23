@@ -5,16 +5,15 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { useCountdown } from '@/hooks/useCountdown';
 import { useGameStore } from '@/store/useGameStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { generateCompletionHash, generateClientCompletionHash } from '@/utils/hmac';
 import * as gameApi from '@/api/game';
-import { GameResult } from '@/types';
+import { GameResult, ChestDrop } from '@/types';
 import { MinigameResult, MinigamePlayProps } from '@/types/minigame';
 import { lockLandscape, lockPortrait } from '@/hooks/useScreenOrientation';
 import GroveWordsGame from '@/minigames/grove-words/GroveWordsGame';
-import KindredGame from '@/minigames/kindred/KindredGame';
+import WordClustersGame from '@/minigames/word-clusters/WordClustersGame';
 import StonePairsGame from '@/minigames/stone-pairs/StonePairsGame';
 import PipsGame from '@/minigames/pips/PipsGame';
 import VineTrailGame from '@/minigames/vine-trail/VineTrailGame';
@@ -28,7 +27,7 @@ import LeafSortGame from '@/minigames/leaf-sort/LeafSortGame';
 import GroveEquationsGame from '@/minigames/grove-equations/GroveEquationsGame';
 import BloomSequenceGame from '@/minigames/bloom-sequence/BloomSequenceGame';
 import ShiftSlideGame from '@/minigames/shift-slide/ShiftSlideGame';
-import KindredCoopGame from '@/minigames/kindred-coop/KindredCoopGame';
+import WordClustersCoopGame from '@/minigames/word-clusters-coop/WordClustersCoopGame';
 import CipherStonesCoopGame from '@/minigames/cipher-stones-coop/CipherStonesCoopGame';
 import PipsCoopGame from '@/minigames/pips-coop/PipsCoopGame';
 import StonePairsCoopGame from '@/minigames/stone-pairs-coop/StonePairsCoopGame';
@@ -39,32 +38,32 @@ type Nav = NativeStackNavigationProp<MainModalParamList>;
 type PlayRoute = RouteProp<MainModalParamList, 'MinigamePlay'>;
 
 const MINIGAME_NAMES: Record<string, string> = {
-  'grove-words': 'Grove Words',
-  'kindred': 'Kindred',
-  'pips': 'Pips',
-  'vine-trail': 'Vine Trail',
-  'mosaic': 'Mosaic',
-  'number-grove': 'Number Grove',
-  'stone-pairs': 'Stone Pairs',
-  'potion-logic': 'Potion Logic',
-  'leaf-sort': 'Leaf Sort',
-  'cipher-stones': 'Cipher Stones',
-  'path-weaver': 'Path Weaver',
-  'firefly-flow': 'Firefly Flow',
-  'grove-equations': 'Grove Equations',
-  'bloom-sequence': 'Bloom Sequence',
-  'shift-slide': 'Shift & Slide',
-  'kindred-coop': 'Kindred Co-op',
-  'cipher-stones-coop': 'Cipher Stones Co-op',
-  'pips-coop': 'Pips Co-op',
-  'stone-pairs-coop': 'Stone Pairs Co-op',
-  'potion-logic-coop': 'Potion Logic Co-op',
-  'vine-trail-coop': 'Vine Trail Co-op',
+  'grove-words': 'Wordle',
+  'word-clusters': 'Word Clusters',
+  'pips': 'Snuff Out',
+  'vine-trail': 'Word Hunt',
+  'mosaic': 'Tile Fit',
+  'number-grove': 'Mini Sudoku',
+  'stone-pairs': 'Flip & Match',
+  'potion-logic': 'Logic Grid',
+  'leaf-sort': 'Color Sort',
+  'cipher-stones': 'Cipher',
+  'path-weaver': 'Nonogram',
+  'firefly-flow': 'Connect the Dots',
+  'grove-equations': 'Number Crunch',
+  'bloom-sequence': 'Spot the Pattern',
+  'shift-slide': 'Tile Slide',
+  'word-clusters-coop': 'Word Clusters Co-op',
+  'cipher-stones-coop': 'Cipher Co-op',
+  'pips-coop': 'Snuff Out Co-op',
+  'stone-pairs-coop': 'Flip & Match Co-op',
+  'potion-logic-coop': 'Logic Grid Co-op',
+  'vine-trail-coop': 'Word Hunt Co-op',
 };
 
 const IMPLEMENTED_MINIGAMES: Record<string, React.ComponentType<MinigamePlayProps>> = {
   'grove-words': GroveWordsGame,
-  'kindred': KindredGame,
+  'word-clusters': WordClustersGame,
   'stone-pairs': StonePairsGame,
   'pips': PipsGame,
   'vine-trail': VineTrailGame,
@@ -78,7 +77,7 @@ const IMPLEMENTED_MINIGAMES: Record<string, React.ComponentType<MinigamePlayProp
   'grove-equations': GroveEquationsGame,
   'bloom-sequence': BloomSequenceGame,
   'shift-slide': ShiftSlideGame,
-  'kindred-coop': KindredCoopGame,
+  'word-clusters-coop': WordClustersCoopGame,
   'cipher-stones-coop': CipherStonesCoopGame,
   'pips-coop': PipsCoopGame,
   'stone-pairs-coop': StonePairsCoopGame,
@@ -160,7 +159,7 @@ const placeholderStyles = StyleSheet.create({
     backgroundColor: PALETTE.mutedRose,
   },
   btnText: {
-    color: '#FFFFFF',
+    color: PALETTE.white,
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
   },
@@ -185,9 +184,6 @@ export default function MinigamePlayScreen() {
   const hasCompletedRef = useRef(false);
   const startTimeRef = useRef(Date.now());
 
-  const timerEnd = useRef(new Date(Date.now() + timeLimit * 1000)).current;
-  const countdown = useCountdown(timerEnd);
-
   const handleComplete = useCallback(
     async (data: MinigameCompleteData) => {
       if (hasCompletedRef.current) return;
@@ -209,14 +205,18 @@ export default function MinigamePlayScreen() {
       const isPractice = locationId === 'practice';
 
       // Fallback result params — used when the API call fails or is skipped
+      const fallbackLockedUntil = finalResult !== 'win'
+        ? new Date(Date.now() + 60 * 60 * 1000).toISOString()
+        : undefined;
       const fallbackParams = {
         result: finalResult === 'win' ? 'win' as const : 'lose' as const,
         xpEarned: 0,
         xpAwarded: false,
         newTodayXp: todayXp,
         clanTodayXp: 0,
-        chestDrop: undefined,
+        chestDrop: undefined as ChestDrop | undefined,
         locationLocked: finalResult !== 'win',
+        lockedUntil: fallbackLockedUntil,
         locationId,
         locationName,
         minigameId,
@@ -233,6 +233,7 @@ export default function MinigamePlayScreen() {
       }
 
       // For wins: attempt submission, but always navigate
+      let resultParams = fallbackParams;
       try {
         const result = await gameApi.completeMinigame(
           sessionId,
@@ -246,30 +247,28 @@ export default function MinigamePlayScreen() {
           if (result.data.result === 'win' && !isPractice) {
             recordWin();
           }
-          navigation.replace('Result', {
-            result: result.data.result === 'win' ? 'win' : 'lose',
+          resultParams = {
+            result: result.data.result === 'win' ? 'win' as const : 'lose' as const,
             xpEarned: result.data.xpEarned,
-            xpAwarded: result.data.xpAwarded,
-            newTodayXp: result.data.newTodayXp,
-            clanTodayXp: result.data.clanTodayXp,
-            chestDrop: result.data.chestDrop,
-            locationLocked: result.data.locationLocked,
+            xpAwarded: result.data.xpAwarded ?? false,
+            newTodayXp: result.data.newTodayXp ?? 0,
+            clanTodayXp: result.data.clanTodayXp ?? 0,
+            chestDrop: result.data.chestDrop ?? undefined,
+            locationLocked: result.data.locationLocked ?? false,
+            lockedUntil: result.data.lockedUntil ?? undefined,
             locationId,
             locationName,
             minigameId,
             sessionId,
             practiceMode: isPractice,
-            bonusXpTriggered: result.data.bonusXpTriggered,
-            linkedLocation: result.data.linkedLocation,
-          });
+          };
         } else {
           console.warn('Win submission rejected:', result.error?.message);
-          navigation.replace('Result', fallbackParams);
         }
       } catch (err) {
         console.warn('Win submission failed (network):', err);
-        navigation.replace('Result', fallbackParams);
       }
+      navigation.replace('Result', resultParams);
     },
     [sessionId, userId, navigation, recordWin, salt, todayXp, locationId, locationName, minigameId],
   );
@@ -333,23 +332,21 @@ export default function MinigamePlayScreen() {
   // Auto-lose on timer expiry — only for placeholder minigames.
   // Implemented minigames handle their own timeout internally and show
   // a GameCompleteOverlay before calling onComplete.
-  React.useEffect(() => {
-    if (countdown.isExpired && !hasCompletedRef.current && !MinigameComponent) {
+  useEffect(() => {
+    if (MinigameComponent) return; // implemented minigames handle their own timeout
+    const timer = setTimeout(() => {
+      if (hasCompletedRef.current) return;
       const elapsed = Math.round((Date.now() - startTimeRef.current) / 1000);
       const hash = generateClientCompletionHash(sessionId, 'timeout', elapsed);
       handleComplete({ result: 'timeout', completionHash: hash, timeTaken: elapsed, solutionData: {} });
-    }
-  }, [countdown.isExpired, handleComplete, sessionId, MinigameComponent]);
+    }, timeLimit * 1000);
+    return () => clearTimeout(timer);
+  }, [timeLimit, handleComplete, sessionId, MinigameComponent]);
 
   return (
     <View style={styles.container}>
       <View style={styles.topBar}>
         <Text style={styles.gameName}>{gameName}</Text>
-        <View style={[styles.timerBadge, countdown.isExpired && styles.timerExpired]}>
-          <Text style={[styles.timerText, countdown.isExpired && styles.timerTextExpired]}>
-            {countdown.isExpired ? "Time's up!" : countdown.formatted}
-          </Text>
-        </View>
         <Text style={styles.xpText}>{todayXp} XP</Text>
       </View>
       {xpAvailable === false && (
@@ -365,6 +362,8 @@ export default function MinigamePlayScreen() {
             timeLimit={timeLimit}
             onComplete={handleMinigameComplete}
             puzzleData={puzzleData}
+            practiceMode={locationId === 'practice'}
+            salt={salt}
           />
         ) : (
           <MinigamePlaceholder
@@ -424,23 +423,6 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.headerBold,
     color: PALETTE.cream,
   },
-  timerBadge: {
-    backgroundColor: PALETTE.cream,
-    paddingHorizontal: 14,
-    paddingVertical: 4,
-    borderRadius: 8,
-  },
-  timerExpired: {
-    backgroundColor: '#C0392B',
-  },
-  timerText: {
-    fontSize: 20,
-    fontFamily: FONTS.bodyBold,
-    color: PALETTE.darkBrown,
-  },
-  timerTextExpired: {
-    color: '#FFFFFF',
-  },
   xpText: {
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
@@ -454,7 +436,7 @@ const styles = StyleSheet.create({
   practiceText: {
     fontSize: 12,
     fontFamily: FONTS.bodySemiBold,
-    color: '#FFFFFF',
+    color: PALETTE.white,
   },
   gameArea: {
     flex: 1,

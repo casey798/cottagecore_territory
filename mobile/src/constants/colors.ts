@@ -19,10 +19,49 @@ export const PALETTE = {
   softBlue: '#7BA3C4',
   parchmentBg: '#F5EACB',
   stoneGrey: '#A0937D',
+  loseBackground: '#E8DCC8',
+  midBrown: '#A0784C',
+  warmGreyBrown: '#7A6652',
   amberLight: '#F0C060',
   amberStrong: '#F0A020',
   errorRed: '#C0392B',
+  parchmentMid: '#E8D9B0',
+  parchmentLight: '#D6CAAD',
+  playerBlue: '#2980B9',
+  successGreen: '#27AE60',
+  // Semi-transparent variants
+  warmBrownFaint: 'rgba(139, 105, 20, 0.12)',
+  warmBrownLight: 'rgba(139, 105, 20, 0.19)',
+  warmBrownMild: 'rgba(139, 105, 20, 0.25)',
+  darkBrownFaint: 'rgba(61, 43, 31, 0.03)',
+  stoneGreyLight: 'rgba(160, 147, 125, 0.19)',
+  parchment: '#F5EACB',
+  goldOverlay: 'rgba(255, 215, 0, 0.9)',
+  goldHalf: 'rgba(255, 215, 0, 0.5)',
+  debugText: '#1E140F',
+  white: '#FFFFFF',
+  blackOverlay60: 'rgba(0, 0, 0, 0.6)',
+  whiteStroke60: 'rgba(255, 255, 255, 0.6)',
+  successToast: 'rgba(39, 174, 96, 0.9)',
+  tileOnBorder: '#1a3a18',
+  parchmentDark: '#E8DCC8',
+  // Logic grid cell colors
+  gridAutoEliminated: '#EAE4DA',
+  gridManualEliminated: '#E0D8CC',
+  gridAutoConfirmed: '#C4E0B0',
+  gridManualConfirmed: '#B8D9A0',
+  clueHighlight: '#FFF8E7',
+  glassWhite30: 'rgba(255, 255, 255, 0.3)',
+  borderBlack15: 'rgba(0, 0, 0, 0.15)',
 } as const;
+
+export const CLAN_LABELS: Record<ClanId, string> = {
+  ember: 'Ember',
+  tide: 'Tide',
+  bloom: 'Bloom',
+  gale: 'Gale',
+  hearth: 'Hearth',
+};
 
 export const LORE_CLANS = [
   {
@@ -75,7 +114,7 @@ export const CLAN_TO_LORE_MAP: Record<string, string> = {
   hearth: 'guardians',
 };
 
-/** Keyboard / tile feedback colors shared by Grove Words and Cipher Stones. */
+/** Keyboard / tile feedback colors shared by Wordle and Cipher Stones. */
 export const KEYBOARD = {
   correctGreen: '#538D4E',
   presentYellow: '#B59F3B',
@@ -93,4 +132,6 @@ export const UI = {
   border: PALETTE.warmBrown,
   overlay: 'rgba(61, 43, 31, 0.5)',
   modalBackdrop: 'rgba(0, 0, 0, 0.55)',
+  statusConnected: '#27AE60',
+  statusDisconnected: '#95A5A6',
 } as const;

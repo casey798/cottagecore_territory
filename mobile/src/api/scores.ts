@@ -6,9 +6,10 @@ export function getClanScores() {
   return apiRequest<{ clans: ClanScore[] }>(ENDPOINTS.SCORES_CLANS);
 }
 
-export function getCaptureHistory() {
-  return apiRequest<{ captures: CaptureHistoryEntry[] }>(
-    ENDPOINTS.SCORES_HISTORY,
+export function getCaptureHistory(cursor?: string) {
+  const params = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
+  return apiRequest<{ captures: CaptureHistoryEntry[]; nextCursor: string | null }>(
+    `${ENDPOINTS.SCORES_HISTORY}${params}`,
   );
 }
 

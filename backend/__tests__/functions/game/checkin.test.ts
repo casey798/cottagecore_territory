@@ -99,7 +99,7 @@ describe('checkin', () => {
       expect.objectContaining({
         locationId: LOCATION_ID,
         result: 'checkin',
-        practiceSession: true,
+        practiceSession: false,
         xpEarned: 0,
       })
     );

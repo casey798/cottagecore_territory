@@ -1,34 +1,37 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import crypto from 'crypto';
 import { extractUserId } from '../../shared/auth';
-import { getItem, putItem, updateItem, query, scan } from '../../shared/db';
+import { getItem, putItem, updateItem, query } from '../../shared/db';
 import { verifyCompletionHash, verifyClientCompletionHash } from '../../shared/hmac';
 import { success, error, ErrorCode } from '../../shared/response';
 import { completeMinigameSchema } from '../../shared/schemas';
-import { getTodayISTString, getMidnightISTAsISO, getNext8amISTEpochSeconds } from '../../shared/time';
+import { getTodayISTString, getMidnightISTAsISO } from '../../shared/time';
+import { LOCK_DURATION_MS } from '../../shared/constants';
 import { isQuietModeActive } from '../../shared/quietMode';
 import { broadcastScoreUpdate } from '../websocket/broadcast';
+import { sendToPlayer } from '../../shared/notifications';
 import {
   applyTap as pipsApplyTap,
   isSolved as pipsIsSolved,
   type Grid as PipsGrid,
 } from '../../shared/minigames/pipsGenerator';
+import { MINIGAME_META, CHEST_RARITY_WEIGHTS, rollRarityTier } from '../../shared/minigames';
 import { puzzleLibrary } from './mosaic/puzzleLibrary';
 import { validateSolution as validateMosaicSolution } from './mosaic/mosaicLogic';
 import { validateSubmission as validatePathWeaverSubmission } from '../../shared/minigames/pathWeaverGenerator';
 import { validateSolution as validateGroveEquationsSolution } from '../../shared/minigames/groveEquationsGenerator';
 import { validateAnswers as validateBloomSequenceAnswers, type Round as BloomSequenceRound } from '../../shared/minigames/bloomSequenceGenerator';
+import { validatePotionLogicSubmission, type PotionLogicSolution } from '../../shared/minigames/potionLogicGenerator';
 import type { MosaicTilePlacement } from '../../shared/types';
 import {
-  AssetCatalog,
+  AssetCategory,
   AssetObtainedFrom,
   ChestDrop,
   GameResult,
   GameSession,
   PlayerAsset,
   PlayerLock,
-  SOLO_CHEST_WEIGHTS,
-  COOP_CHEST_WEIGHTS,
+  Rarity,
   User,
 } from '../../shared/types';
 
@@ -37,36 +40,77 @@ const DAILY_XP_CAP = 100;
 const TIME_GRACE_SECONDS = 5;
 const MIN_COMPLETION_SECONDS = 5;
 
-function rollRarityTier(weights: ReadonlyArray<{ readonly rarity: string; readonly weight: number }>): string {
-  const totalWeight = weights.reduce((sum, r) => sum + r.weight, 0);
-  let roll = Math.random() * totalWeight;
-  for (const { rarity, weight } of weights) {
-    roll -= weight;
-    if (roll <= 0) return rarity;
-  }
-  return 'common';
+// SYNC: keep this in sync with mobile/src/constants/assets.ts DECORATION_ASSETS
+interface AssetPoolEntry {
+  id: string;
+  name: string;
+  category: AssetCategory;
+  rarity: Rarity;
+  dropWeight: number;
+  clanLocked?: string;
 }
 
-async function selectRandomAssetByRarity(
-  weights: ReadonlyArray<{ readonly rarity: string; readonly weight: number }>,
-): Promise<AssetCatalog | null> {
-  const { items: catalog } = await scan<AssetCatalog>('asset-catalog');
-  if (catalog.length === 0) return null;
+const ASSET_POOL: AssetPoolEntry[] = [
+  { id: 'banner_ember',       name: 'Ember Banner',       category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'ember'  },
+  { id: 'banner_bloom',       name: 'Bloom Banner',       category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'bloom'  },
+  { id: 'banner_tide',        name: 'Tide Banner',        category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'tide'   },
+  { id: 'banner_gale',        name: 'Gale Banner',        category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'gale'   },
+  { id: 'banner_hearth',      name: 'Hearth Banner',      category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'hearth' },
+  { id: 'statue_fox',         name: 'Stone Fox',          category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
+  { id: 'statue_owl',         name: 'Mossy Owl',          category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
+  { id: 'statue_frog',        name: 'Frog on Lily Pad',   category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
+  { id: 'statue_gnome',       name: 'Garden Gnome',       category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
+  { id: 'statue_birdbath',    name: 'Bird Bath',          category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
+  { id: 'statue_mushroom',    name: 'Mushroom Totem',     category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
+  { id: 'furn_bench',         name: 'Wooden Bench',       category: AssetCategory.Furniture, rarity: Rarity.Common,    dropWeight: 25 },
+  { id: 'furn_archway',       name: 'Vine Archway',       category: AssetCategory.Furniture, rarity: Rarity.Common,    dropWeight: 25 },
+  { id: 'furn_lantern',       name: 'Lantern Post',       category: AssetCategory.Furniture, rarity: Rarity.Common,    dropWeight: 25 },
+  { id: 'furn_flowercart',    name: 'Flower Cart',        category: AssetCategory.Furniture, rarity: Rarity.Common,    dropWeight: 25 },
+  { id: 'furn_table',         name: 'Potting Table',      category: AssetCategory.Furniture, rarity: Rarity.Common,    dropWeight: 25 },
+  { id: 'furn_books',         name: 'Reading Nook',       category: AssetCategory.Furniture, rarity: Rarity.Common,    dropWeight: 25 },
+  { id: 'furn_picnic',        name: 'Picnic Blanket',     category: AssetCategory.Furniture, rarity: Rarity.Common,    dropWeight: 25 },
+  { id: 'mural_1',            name: 'Vine Mural',         category: AssetCategory.Mural,     rarity: Rarity.Rare,      dropWeight: 8  },
+  { id: 'mural_2',            name: 'Cottage Scene',      category: AssetCategory.Mural,     rarity: Rarity.Rare,      dropWeight: 8  },
+  { id: 'mural_3',            name: 'Garden Path',        category: AssetCategory.Mural,     rarity: Rarity.Rare,      dropWeight: 8  },
+  { id: 'mural_4',            name: 'Starry Night',       category: AssetCategory.Mural,     rarity: Rarity.Rare,      dropWeight: 8  },
+  { id: 'pet_cat',            name: 'Pixel Cat',          category: AssetCategory.Pet,       rarity: Rarity.Rare,      dropWeight: 6  },
+  { id: 'pet_fox',            name: 'Baby Fox',           category: AssetCategory.Pet,       rarity: Rarity.Rare,      dropWeight: 6  },
+  { id: 'pet_hedgehog',       name: 'Hedgehog',           category: AssetCategory.Pet,       rarity: Rarity.Rare,      dropWeight: 6  },
+  { id: 'pet_robin',          name: 'Robin',              category: AssetCategory.Pet,       rarity: Rarity.Rare,      dropWeight: 6  },
+  { id: 'pet_butterfly',      name: 'Butterfly',          category: AssetCategory.Pet,       rarity: Rarity.Rare,      dropWeight: 6  },
+  { id: 'special_tree',       name: 'Ancient Banyan',     category: AssetCategory.Special,   rarity: Rarity.Legendary, dropWeight: 2  },
+  { id: 'special_champion',   name: 'Warrior Statue',     category: AssetCategory.Special,   rarity: Rarity.Legendary, dropWeight: 2  },
+  { id: 'special_trophy',     name: 'Golden Trophy',      category: AssetCategory.Special,   rarity: Rarity.Legendary, dropWeight: 2  },
+  { id: 'special_fountain',   name: 'Crystal Fountain',   category: AssetCategory.Special,   rarity: Rarity.Legendary, dropWeight: 2  },
+];
 
+function pickAssetForClan(
+  playerClan: string,
+  minigameId: string,
+  isCoop: boolean
+): AssetPoolEntry {
+  const meta = MINIGAME_META[minigameId];
+  const difficulty = meta?.difficulty ?? 'easy';
+  const mode = isCoop ? 'coop' : 'solo';
+  const weights = CHEST_RARITY_WEIGHTS[difficulty][mode];
   const rarity = rollRarityTier(weights);
-  let candidates = catalog.filter((a) => a.rarity === rarity);
 
-  // Fallback to common if rolled tier is empty
-  if (candidates.length === 0) {
-    candidates = catalog.filter((a) => a.rarity === 'common');
+  const pool = ASSET_POOL.filter(
+    a => (a.rarity as string) === rarity && (!a.clanLocked || a.clanLocked === playerClan)
+  );
+
+  // Fallback: if no assets exist for this rarity+clan combo, widen to any rarity
+  const finalPool = pool.length > 0
+    ? pool
+    : ASSET_POOL.filter(a => !a.clanLocked || a.clanLocked === playerClan);
+
+  const totalWeight = finalPool.reduce((sum, a) => sum + a.dropWeight, 0);
+  let roll = Math.random() * totalWeight;
+  for (const asset of finalPool) {
+    roll -= asset.dropWeight;
+    if (roll <= 0) return asset;
   }
-
-  // Final fallback: any asset
-  if (candidates.length === 0) {
-    candidates = catalog;
-  }
-
-  return candidates[Math.floor(Math.random() * candidates.length)];
+  return finalPool[finalPool.length - 1];
 }
 
 async function awardXpAndStreak(
@@ -412,6 +456,32 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }
     }
 
+    // Potion Logic puzzle solution validation
+    if ((session.minigameId === 'potion-logic' || session.minigameId === 'potion-logic-coop') && result === GameResult.Win) {
+      const puzzleSolution = (session as unknown as Record<string, unknown>).puzzleSolution as
+        | PotionLogicSolution
+        | undefined;
+
+      if (!puzzleSolution || !solutionData) {
+        return error(ErrorCode.INVALID_HASH, 'Potion Logic solution validation failed', 400);
+      }
+
+      const playerIngredients = (solutionData as Record<string, unknown>).playerIngredients as
+        | Record<string, string>
+        | undefined;
+      const playerEffects = (solutionData as Record<string, unknown>).playerEffects as
+        | Record<string, string>
+        | undefined;
+
+      if (!playerIngredients || !playerEffects) {
+        return error(ErrorCode.INVALID_HASH, 'Potion Logic solution validation failed', 400);
+      }
+
+      if (!validatePotionLogicSubmission(puzzleSolution, playerIngredients, playerEffects)) {
+        return error(ErrorCode.INVALID_HASH, 'Potion Logic solution validation failed', 400);
+      }
+    }
+
     const now = new Date().toISOString();
     const gameResult = result as GameResult;
 
@@ -466,42 +536,38 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
         }
 
-        // Chest drop — 100% on XP-earning wins, rarity is weighted random
-        const isCoop = session.coopPartnerId !== null;
-        const chestWeights = isCoop ? COOP_CHEST_WEIGHTS : SOLO_CHEST_WEIGHTS;
-
+        // Chest drop — 100% on XP-earning wins, weighted random from ASSET_POOL
         if (xpToAward === XP_PER_WIN) {
-          const asset = await selectRandomAssetByRarity(chestWeights);
-          if (asset) {
-            chestDropped = true;
-            const userAssetId = crypto.randomUUID();
-            chestAssetId = asset.assetId;
+          const pickedAsset = pickAssetForClan(clanId, session.minigameId, session.coopPartnerId !== null);
+          chestDropped = true;
+          const userAssetId = crypto.randomUUID();
+          chestAssetId = pickedAsset.id;
 
-            const playerAsset: PlayerAsset = {
-              userAssetId,
-              userId,
-              assetId: asset.assetId,
-              obtainedAt: now,
-              obtainedFrom: AssetObtainedFrom.Chest,
-              locationId: session.locationId,
-              placed: false,
-              expiresAt: getMidnightISTAsISO(),
-              expired: false,
-            };
+          const playerAsset: PlayerAsset = {
+            userAssetId,
+            userId,
+            assetId: pickedAsset.id,
+            obtainedAt: now,
+            obtainedFrom: AssetObtainedFrom.Chest,
+            locationId: session.locationId,
+            placed: false,
+            expiresAt: getMidnightISTAsISO(),
+            expired: false,
+            permanent: false,
+          };
 
-            await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
+          await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
 
-            chestDrop = {
-              dropped: true,
-              asset: {
-                assetId: asset.assetId,
-                name: asset.name,
-                category: asset.category,
-                rarity: asset.rarity,
-                imageKey: asset.imageKey,
-              },
-            };
-          }
+          chestDrop = {
+            dropped: true,
+            asset: {
+              assetId: pickedAsset.id,
+              name: pickedAsset.name,
+              category: pickedAsset.category,
+              rarity: pickedAsset.rarity,
+              imageKey: pickedAsset.id,
+            },
+          };
         }
 
         // Co-op: repeat XP/streak for partner + independent chest roll + cross-clan XP
@@ -528,33 +594,45 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
           // Independent chest roll for partner
           if (coopResult.xpActuallyAwarded) {
-            const partnerAsset = await selectRandomAssetByRarity(COOP_CHEST_WEIGHTS);
-            if (partnerAsset) {
-              const partnerUserAssetId = crypto.randomUUID();
-              const partnerPlayerAsset: PlayerAsset = {
-                userAssetId: partnerUserAssetId,
-                userId: session.coopPartnerId,
-                assetId: partnerAsset.assetId,
-                obtainedAt: now,
-                obtainedFrom: AssetObtainedFrom.Chest,
-                locationId: session.locationId,
-                placed: false,
-                expiresAt: getMidnightISTAsISO(),
-                expired: false,
-              };
-              await putItem('player-assets', partnerPlayerAsset as unknown as Record<string, unknown>);
+            const partnerPickedAsset = pickAssetForClan(partnerClanId, session.minigameId, true);
+            const partnerUserAssetId = crypto.randomUUID();
+            const partnerPlayerAsset: PlayerAsset = {
+              userAssetId: partnerUserAssetId,
+              userId: session.coopPartnerId,
+              assetId: partnerPickedAsset.id,
+              obtainedAt: now,
+              obtainedFrom: AssetObtainedFrom.Chest,
+              locationId: session.locationId,
+              placed: false,
+              expiresAt: getMidnightISTAsISO(),
+              expired: false,
+              permanent: false,
+            };
+            await putItem('player-assets', partnerPlayerAsset as unknown as Record<string, unknown>);
 
-              partnerChestDrop = {
-                dropped: true,
-                asset: {
-                  assetId: partnerAsset.assetId,
-                  name: partnerAsset.name,
-                  category: partnerAsset.category,
-                  rarity: partnerAsset.rarity,
-                  imageKey: partnerAsset.imageKey,
-                },
-              };
-            }
+            partnerChestDrop = {
+              dropped: true,
+              asset: {
+                assetId: partnerPickedAsset.id,
+                name: partnerPickedAsset.name,
+                category: partnerPickedAsset.category,
+                rarity: partnerPickedAsset.rarity,
+                imageKey: partnerPickedAsset.id,
+              },
+            };
+          }
+
+          // Fire-and-forget push notification to partner about their chest
+          if (partnerChestDrop.dropped && session.coopPartnerId) {
+            sendToPlayer(session.coopPartnerId, {
+              notification: {
+                title: 'Co-op reward!',
+                body: 'Your partner won — you earned XP and a chest!',
+              },
+              data: {
+                type: 'PARTNER_CHEST',
+              },
+            }).catch(console.error);
           }
         }
       } else {
@@ -601,13 +679,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     } else {
       // --- LOSE PATH ---
 
-      // 1. Create player-lock
+      // 1. Create player-lock (1-hour duration)
       const dateUserLocation = `${today}#${userId}#${session.locationId}`;
-      const ttl = getNext8amISTEpochSeconds();
+      const lockExpiryMs = Date.now() + LOCK_DURATION_MS;
+      const lockedUntil = new Date(lockExpiryMs).toISOString();
+      const ttl = Math.floor(lockExpiryMs / 1000);
 
       const playerLock: PlayerLock = {
         dateUserLocation,
         lockedAt: now,
+        lockedUntil,
         ttl,
       };
 
@@ -618,6 +699,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         const partnerLock: PlayerLock = {
           dateUserLocation: `${today}#${session.coopPartnerId}#${session.locationId}`,
           lockedAt: now,
+          lockedUntil,
           ttl,
         };
         await putItem('player-locks', partnerLock as unknown as Record<string, unknown>);
@@ -642,6 +724,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         result: GameResult.Lose,
         xpEarned: 0,
         locationLocked: true,
+        lockedUntil,
         chestDrop: { dropped: false },
       });
     }

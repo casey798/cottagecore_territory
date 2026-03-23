@@ -1,73 +1,70 @@
-import { PALETTE } from '@/constants/colors';
+import type { ImageSourcePropType } from 'react-native';
 import type { AvatarConfig } from '@/types';
 
 export interface CharacterPreset {
   id: number;
-  emoji: string;
-  label: string;
-  color: string;
+  name: string;
+  icon: ImageSourcePropType;
+  fullBody: ImageSourcePropType;
   avatarConfig: AvatarConfig;
 }
 
-/**
- * 8 character presets (1-based id). Each maps to a unique AvatarConfig.
- */
 export const CHARACTER_PRESETS: CharacterPreset[] = [
   {
+    id: 0,
+    name: 'Reed',
+    icon: require('../assets/sprites/character/reed.png'),
+    fullBody: require('../assets/sprites/character/reed_big.png'),
+    avatarConfig: { hairStyle: 0, hairColor: 2, skinTone: 3, outfit: 1, accessory: 0 },
+  },
+  {
     id: 1,
-    emoji: '\u{1F9D1}',
-    label: 'The Scholar',
-    color: PALETTE.warmBrown,
-    avatarConfig: { hairStyle: 0, hairColor: 0, skinTone: 0, outfit: 0, accessory: 0 },
+    name: 'Milo',
+    icon: require('../assets/sprites/character/milo.png'),
+    fullBody: require('../assets/sprites/character/milo_big.png'),
+    avatarConfig: { hairStyle: 1, hairColor: 5, skinTone: 1, outfit: 3, accessory: 2 },
   },
   {
     id: 2,
-    emoji: '\u{1F9D2}',
-    label: 'The Sprout',
-    color: PALETTE.softGreen,
-    avatarConfig: { hairStyle: 1, hairColor: 1, skinTone: 1, outfit: 1, accessory: 1 },
+    name: 'Sage',
+    icon: require('../assets/sprites/character/sage.png'),
+    fullBody: require('../assets/sprites/character/sage_big.png'),
+    avatarConfig: { hairStyle: 2, hairColor: 0, skinTone: 5, outfit: 4, accessory: 1 },
   },
   {
     id: 3,
-    emoji: '\u{1F467}',
-    label: 'The Wanderer',
-    color: PALETTE.mutedRose,
-    avatarConfig: { hairStyle: 2, hairColor: 2, skinTone: 2, outfit: 2, accessory: 2 },
+    name: 'Wren',
+    icon: require('../assets/sprites/character/wren.png'),
+    fullBody: require('../assets/sprites/character/wren_big.png'),
+    avatarConfig: { hairStyle: 3, hairColor: 7, skinTone: 2, outfit: 6, accessory: 3 },
   },
   {
     id: 4,
-    emoji: '\u{1F9D4}',
-    label: 'The Farmer',
-    color: PALETTE.softBlue,
-    avatarConfig: { hairStyle: 3, hairColor: 3, skinTone: 3, outfit: 3, accessory: 3 },
+    name: 'Fern',
+    icon: require('../assets/sprites/character/fern.png'),
+    fullBody: require('../assets/sprites/character/fern_big.png'),
+    avatarConfig: { hairStyle: 5, hairColor: 3, skinTone: 4, outfit: 0, accessory: 4 },
   },
   {
     id: 5,
-    emoji: '\u{1F469}',
-    label: 'The Keeper',
-    color: PALETTE.honeyGold,
-    avatarConfig: { hairStyle: 4, hairColor: 4, skinTone: 4, outfit: 4, accessory: 4 },
+    name: 'Hazel',
+    icon: require('../assets/sprites/character/hazel.png'),
+    fullBody: require('../assets/sprites/character/hazel_big.png'),
+    avatarConfig: { hairStyle: 4, hairColor: 1, skinTone: 6, outfit: 5, accessory: 0 },
   },
   {
     id: 6,
-    emoji: '\u{1F9D3}',
-    label: 'The Elder',
-    color: PALETTE.stoneGrey,
-    avatarConfig: { hairStyle: 5, hairColor: 5, skinTone: 5, outfit: 5, accessory: 5 },
+    name: 'Ivy',
+    icon: require('../assets/sprites/character/ivy.png'),
+    fullBody: require('../assets/sprites/character/ivy_big.png'),
+    avatarConfig: { hairStyle: 6, hairColor: 4, skinTone: 0, outfit: 2, accessory: 5 },
   },
   {
     id: 7,
-    emoji: '\u{1F466}',
-    label: 'The Scout',
-    color: PALETTE.deepGreen,
-    avatarConfig: { hairStyle: 6, hairColor: 6, skinTone: 6, outfit: 6, accessory: 0 },
-  },
-  {
-    id: 8,
-    emoji: '\u{1F474}',
-    label: 'The Hermit',
-    color: PALETTE.errorRed,
-    avatarConfig: { hairStyle: 7, hairColor: 7, skinTone: 7, outfit: 7, accessory: 0 },
+    name: 'Cob',
+    icon: require('../assets/sprites/character/cob.png'),
+    fullBody: require('../assets/sprites/character/cob_big.png'),
+    avatarConfig: { hairStyle: 7, hairColor: 6, skinTone: 7, outfit: 7, accessory: 0 },
   },
 ];
 

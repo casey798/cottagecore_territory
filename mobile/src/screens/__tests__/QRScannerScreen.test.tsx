@@ -1,3 +1,33 @@
+jest.mock('react-native-vision-camera', () => ({
+  Camera: 'Camera',
+  useCameraDevice: () => null,
+  useCodeScanner: () => ({}),
+}));
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
+jest.mock('@react-native-firebase/auth', () => ({
+  getAuth: jest.fn(),
+  getIdToken: jest.fn(),
+  signInWithCredential: jest.fn(),
+  signOut: jest.fn(),
+  GoogleAuthProvider: { credential: jest.fn() },
+}));
+jest.mock('@react-native-google-signin/google-signin', () => ({
+  GoogleSignin: { configure: jest.fn(), hasPlayServices: jest.fn(), signIn: jest.fn() },
+}));
+jest.mock('react-native-keychain', () => ({
+  setGenericPassword: jest.fn(),
+  getGenericPassword: jest.fn(),
+  resetGenericPassword: jest.fn(),
+}));
+jest.mock('react-native-geolocation-service', () => ({
+  getCurrentPosition: jest.fn(),
+  watchPosition: jest.fn(),
+  clearWatch: jest.fn(),
+  stopObserving: jest.fn(),
+}));
+
 import { ErrorCode } from '@/types';
 import { ERROR_MESSAGES } from '../QRScannerScreen';
 

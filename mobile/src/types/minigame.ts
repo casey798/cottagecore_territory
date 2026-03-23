@@ -10,4 +10,9 @@ export interface MinigamePlayProps {
   timeLimit: number;
   onComplete: (result: MinigameResult) => void;
   puzzleData?: Record<string, unknown>;
+  practiceMode?: boolean;
+  salt?: string;
+  coopPartnerId?: string;
+  /** When true: no API calls are made and no XP is awarded. Used in tutorial demo. */
+  isTutorial?: boolean;
 }

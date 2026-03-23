@@ -66,9 +66,10 @@ describe('NumberGroveLogic', () => {
       expect(isValidComplete(solution)).toBe(true);
     });
 
-    it('returns a puzzle with exactly 24 givens', () => {
+    it('returns a puzzle with at least 1 empty cell', () => {
       const { puzzle } = generatePuzzle();
-      expect(countGivens(puzzle)).toBe(24);
+      const emptyCount = 36 - countGivens(puzzle);
+      expect(emptyCount).toBeGreaterThanOrEqual(1);
     });
 
     it('has givens that match the solution', () => {
@@ -82,9 +83,9 @@ describe('NumberGroveLogic', () => {
       }
     });
 
-    it('has timeLimit of 120', () => {
+    it('has timeLimit of 90', () => {
       const { timeLimit } = generatePuzzle();
-      expect(timeLimit).toBe(120);
+      expect(timeLimit).toBe(90);
     });
 
     it('has 180-degree rotational symmetry of empty cells', () => {

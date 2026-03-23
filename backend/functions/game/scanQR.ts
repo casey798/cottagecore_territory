@@ -196,11 +196,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       }
     }
 
-    // Step 5: Location locked
+    // Step 5: Location locked (compare lockedUntil to handle DynamoDB TTL lag)
     const dateUserLocation = `${today}#${userId}#${locationId}`;
     const lock = await getItem<PlayerLock>('player-locks', { dateUserLocation });
-    if (lock) {
-      return error(ErrorCode.LOCATION_LOCKED, 'This location is locked for you until tomorrow', 403);
+    if (lock && lock.lockedUntil && new Date(lock.lockedUntil) > new Date()) {
+      return error(ErrorCode.LOCATION_LOCKED, 'This location is locked for 1 hour', 403, { lockedUntil: lock.lockedUntil });
     }
 
     // Step 6: Fetch user (needed for cap check in response)
@@ -273,7 +273,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         name: meta.name,
         timeLimit: meta.timeLimit,
         description: meta.description,
-        difficulty: meta.difficulty,
+        difficulty: meta.difficulty ?? 'medium',
         completed: wonToday.has(id),
       };
     });

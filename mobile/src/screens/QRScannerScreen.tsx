@@ -1,3 +1,4 @@
+// Fixes applied: coop-fix-2
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
@@ -252,6 +253,34 @@ export default function QRScannerScreen() {
     [gps.latitude, gps.longitude, navigateToMinigameSelect, showErrorAndResume],
   );
 
+  const handleDevCoopSkip = useCallback(() => {
+    if (!__DEV__) return;
+    setShowPartnerModal(false);
+
+    const locationId = pendingQrRef.current?.l ?? 'dev-coop-location';
+    const locName = coopLocationName || 'Dev Co-op Location';
+
+    const mockScanResult: ScanQRMinigameResponse = {
+      locationId,
+      locationName: locName,
+      availableMinigames: [
+        { minigameId: 'word-clusters-coop', name: 'Word Clusters Co-op', timeLimit: 180, description: 'Sort 16 words into 4 groups. 8 mistakes allowed.', completed: false },
+        { minigameId: 'pips-coop', name: 'Pips Co-op', timeLimit: 60, description: 'Toggle cells to turn all off', completed: false },
+        { minigameId: 'stone-pairs-coop', name: 'Stone Pairs Co-op', timeLimit: 60, description: 'Find matching pairs', completed: false },
+        { minigameId: 'vine-trail-coop', name: 'Word Hunt Co-op', timeLimit: 180, description: 'Find all the hidden words in the letter grid \u2014 split-screen team challenge', completed: false },
+        { minigameId: 'cipher-stones-coop', name: 'Cipher Stones Co-op', timeLimit: 120, description: 'Decode the message', completed: false },
+        { minigameId: 'potion-logic-coop', name: 'Logic Grid Co-op', timeLimit: 150, description: 'Read the clues. Deduce which ingredient and effect belongs to each potion. Process of elimination.', completed: false },
+      ],
+      xpAvailable: true,
+      locationModifiers: { spaceFact: null, coopOnly: true, firstVisitBonus: false, bonusXP: false, minigameAffinity: null, linkedTo: null },
+    };
+
+    navigateToMinigameSelect(mockScanResult, {
+      userId: 'dev-partner',
+      displayName: 'Dev Partner',
+    });
+  }, [coopLocationName, navigateToMinigameSelect]);
+
   const handlePartnerCancel = useCallback(() => {
     setShowPartnerModal(false);
     pendingQrRef.current = null;
@@ -372,6 +401,7 @@ export default function QRScannerScreen() {
         locationName={coopLocationName}
         onConfirm={handlePartnerConfirm}
         onCancel={handlePartnerCancel}
+        onDevSkip={handleDevCoopSkip}
       />
 
       {/* DEV: Simulate QR scan */}

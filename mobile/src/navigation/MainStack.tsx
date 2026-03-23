@@ -4,6 +4,7 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ClanId, ChestDrop } from '@/types';
 import { useWebSocket } from '@/hooks/useWebSocket';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useGameStore } from '@/store/useGameStore';
 import { getTodayISTString } from '@/utils/time';
 import * as mapApi from '@/api/map';
@@ -22,12 +23,14 @@ import SettingsScreen from '@/screens/SettingsScreen';
 import CharacterCreationScreen from '@/screens/CharacterCreationScreen';
 import SeasonSummaryScreen from '@/screens/SeasonSummaryScreen';
 import FreeRoamCheckInScreen from '@/screens/FreeRoamCheckInScreen';
+import JournalScreen from '@/screens/JournalScreen';
+import TermsAndConditionsScreen from '@/screens/TermsAndConditionsScreen';
 
 export type MainModalParamList = {
-  Map: undefined;
+  Map: { mode?: 'selectSpace'; userAssetId?: string } | undefined;
   ClanScoreboard: undefined;
   PlayerProfile: undefined;
-  AssetInventory: undefined;
+  AssetInventory: { fromSpaceId?: string } | undefined;
   QRScanner: { locationId?: string; locationName?: string } | undefined;
   MinigameSelect: {
     locationId: string;
@@ -55,23 +58,23 @@ export type MainModalParamList = {
     clanTodayXp?: number;
     chestDrop?: ChestDrop;
     locationLocked?: boolean;
+    lockedUntil?: string;
     locationId?: string;
     locationName?: string;
     minigameId?: string;
     sessionId?: string;
     practiceMode?: boolean;
-    bonusXpTriggered?: boolean;
-    linkedLocation?: { locationId: string; name: string } | null;
   };
   SpaceSentiment: {
     sessionId: string;
+    locationId: string;
     locationName: string;
   };
   SpaceDecoration: {
     spaceId: string;
     spaceName: string;
     clan: ClanId;
-    gridCells: Array<{ x: number; y: number }>;
+    gridCells: Array<{ x: number; y: number }>;  // grid indices for decoration canvas
     polygonPoints?: Array<{ x: number; y: number }>;
     userAssetId?: string;
   };
@@ -80,6 +83,8 @@ export type MainModalParamList = {
   Settings: undefined;
   CharacterCreation: undefined;
   FreeRoamCheckIn: undefined;
+  Journal: undefined;
+  TermsAndConditions: { mode: 'consent' | 'view' };
 };
 
 const ModalStack = createNativeStackNavigator<MainModalParamList>();
@@ -95,6 +100,13 @@ export function MainStack() {
   useEffect(() => {
     if (checkedRef.current) return;
     checkedRef.current = true;
+
+    // Issue #19: If user skipped tutorial without creating a character,
+    // redirect to CharacterCreation before anything else.
+    const { displayName, selectedPresetId } = useAuthStore.getState();
+    if (!displayName || selectedPresetId == null) {
+      navigation.navigate('CharacterCreation');
+    }
 
     (async () => {
       // Daily info safety net — catch missed FCM + WS entirely
@@ -201,6 +213,16 @@ export function MainStack() {
         name="FreeRoamCheckIn"
         component={FreeRoamCheckInScreen}
         options={{ headerShown: false, presentation: 'fullScreenModal' }}
+      />
+      <ModalStack.Screen
+        name="Journal"
+        component={JournalScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <ModalStack.Screen
+        name="TermsAndConditions"
+        component={TermsAndConditionsScreen}
+        options={{ presentation: 'modal' }}
       />
     </ModalStack.Navigator>
   );

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ViewStyle } from 'react-native';
+import { View, Text, Image, TouchableOpacity, StyleSheet, ViewStyle } from 'react-native';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { CHARACTER_PRESETS, CharacterPreset } from '@/utils/characterPresets';
@@ -24,15 +24,18 @@ export default function PresetPicker({
             key={preset.id}
             style={[
               styles.card,
-              { backgroundColor: preset.color },
               isSelected ? styles.cardSelected : styles.cardUnselected,
             ]}
             onPress={() => onSelect(preset)}
             activeOpacity={0.7}
           >
-            <Text style={styles.emoji}>{preset.emoji}</Text>
-            <Text style={styles.label} numberOfLines={2}>
-              {preset.label}
+            <Image
+              source={preset.icon}
+              style={styles.icon}
+              resizeMode="contain"
+            />
+            <Text style={styles.label} numberOfLines={1}>
+              {preset.name}
             </Text>
           </TouchableOpacity>
         );
@@ -49,27 +52,29 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   card: {
-    width: 72,
-    height: 88,
+    width: 80,
+    height: 96,
     borderRadius: 12,
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 2,
-    paddingHorizontal: 4,
+    backgroundColor: PALETTE.parchmentBg,
+    paddingVertical: 6,
   },
   cardSelected: {
     borderColor: PALETTE.honeyGold,
   },
   cardUnselected: {
-    borderColor: `${PALETTE.stoneGrey}4D`, // 0.3 opacity
+    borderColor: PALETTE.stoneGrey,
   },
-  emoji: {
-    fontSize: 40,
+  icon: {
+    width: 64,
+    height: 64,
   },
   label: {
     fontFamily: FONTS.bodyRegular,
     fontSize: 11,
-    color: PALETTE.cream,
+    color: PALETTE.darkBrown,
     textAlign: 'center',
     marginTop: 2,
   },

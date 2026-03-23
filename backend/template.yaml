@@ -58,6 +58,7 @@ Globals:
         LOCATION_MASTER_CONFIG_TABLE: !Ref LocationMasterConfigTable
         CLUSTER_WEIGHT_CONFIG_TABLE: !Ref ClusterWeightConfigTable
         CLUSTERING_RUNS_TABLE: !Ref ClusteringRunsTable
+        CLUSTER_HISTORY_TABLE: !Ref ClusterHistoryTable
 
 # ---------------------------------------------------------------------------
 # Resources
@@ -605,6 +606,22 @@ Resources:
         AttributeName: expiresAt
         Enabled: true
 
+  ClusterHistoryTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-cluster-history
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: userId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
+      KeySchema:
+        - AttributeName: userId
+          KeyType: HASH
+        - AttributeName: date
+          KeyType: RANGE
+
   # =========================================================================
   # Lambda Authorizer
   # =========================================================================
@@ -744,6 +761,39 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  GetJournalFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getJournal
+      CodeUri: functions/player/
+      Handler: getJournal.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerLocksTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/journal
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getJournal.ts
+        External:
+          - '@aws-sdk/*'
+
   SearchPlayerFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -860,6 +910,60 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - updateFcmToken.ts
+        External:
+          - '@aws-sdk/*'
+
+  UpdateTutorialDoneFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-updateTutorialDone
+      CodeUri: functions/player/
+      Handler: updateTutorialDone.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/tutorialDone
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - updateTutorialDone.ts
+        External:
+          - '@aws-sdk/*'
+
+  AcceptTcFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-acceptTc
+      CodeUri: functions/player/
+      Handler: acceptTc.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /player/acceptTc
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - acceptTc.ts
         External:
           - '@aws-sdk/*'
 
@@ -1107,6 +1211,8 @@ Resources:
             TableName: !Ref PlayerLocksTable
         - DynamoDBCrudPolicy:
             TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssignmentsTable
       Events:
         Api:
           Type: Api
@@ -1153,6 +1259,8 @@ Resources:
             TableName: !Ref AssetCatalogTable
         - DynamoDBCrudPolicy:
             TableName: !Ref WsConnectionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
         - Statement:
             - Effect: Allow
               Action:
@@ -2064,6 +2172,33 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - setDailyConfig.ts
+        External:
+          - '@aws-sdk/*'
+
+  SetQuietModeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-setQuietMode
+      CodeUri: functions/admin/
+      Handler: setQuietMode.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/daily/quiet-mode
+            Method: PATCH
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - setQuietMode.ts
         External:
           - '@aws-sdk/*'
 
@@ -3295,6 +3430,10 @@ Resources:
             TableName: !Ref LocationMasterConfigTable
         - DynamoDBCrudPolicy:
             TableName: !Ref ClusteringRunsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterHistoryTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterWeightConfigTable
     Metadata:
       BuildMethod: esbuild
       BuildProperties:
@@ -3887,11 +4026,14 @@ Resources:
       FunctionName: !Sub grovewars-${Stage}-exportCheckins
       CodeUri: functions/admin/
       Handler: exportCheckins.handler
+      Timeout: 60
       Policies:
         - DynamoDBCrudPolicy:
             TableName: !Ref CheckInsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
       Events:
         Api:
           Type: Api
@@ -3933,6 +4075,138 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - exportNotificationHistory.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportLocationSummaryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportLocationSummary
+      CodeUri: functions/admin/
+      Handler: exportLocationSummary.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/location-summary
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportLocationSummary.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportAssetCollectionByClanFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportAssetCollectionByClan
+      CodeUri: functions/admin/
+      Handler: exportAssetCollectionByClan.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AssetCatalogTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/asset-collection-by-clan
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportAssetCollectionByClan.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportAssetDropsByLocationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportAssetDropsByLocation
+      CodeUri: functions/admin/
+      Handler: exportAssetDropsByLocation.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref AssetCatalogTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/asset-collection-by-location
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportAssetDropsByLocation.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportClusterHistoryFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportClusterHistory
+      CodeUri: functions/admin/
+      Handler: exportClusterHistory.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClusterHistoryTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/cluster-history
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportClusterHistory.ts
         External:
           - '@aws-sdk/*'
 

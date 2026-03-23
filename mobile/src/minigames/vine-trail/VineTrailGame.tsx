@@ -6,9 +6,13 @@ import {
   StyleSheet,
   Dimensions,
   Animated,
-  LayoutChangeEvent,
+  ImageBackground,
+  Modal,
+  Pressable,
 } from 'react-native';
 import Svg, { Line, Circle } from 'react-native-svg';
+import { PALETTE } from '@/constants/colors';
+import { FONTS } from '@/constants/fonts';
 import { vineTrailPacks } from './vineTrailPacks';
 import {
   initGame,
@@ -34,27 +38,20 @@ const cellSize = Math.floor((screenWidth - GRID_PADDING * 2 - GRID_GAP * (COLS -
 const gridWidth = cellSize * COLS + GRID_GAP * (COLS - 1);
 const gridHeight = cellSize * ROWS + GRID_GAP * (ROWS - 1);
 
-const COLORS = {
-  parchment: '#F5EACB',
-  darkBrown: '#3D2B1F',
-  honeyGold: '#D4A843',
-  softGreen: '#7CAA5E',
-  mutedRose: '#C48B8B',
-  warmBrown: '#8B6914',
-  cream: '#FFF5DC',
-  altFlash: '#A0D080',
-  neutralConnector: '#A0937D',
-};
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
-const CONNECTOR_COLORS = [
-  '#E07A5F', // terracotta
-  '#3D9970', // emerald
-  '#7B6CF6', // lavender
-  '#F4A261', // sandy orange
-  '#2196F3', // sky blue
-  '#E91E8C', // rose
-  '#81B29A', // sage
+// Per-word connector colors mapped to nearest PALETTE constants
+const WORD_COLORS = [
+  PALETTE.mutedRose,   // closest PALETTE match to #E07A5F (terracotta)
+  PALETTE.softGreen,   // closest PALETTE match to #3D9970 (emerald)
+  PALETTE.softBlue,    // closest PALETTE match to #7B6CF6 (lavender — no purple in PALETTE)
+  PALETTE.amberLight,  // closest PALETTE match to #F4A261 (sandy orange)
+  PALETTE.playerBlue,  // closest PALETTE match to #2196F3 (sky blue)
+  PALETTE.errorRed,    // closest PALETTE match to #E91E8C (rose)
+  PALETTE.deepGreen,   // closest PALETTE match to #81B29A (sage)
 ];
+
+const ALT_FLASH_COLOR = PALETTE.softGreen; // closest PALETTE match to #A0D080
 
 function hexToRgb(hex: string): { r: number; g: number; b: number } {
   const h = hex.replace('#', '');
@@ -81,13 +78,12 @@ function formatTime(seconds: number, limit: number): string {
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
 }
 
-export default function VineTrailGame({ sessionId, timeLimit, onComplete }: MinigamePlayProps) {
+export default function VineTrailGame({ sessionId, timeLimit, onComplete, practiceMode }: MinigamePlayProps) {
   const [pack] = useState(() => {
     const idx = Math.floor(Math.random() * vineTrailPacks.length);
     return vineTrailPacks[idx];
   });
   const [state, setState] = useState<VineTrailState>(() => initGame(pack));
-  const [gridOffset, setGridOffset] = useState({ x: 0, y: 0 });
 
   // Assign each word a connector color: spangram always gets index 0
   const wordColorMap = useMemo(() => {
@@ -95,13 +91,14 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
     let colorIdx = 1; // start at 1 since 0 is reserved for spangram
     state.words.forEach((w, i) => {
       if (w.isSpangram) {
-        map.set(i, CONNECTOR_COLORS[0]);
+        map.set(i, WORD_COLORS[0]);
       } else {
-        map.set(i, CONNECTOR_COLORS[colorIdx % CONNECTOR_COLORS.length]);
+        map.set(i, WORD_COLORS[colorIdx % WORD_COLORS.length]);
         colorIdx++;
       }
     });
     return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.words.length]); // stable after init
 
   // Animation refs
@@ -113,7 +110,7 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
   ).current;
   const hintOpacity = useRef(new Animated.Value(0)).current;
   const [flashCells, setFlashCells] = useState<Set<string>>(new Set());
-  const [flashColor, setFlashColor] = useState<string>(COLORS.softGreen);
+  const [flashColor, setFlashColor] = useState<string>(PALETTE.softGreen);
   const [fadingPath, setFadingPath] = useState<CellCoord[] | null>(null);
   const fadeAnim = useRef(new Animated.Value(1)).current;
 
@@ -123,6 +120,16 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
   const pendingResultRef = useRef<MinigameResult | null>(null);
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
+
+  // How to Play state + pause refs
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+
+  // setTimeout refs for cleanup
+  const winDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const alreadyFoundTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const finishGame = useCallback(
     (outcome: 'win' | 'lose' | 'timeout') => {
@@ -158,6 +165,7 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
   // Timer
   useEffect(() => {
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       setState(prev => {
         if (prev.gameOver) return prev;
         return tickTimer(prev, timeLimit);
@@ -171,11 +179,32 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
     if (!state.gameOver || gameOverHandled.current) return;
     gameOverHandled.current = true;
     if (state.won) {
-      setTimeout(() => finishGame('win'), 1000);
+      winDelayRef.current = setTimeout(() => {
+        winDelayRef.current = null;
+        finishGame('win');
+      }, 1000);
     } else {
       finishGame('timeout');
     }
   }, [state.gameOver, state.won, finishGame]);
+
+  // Cleanup all setTimeout refs on unmount
+  useEffect(() => {
+    return () => {
+      if (winDelayRef.current !== null) {
+        clearTimeout(winDelayRef.current);
+        winDelayRef.current = null;
+      }
+      if (flashTimerRef.current !== null) {
+        clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = null;
+      }
+      if (alreadyFoundTimerRef.current !== null) {
+        clearTimeout(alreadyFoundTimerRef.current);
+        alreadyFoundTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // Hint timer - clear after 3 seconds
   useEffect(() => {
@@ -202,6 +231,20 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
     };
   }, [state.hintActive, hintOpacity]);
 
+  // How to Play callbacks
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
+
   const handleTap = useCallback((row: number, col: number) => {
     setState(prev => tapCell(prev, [row, col]));
   }, []);
@@ -225,11 +268,12 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
           // Flash canonical path with alt color
           const flashSet = new Set<string>();
           canonicalPath.forEach(([r, c]) => flashSet.add(`${r},${c}`));
-          setFlashColor(COLORS.altFlash);
+          setFlashColor(ALT_FLASH_COLOR);
           setFlashCells(flashSet);
-          setTimeout(() => {
+          flashTimerRef.current = setTimeout(() => {
+            flashTimerRef.current = null;
             setFlashCells(new Set());
-            setFlashColor(COLORS.softGreen);
+            setFlashColor(PALETTE.softGreen);
           }, 800);
         }
 
@@ -254,9 +298,12 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
         // Flash already found cells
         const flashSet = new Set<string>();
         canonicalPath.forEach(([r, c]) => flashSet.add(`${r},${c}`));
-        setFlashColor(COLORS.honeyGold);
+        setFlashColor(PALETTE.honeyGold);
         setFlashCells(flashSet);
-        setTimeout(() => setFlashCells(new Set()), 400);
+        alreadyFoundTimerRef.current = setTimeout(() => {
+          alreadyFoundTimerRef.current = null;
+          setFlashCells(new Set());
+        }, 400);
       }
 
       return newState;
@@ -271,15 +318,9 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
     setState(prev => getHint(prev));
   }, []);
 
-  const onGridLayout = useCallback((e: LayoutChangeEvent) => {
-    e.target.measureInWindow((x: number, y: number) => {
-      setGridOffset({ x, y });
-    });
-  }, []);
-
   // Determine connector color based on which word the current path might be building
   const activeConnectorColor = useMemo(() => {
-    if (state.selectedPath.length === 0) return COLORS.neutralConnector;
+    if (state.selectedPath.length === 0) return PALETTE.stoneGrey;
     // Check if selectedPath is a prefix of any unfound word's canonical path
     for (let wi = 0; wi < state.words.length; wi++) {
       const w = state.words[wi];
@@ -293,9 +334,9 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
           break;
         }
       }
-      if (match) return wordColorMap.get(wi) ?? COLORS.neutralConnector;
+      if (match) return wordColorMap.get(wi) ?? PALETTE.stoneGrey;
     }
-    return COLORS.neutralConnector;
+    return PALETTE.stoneGrey;
   }, [state.selectedPath, state.words, wordColorMap]);
 
   // Build cell state lookup
@@ -327,28 +368,28 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
     for (let r = 0; r < ROWS; r++) {
       for (let c = 0; c < COLS; c++) {
         const key = `${r},${c}`;
-        let bg = COLORS.parchment;
-        let letterColor = COLORS.darkBrown;
+        let bg = PALETTE.parchmentBg;
+        let letterColor = PALETTE.darkBrown;
         let border = false;
 
         if (flashCells.has(key)) {
           bg = flashColor;
-          letterColor = COLORS.cream;
+          letterColor = PALETTE.cream;
         } else if (foundCells.has(key)) {
           if (spangramCells.has(key)) {
-            bg = COLORS.honeyGold;
-            letterColor = COLORS.cream;
+            bg = PALETTE.honeyGold;
+            letterColor = PALETTE.cream;
             border = true;
           } else {
-            bg = COLORS.softGreen;
-            letterColor = COLORS.cream;
+            bg = PALETTE.softGreen;
+            letterColor = PALETTE.cream;
           }
         } else if (selectedSet.has(key)) {
-          bg = blendColorOver(COLORS.parchment, activeConnectorColor, 0.3);
-          letterColor = COLORS.darkBrown;
+          bg = blendColorOver(PALETTE.parchmentBg, activeConnectorColor, 0.3);
+          letterColor = PALETTE.darkBrown;
         } else if (hintSet.has(key)) {
-          bg = COLORS.mutedRose;
-          letterColor = COLORS.cream;
+          bg = PALETTE.mutedRose;
+          letterColor = PALETTE.cream;
         }
 
         map.set(key, { bg, letterColor, border });
@@ -378,12 +419,15 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
   });
 
   return (
-    <View style={styles.container}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
       {/* Top bar */}
       <View style={styles.topBar}>
         <Text style={styles.timerText}>{formatTime(state.timeElapsed, timeLimit)}</Text>
         <Text style={styles.themeText}>{state.pack.theme}</Text>
         <Text style={styles.countText}>{foundCount} / {totalCount}</Text>
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Word tracker pills */}
@@ -405,7 +449,7 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
       </View>
 
       {/* Grid */}
-      <View style={styles.gridContainer} onLayout={onGridLayout}>
+      <View style={styles.gridContainer}>
         {Array.from({ length: ROWS }, (_, row) => (
           <View key={row} style={styles.gridRow}>
             {Array.from({ length: COLS }, (_, col) => {
@@ -496,7 +540,7 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
                     y1={prev.y}
                     x2={curr.x}
                     y2={curr.y}
-                    stroke={COLORS.honeyGold}
+                    stroke={PALETTE.honeyGold}
                     strokeWidth={3}
                     opacity={0.7}
                   />
@@ -547,21 +591,62 @@ export default function VineTrailGame({ sessionId, timeLimit, onComplete }: Mini
       {/* Spangram hint */}
       <Text style={styles.spangramHint}>{state.pack.spangramHint}</Text>
 
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Word Hunt</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} You are given a grid of letters and a list of hidden words to find.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap letters one at a time to build a path spelling out a hidden word.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Each letter must be adjacent to the previous one {'\u2014'} including diagonals.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap Submit when you have spelled a word, or Clear to start over.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Every letter in the grid belongs to exactly one word {'\u2014'} no letter is wasted.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} One special word (the theme word) is highlighted in gold when found.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Find all the words before time runs out to win.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: The theme word usually connects two edges of the grid. Start by looking for the longest path.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Game complete overlay */}
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: COLORS.parchment,
     alignItems: 'center',
     paddingTop: 8,
   },
@@ -574,23 +659,37 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   timerText: {
+    fontFamily: FONTS.bodySemiBold,
     fontSize: 20,
-    fontWeight: '700',
-    color: COLORS.darkBrown,
+    color: PALETTE.darkBrown,
     fontVariant: ['tabular-nums'],
   },
   themeText: {
+    fontFamily: FONTS.bodySemiBold,
     fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.warmBrown,
+    color: PALETTE.warmBrown,
     textAlign: 'center',
     flex: 1,
     marginHorizontal: 8,
   },
   countText: {
+    fontFamily: FONTS.bodySemiBold,
     fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.darkBrown,
+    color: PALETTE.darkBrown,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 8,
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
   wordTracker: {
     flexDirection: 'row',
@@ -605,26 +704,27 @@ const styles = StyleSheet.create({
     paddingVertical: 2,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: COLORS.warmBrown,
+    borderColor: PALETTE.warmBrown,
     backgroundColor: 'transparent',
   },
   wordPillFound: {
-    backgroundColor: COLORS.softGreen,
-    borderColor: COLORS.softGreen,
+    backgroundColor: PALETTE.softGreen,
+    borderColor: PALETTE.softGreen,
   },
   wordPillSpangram: {
-    borderColor: COLORS.honeyGold,
+    borderColor: PALETTE.honeyGold,
     borderWidth: 2,
   },
   wordPillText: {
+    fontFamily: FONTS.bodyRegular,
     fontSize: 9,
-    color: COLORS.warmBrown,
+    color: PALETTE.warmBrown,
     letterSpacing: 1,
   },
   wordPillTextFound: {
-    color: COLORS.cream,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.cream,
     fontSize: 10,
-    fontWeight: '600',
     letterSpacing: 0,
   },
   gridContainer: {
@@ -647,14 +747,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: COLORS.warmBrown,
+    borderColor: PALETTE.warmBrown,
   },
   cellSpangramBorder: {
     borderWidth: 2,
-    borderColor: COLORS.honeyGold,
+    borderColor: PALETTE.honeyGold,
   },
   cellLetter: {
     fontSize: cellSize * 0.45,
+    fontFamily: FONTS.bodyBold,
     fontWeight: '700',
   },
   svgOverlay: {
@@ -671,9 +772,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   selectedWord: {
+    fontFamily: FONTS.bodyBold,
     fontSize: 22,
-    fontWeight: '700',
-    color: COLORS.darkBrown,
+    color: PALETTE.darkBrown,
     letterSpacing: 2,
   },
   buttonRow: {
@@ -690,36 +791,86 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   clearButton: {
-    backgroundColor: COLORS.warmBrown,
+    backgroundColor: PALETTE.warmBrown,
   },
   submitButton: {
-    backgroundColor: COLORS.softGreen,
+    backgroundColor: PALETTE.softGreen,
   },
   hintButton: {
-    backgroundColor: COLORS.mutedRose,
+    backgroundColor: PALETTE.mutedRose,
   },
   hintButtonDisabled: {
-    backgroundColor: '#C4C4C4',
+    backgroundColor: PALETTE.parchmentLight,
   },
   buttonText: {
+    fontFamily: FONTS.bodySemiBold,
     fontSize: 15,
-    fontWeight: '600',
-    color: COLORS.cream,
+    color: PALETTE.cream,
   },
   submitButtonText: {
+    fontFamily: FONTS.bodyBold,
     fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.cream,
+    color: PALETTE.cream,
   },
   hintButtonTextDisabled: {
-    color: '#999',
+    color: PALETTE.stoneGrey,
   },
   spangramHint: {
+    fontFamily: FONTS.bodyRegular,
     marginTop: 10,
     fontSize: 13,
     fontStyle: 'italic',
-    color: COLORS.warmBrown,
+    color: PALETTE.warmBrown,
     textAlign: 'center',
     paddingHorizontal: 20,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

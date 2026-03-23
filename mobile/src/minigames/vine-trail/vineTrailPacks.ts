@@ -10,7 +10,6 @@ export interface VineTrailPack {
   spangramHint: string;
   grid: string[][];
   words: VineTrailWord[];
-  hintWords: string[];
 }
 
 export const vineTrailPacks: VineTrailPack[] = [
@@ -37,7 +36,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "TROWEL", path: [[3,1],[4,1],[5,1],[6,1],[7,2],[7,3]], isSpangram: false },
       { word: "SHEARS", path: [[4,4],[5,3],[6,2],[6,3],[5,2],[4,2]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-002",
@@ -62,7 +60,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "STREAM", path: [[1,3],[2,4],[1,5],[2,5],[3,4],[4,3]], isSpangram: false },
       { word: "MISTED", path: [[5,0],[6,1],[7,2],[7,1],[7,0],[6,0]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-003",
@@ -87,7 +84,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "LOOSEN", path: [[0,5],[1,5],[2,4],[3,5],[4,5],[5,4]], isSpangram: false },
       { word: "SIFTED", path: [[6,4],[6,3],[6,2],[7,2],[7,1],[7,0]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-004",
@@ -112,7 +108,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "DIBBLE", path: [[1,1],[2,1],[3,1],[2,2],[3,2],[4,3]], isSpangram: false },
       { word: "SHOVEL", path: [[6,2],[7,2],[6,1],[7,1],[7,0],[6,0]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-005",
@@ -137,7 +132,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "CACTUS", path: [[1,5],[2,5],[3,5],[4,5],[3,4],[2,4]], isSpangram: false },
       { word: "FLOWER", path: [[7,0],[6,1],[5,0],[4,1],[5,2],[6,3]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-006",
@@ -162,7 +156,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "COYOTE", path: [[6,1],[7,0],[7,1],[7,2],[6,3],[5,4]], isSpangram: false },
       { word: "SQUIRREL", path: [[0,0],[0,1],[0,2],[0,3],[0,4],[1,5],[2,5],[3,5]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-007",
@@ -187,7 +180,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SNEAKS", path: [[0,3],[0,4],[1,5],[2,5],[3,4],[4,3]], isSpangram: false },
       { word: "SPRINT", path: [[1,1],[2,1],[3,1],[4,2],[5,3],[6,3]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-008",
@@ -212,7 +204,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "CUCKOO", path: [[5,1],[5,2],[5,3],[6,4],[7,5],[7,4]], isSpangram: false },
       { word: "MAGPIE", path: [[5,0],[6,1],[7,0],[6,0],[7,1],[6,2]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-009",
@@ -237,7 +228,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SHREWS", path: [[4,5],[5,5],[6,4],[7,3],[7,4],[6,3]], isSpangram: false },
       { word: "MARMOT", path: [[6,0],[7,0],[7,1],[7,2],[6,1],[6,2]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-010",
@@ -262,7 +252,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "BURROW", path: [[1,3],[1,4],[2,3],[3,4],[2,4],[3,3]], isSpangram: false },
       { word: "GATHER", path: [[5,5],[5,4],[6,3],[5,2],[6,1],[6,0]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-011",
@@ -287,7 +276,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "LOAVES", path: [[1,3],[2,2],[3,2],[4,1],[5,1],[6,1]], isSpangram: false },
       { word: "CRUSTY", path: [[6,3],[7,3],[7,2],[6,2],[7,1],[7,0]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-012",
@@ -312,7 +300,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "TOFFEE", path: [[4,1],[4,2],[4,3],[5,2],[6,1],[5,0]], isSpangram: false },
       { word: "SCONES", path: [[5,4],[6,3],[6,4],[6,5],[7,5],[7,4]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-013",
@@ -337,7 +324,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SPATULA", path: [[0,1],[1,2],[2,3],[3,4],[4,5],[5,4],[6,3]], isSpangram: false },
       { word: "BLENDER", path: [[0,2],[0,3],[0,4],[0,5],[1,5],[2,5],[3,5]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-014",
@@ -362,7 +348,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "POURING", path: [[0,0],[1,0],[2,0],[3,1],[4,2],[4,3],[4,4]], isSpangram: false },
       { word: "FOLDING", path: [[0,1],[0,2],[1,1],[2,2],[3,3],[3,4],[3,5]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-015",
@@ -387,7 +372,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "GINGER", path: [[2,0],[3,1],[4,2],[5,3],[6,3],[7,2]], isSpangram: false },
       { word: "NUTMEG", path: [[3,0],[4,1],[5,0],[6,0],[7,0],[7,1]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-016",
@@ -412,7 +396,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "ZINNIA", path: [[3,1],[4,1],[5,1],[6,1],[7,2],[7,3]], isSpangram: false },
       { word: "DAHLIA", path: [[4,4],[5,3],[6,2],[6,3],[5,2],[4,2]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-017",
@@ -437,7 +420,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "CEDARS", path: [[0,3],[0,4],[1,5],[2,5],[3,4],[4,3]], isSpangram: false },
       { word: "MAPLES", path: [[1,1],[2,1],[3,1],[4,2],[5,3],[6,3]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-018",
@@ -462,7 +444,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "PETALS", path: [[0,5],[1,5],[2,4],[3,5],[4,5],[5,4]], isSpangram: false },
       { word: "SHOOTS", path: [[6,4],[6,3],[6,2],[7,2],[7,1],[7,0]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-019",
@@ -487,7 +468,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SHOOTS", path: [[1,1],[2,1],[3,1],[2,2],[3,2],[4,3]], isSpangram: false },
       { word: "GREENS", path: [[6,2],[7,2],[6,1],[7,1],[7,0],[6,0]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-020",
@@ -512,7 +492,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SHOWER", path: [[0,5],[1,5],[2,5],[3,5],[4,5],[5,4]], isSpangram: false },
       { word: "BREEZE", path: [[6,0],[7,0],[7,1],[6,2],[6,3],[6,4]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-021",
@@ -537,7 +516,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "BENCHES", path: [[0,2],[1,3],[2,2],[3,3],[3,2],[2,1],[1,1]], isSpangram: false },
       { word: "PATIO", path: [[5,0],[6,0],[7,0],[7,1],[6,1]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-022",
@@ -562,7 +540,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SCREEN", path: [[5,0],[6,1],[7,2],[7,1],[7,0],[6,0]], isSpangram: false },
       { word: "MARKERS", path: [[0,0],[1,0],[2,0],[3,0],[4,1],[5,2],[6,3]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-023",
@@ -587,7 +564,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SCROLL", path: [[5,1],[5,2],[5,3],[6,4],[7,5],[7,4]], isSpangram: false },
       { word: "COFFEE", path: [[5,0],[6,1],[7,0],[6,0],[7,1],[6,2]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-024",
@@ -612,7 +588,6 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "SPOONS", path: [[4,5],[5,5],[6,4],[7,3],[7,4],[6,3]], isSpangram: false },
       { word: "STRAWS", path: [[6,0],[7,0],[7,1],[7,2],[6,1],[6,2]], isSpangram: false }
     ],
-    hintWords: []
   },
   {
     id: "pack-025",
@@ -637,6 +612,5 @@ export const vineTrailPacks: VineTrailPack[] = [
       { word: "FIELDS", path: [[3,4],[4,5],[5,4],[6,3],[7,3],[6,2]], isSpangram: false },
       { word: "PLAZA", path: [[4,3],[5,2],[6,1],[5,1],[4,0]], isSpangram: false }
     ],
-    hintWords: []
   }
 ];

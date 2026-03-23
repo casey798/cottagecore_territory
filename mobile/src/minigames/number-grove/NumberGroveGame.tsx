@@ -5,6 +5,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
+  ImageBackground,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -12,6 +15,7 @@ import {
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { NUMBER_FILL_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import {
@@ -31,25 +35,7 @@ const GRID_WIDTH = CELL_SIZE * GRID_SIZE;
 const PAD_BTN_WIDTH = Math.floor((SCREEN_WIDTH * 0.85) / 3);
 const PAD_BTN_HEIGHT = CELL_SIZE;
 
-const COLORS = {
-  cellBg: '#F5EACB',
-  givenCellBg: '#E8D9B0',
-  selectedFill: '#D4A84359',       // #D4A843 at 35% opacity
-  selectedBorder: '#D4A843',
-  sameDigitTint: '#D4A84326',      // #D4A843 at 15% opacity
-  thinBorder: '#8B6914',
-  thickBorder: '#3D2B1F',
-  givenDigit: '#3D2B1F',
-  playerDigit: '#2980B9',
-  conflictDot: '#E74C3C',
-  completedFlash: '#27AE6033',
-  padDisabledText: '#A0937D',
-  padDisabledBg: '#D6CAAD',
-  padBg: '#E8D9B0',
-  padBorder: '#8B6914',
-  padSelectedBorder: '#D4A843',
-  eraseBg: '#D6CAAD',
-} as const;
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 const FLASH_DURATION = 600;
 
@@ -101,37 +87,18 @@ function isBoxComplete(board: number[][], br: number, bc: number): boolean {
   return true;
 }
 
+type PuzzleLoadState =
+  | { status: 'loading' }
+  | { status: 'ready'; puzzle: NumberGrovePuzzle }
+  | { status: 'error' };
+
 // ── Component ────────────────────────────────────────────────────────
 
 export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Element {
-  const { sessionId, timeLimit, onComplete } = props;
+  const { sessionId, timeLimit, onComplete, practiceMode } = props;
 
-  // Generate puzzle on mount
-  const puzzleRef = useRef<NumberGrovePuzzle | null>(null);
-  if (puzzleRef.current === null) {
-    puzzleRef.current = generatePuzzle();
-  }
-  const puzzle = puzzleRef.current;
-  const gameDuration = timeLimit > 0 ? timeLimit : puzzle.timeLimit;
-
-  // Fixed cells (given cells from the puzzle)
-  const fixedRef = useRef<Set<string>>(new Set());
-  if (fixedRef.current.size === 0) {
-    for (let r = 0; r < 6; r++) {
-      for (let c = 0; c < 6; c++) {
-        if (puzzle.puzzle[r][c] !== 0) {
-          fixedRef.current.add(`${r},${c}`);
-        }
-      }
-    }
-  }
-  const fixedCells = fixedRef.current;
-
-  // ── State ──────────────────────────────────────────────────────────
-
-  const [board, setBoard] = useState<number[][]>(() =>
-    puzzle.puzzle.map((row) => [...row]),
-  );
+  const [puzzleState, setPuzzleState] = useState<PuzzleLoadState>({ status: 'loading' });
+  const [board, setBoard] = useState<number[][]>([]);
   const [selectedCell, setSelectedCell] = useState<{ r: number; c: number } | null>(null);
   const [selectedDigit, setSelectedDigit] = useState<number | null>(null);
   const [conflicts, setConflicts] = useState<Set<string>>(() => new Set());
@@ -139,19 +106,74 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
   const [gameOver, setGameOver] = useState(false);
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
-  const [timeLeft, setTimeLeft] = useState(gameDuration);
+  const [timeLeft, setTimeLeft] = useState(NUMBER_FILL_TIME_LIMIT);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
-  const startTimeRef = useRef(Date.now());
+  const startTimeRef = useRef(0);
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
   const flashAnim = useRef(new Animated.Value(1)).current;
+  const fixedRef = useRef<Set<string>>(new Set());
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+  const revealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Loading spinner animation
+  const spinAnim = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 1200,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [spinAnim]);
+
+  // Load puzzle
+  const loadPuzzle = useCallback(() => {
+    setPuzzleState({ status: 'loading' });
+    try {
+      const puzzle = generatePuzzle();
+      setPuzzleState({ status: 'ready', puzzle });
+      setBoard(puzzle.puzzle.map((row) => [...row]));
+      setGameOver(false);
+      setShowCompleteOverlay(false);
+      setTimeLeft(NUMBER_FILL_TIME_LIMIT);
+      completedRef.current = false;
+      const fixed = new Set<string>();
+      for (let r = 0; r < 6; r++) {
+        for (let c = 0; c < 6; c++) {
+          if (puzzle.puzzle[r][c] !== 0) {
+            fixed.add(`${r},${c}`);
+          }
+        }
+      }
+      fixedRef.current = fixed;
+      startTimeRef.current = Date.now();
+    } catch {
+      setPuzzleState({ status: 'error' });
+    }
+  }, []);
+
+  useEffect(() => {
+    loadPuzzle();
+  }, [loadPuzzle]);
+
+  const puzzle = puzzleState.status === 'ready' ? puzzleState.puzzle : null;
+  const fixedCells = fixedRef.current;
+  const gameDuration = timeLimit > 0 ? timeLimit : (puzzle?.timeLimit ?? NUMBER_FILL_TIME_LIMIT);
 
   // ── Timer ──────────────────────────────────────────────────────────
 
   useEffect(() => {
-    if (gameOver) return;
+    if (puzzleState.status !== 'ready' || gameOver) return;
 
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
@@ -164,13 +186,23 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
 
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameOver]);
+  }, [puzzleState.status, gameOver]);
+
+  // Cleanup reveal timer on unmount
+  useEffect(() => {
+    return () => {
+      if (revealTimerRef.current !== null) {
+        clearTimeout(revealTimerRef.current);
+        revealTimerRef.current = null;
+      }
+    };
+  }, []);
 
   // ── Finish helper ──────────────────────────────────────────────────
 
   const finishGame = useCallback(
     (outcome: 'win' | 'lose' | 'timeout') => {
-      if (completedRef.current) return;
+      if (completedRef.current || !puzzle) return;
       completedRef.current = true;
       setGameOver(true);
       setSelectedCell(null);
@@ -191,7 +223,8 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
       if (outcome === 'timeout') {
         // Show solution briefly before overlay
         setBoard(puzzle.solution.map((row) => [...row]));
-        setTimeout(() => {
+        revealTimerRef.current = setTimeout(() => {
+          revealTimerRef.current = null;
           setOverlayResult('lose');
           setShowCompleteOverlay(true);
         }, 800);
@@ -200,7 +233,7 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
         setShowCompleteOverlay(true);
       }
     },
-    [sessionId, puzzle.solution],
+    [sessionId, puzzle],
   );
 
   const handleContinue = useCallback(() => {
@@ -209,6 +242,21 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
       pendingResultRef.current = null;
     }
   }, [onComplete]);
+
+  // ── How to Play ────────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
   // ── Flash animation for completed lines ────────────────────────────
 
@@ -265,7 +313,7 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
 
   const placeDigit = useCallback(
     (digit: number) => {
-      if (gameOver || !selectedCell) return;
+      if (gameOver || !selectedCell || !puzzle) return;
       const { r, c } = selectedCell;
       if (fixedCells.has(`${r},${c}`)) return;
 
@@ -285,7 +333,7 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
 
       checkCompletions(newBoard);
     },
-    [gameOver, selectedCell, fixedCells, board, puzzle.solution, finishGame, checkCompletions],
+    [gameOver, selectedCell, fixedCells, board, puzzle, finishGame, checkCompletions],
   );
 
   // ── Erase ──────────────────────────────────────────────────────────
@@ -327,17 +375,57 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
 
   // ── Render ─────────────────────────────────────────────────────────
 
+  const spinInterpolated = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  // Loading screen
+  if (puzzleState.status === 'loading') {
+    return (
+      <ImageBackground source={plainBg} style={styles.loadingRoot} resizeMode="cover">
+        <Animated.Text
+          style={[styles.spinnerEmoji, { transform: [{ rotate: spinInterpolated }] }]}
+        >
+          {'\uD83C\uDF43'}
+        </Animated.Text>
+        <Text style={styles.loadingText}>Preparing puzzle...</Text>
+      </ImageBackground>
+    );
+  }
+
+  // Error screen
+  if (puzzleState.status === 'error') {
+    return (
+      <ImageBackground source={plainBg} style={styles.loadingRoot} resizeMode="cover">
+        <Text style={styles.errorText}>Could not generate puzzle.</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={loadPuzzle}>
+          <Text style={styles.retryBtnText}>Try Again</Text>
+        </TouchableOpacity>
+      </ImageBackground>
+    );
+  }
+
   const timerFraction = timeLeft / gameDuration;
 
   // Determine which digit the selected cell holds (for same-digit highlight)
   const highlightDigit =
-    selectedCell && board[selectedCell.r][selectedCell.c] !== 0
+    selectedCell && board[selectedCell.r]?.[selectedCell.c] !== 0
       ? board[selectedCell.r][selectedCell.c]
       : selectedDigit;
 
   return (
-    <View style={styles.container}>
-      {/* Timer bar */}
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Top bar */}
+      <View style={styles.topBar}>
+        <View />
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Timer */}
+      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
       <View style={styles.timerBarBg}>
         <View
           style={[
@@ -350,10 +438,6 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
           ]}
         />
       </View>
-      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
-
-      {/* Title */}
-      <Text style={styles.title}>Number Grove</Text>
 
       {/* Grid */}
       <View style={[styles.gridOuter, { width: GRID_WIDTH, height: GRID_WIDTH }]}>
@@ -361,7 +445,7 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
           Array.from({ length: GRID_SIZE }, (__, c) => {
             const key = `${r},${c}`;
             const isFixed = fixedCells.has(key);
-            const value = board[r][c];
+            const value = board[r]?.[c] ?? 0;
             const isSelected =
               selectedCell !== null && selectedCell.r === r && selectedCell.c === c;
             const hasConflict = conflicts.has(key);
@@ -376,18 +460,18 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
             const borderRightWidth = c === 2 ? 3 : c < 5 ? 1 : 0;
             const borderBottomWidth = r === 1 || r === 3 ? 3 : r < 5 ? 1 : 0;
             const borderRightColor =
-              c === 2 ? COLORS.thickBorder : COLORS.thinBorder;
+              c === 2 ? PALETTE.darkBrown : PALETTE.warmBrown;
             const borderBottomColor =
-              r === 1 || r === 3 ? COLORS.thickBorder : COLORS.thinBorder;
+              r === 1 || r === 3 ? PALETTE.darkBrown : PALETTE.warmBrown;
 
             // Layer order: cell bg → selected/same-digit tint → borders → digit → conflict dot
-            const baseBg = isFixed ? COLORS.givenCellBg : COLORS.cellBg;
+            const baseBg = isFixed ? PALETTE.parchmentMid : PALETTE.parchmentBg;
             const tintColor = isSelected
-              ? COLORS.selectedFill
+              ? 'rgba(212, 168, 67, 0.35)'
               : isSameDigit
-                ? COLORS.sameDigitTint
+                ? 'rgba(212, 168, 67, 0.15)'
                 : isFlashing
-                  ? COLORS.completedFlash
+                  ? 'rgba(39, 174, 96, 0.2)'
                   : null;
 
             return (
@@ -432,8 +516,7 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
                     style={[
                       styles.cellDigit,
                       {
-                        color: isFixed ? COLORS.givenDigit : COLORS.playerDigit,
-                        fontFamily: isFixed ? FONTS.bodyBold : FONTS.bodyRegular,
+                        color: isFixed ? PALETTE.darkBrown : PALETTE.playerBlue,
                         fontSize: CELL_SIZE * 0.5,
                       },
                     ]}
@@ -478,18 +561,18 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
                   key={d}
                   activeOpacity={0.7}
                   onPress={() => placeDigit(d)}
-                  disabled={gameOver}
+                  disabled={gameOver || isDigitFull}
                   style={[
                     styles.padBtn,
                     {
                       width: PAD_BTN_WIDTH,
                       height: PAD_BTN_HEIGHT,
                       backgroundColor: isDigitFull
-                        ? COLORS.padDisabledBg
-                        : COLORS.padBg,
+                        ? PALETTE.parchmentLight
+                        : PALETTE.parchmentMid,
                       borderColor: isSelectedPad
-                        ? COLORS.padSelectedBorder
-                        : COLORS.padBorder,
+                        ? PALETTE.honeyGold
+                        : PALETTE.warmBrown,
                       borderWidth: isSelectedPad ? 2.5 : 1.5,
                     },
                   ]}
@@ -499,8 +582,8 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
                       styles.padDigit,
                       {
                         color: isDigitFull
-                          ? COLORS.padDisabledText
-                          : COLORS.givenDigit,
+                          ? PALETTE.stoneGrey
+                          : PALETTE.darkBrown,
                         fontSize: CELL_SIZE * 0.5,
                       },
                     ]}
@@ -523,18 +606,18 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
                   key={d}
                   activeOpacity={0.7}
                   onPress={() => placeDigit(d)}
-                  disabled={gameOver}
+                  disabled={gameOver || isDigitFull}
                   style={[
                     styles.padBtn,
                     {
                       width: PAD_BTN_WIDTH,
                       height: PAD_BTN_HEIGHT,
                       backgroundColor: isDigitFull
-                        ? COLORS.padDisabledBg
-                        : COLORS.padBg,
+                        ? PALETTE.parchmentLight
+                        : PALETTE.parchmentMid,
                       borderColor: isSelectedPad
-                        ? COLORS.padSelectedBorder
-                        : COLORS.padBorder,
+                        ? PALETTE.honeyGold
+                        : PALETTE.warmBrown,
                       borderWidth: isSelectedPad ? 2.5 : 1.5,
                     },
                   ]}
@@ -544,8 +627,8 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
                       styles.padDigit,
                       {
                         color: isDigitFull
-                          ? COLORS.padDisabledText
-                          : COLORS.givenDigit,
+                          ? PALETTE.stoneGrey
+                          : PALETTE.darkBrown,
                         fontSize: CELL_SIZE * 0.5,
                       },
                     ]}
@@ -577,22 +660,108 @@ export default function NumberGroveGame(props: MinigamePlayProps): React.JSX.Ele
         <GameCompleteOverlay
           result={overlayResult}
           xpEarned={overlayResult === 'win' ? 25 : 0}
+          practiceMode={practiceMode}
           onContinue={handleContinue}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Mini Sudoku</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} You have a 6{'\u00D7'}6 grid, partially filled with numbers.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Fill every empty cell so each row has 1 to 6, each column has 1 to 6, and each 2{'\u00D7'}3 box has 1 to 6.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} No number can repeat in a row, column, or box.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a cell to select it, then tap a number below to fill it in.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap Erase to clear a cell you filled in. Given cells (darker) cannot be changed.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} The grid is complete when every cell is correctly filled.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: If a number appears 5 times in the grid, the missing cell in its row, column, or box is forced.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 // ── Styles ───────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: UI.background,
     alignItems: 'center',
     paddingTop: 8,
     paddingBottom: 4,
+  },
+  loadingRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  spinnerEmoji: {
+    fontFamily: FONTS.body,
+    fontSize: 32,
+    marginBottom: 12,
+  },
+  loadingText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+  },
+  errorText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.errorRed,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  retryBtn: {
+    backgroundColor: PALETTE.parchmentDark,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+  },
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+  },
+  timerText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+    color: UI.text,
+    alignSelf: 'flex-start',
+    marginLeft: '5%',
+    marginBottom: 2,
   },
   timerBarBg: {
     width: '90%',
@@ -606,19 +775,19 @@ const styles = StyleSheet.create({
     height: '100%',
     borderRadius: 4,
   },
-  timerText: {
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
     fontFamily: FONTS.bodySemiBold,
-    fontSize: 14,
-    color: UI.text,
-    marginBottom: 4,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
-  title: {
-    fontFamily: FONTS.headerBold,
-    fontSize: 28,
-    color: UI.text,
-    marginBottom: 8,
-  },
-
   // Grid
   gridOuter: {
     position: 'relative',
@@ -630,7 +799,7 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     borderWidth: 3,
-    borderColor: COLORS.thickBorder,
+    borderColor: PALETTE.darkBrown,
     borderRadius: 2,
   },
   cell: {
@@ -654,7 +823,7 @@ const styles = StyleSheet.create({
     right: 1.5,
     bottom: 1.5,
     borderWidth: 3,
-    borderColor: COLORS.selectedBorder,
+    borderColor: PALETTE.honeyGold,
   },
   cellDigit: {
     textAlign: 'center',
@@ -663,7 +832,7 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 2,
     right: 2,
-    backgroundColor: COLORS.conflictDot,
+    backgroundColor: PALETTE.errorRed,
   },
 
   // Number pad
@@ -682,21 +851,69 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   padDigit: {
-    fontFamily: FONTS.bodyBold,
     textAlign: 'center',
   },
   eraseBtn: {
-    backgroundColor: COLORS.eraseBg,
+    backgroundColor: PALETTE.parchmentLight,
     alignItems: 'center',
     justifyContent: 'center',
     borderRadius: 6,
     borderWidth: 1.5,
-    borderColor: COLORS.padBorder,
+    borderColor: PALETTE.warmBrown,
     marginTop: 2,
   },
   eraseBtnText: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 16,
-    color: COLORS.givenDigit,
+    color: PALETTE.darkBrown,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

@@ -1,11 +1,10 @@
 import React, { useMemo } from 'react';
 import {
   Path as SkiaPath,
-  LinearGradient,
-  vec,
+  BlurMask,
   Skia,
 } from '@shopify/react-native-skia';
-import { CLAN_COLORS } from '@/constants/colors';
+import { CLAN_COLORS, PALETTE } from '@/constants/colors';
 import { CapturedSpace, ClanId } from '@/types';
 
 interface Props {
@@ -25,60 +24,58 @@ function buildPolygonPath(points: Array<{ x: number; y: number }>) {
   return path;
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+function clanColorWithOpacity(clan: ClanId, opacity: number): string {
+  const hex = CLAN_COLORS[clan] ?? PALETTE.white;
+  const alpha = Math.round(opacity * 255).toString(16).padStart(2, '0');
+  return `${hex}${alpha}`;
 }
 
-function getBounds(points: Array<{ x: number; y: number }>) {
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const p of points) {
-    if (p.x < minX) minX = p.x;
-    if (p.y < minY) minY = p.y;
-    if (p.x > maxX) maxX = p.x;
-    if (p.y > maxY) maxY = p.y;
-  }
-  return { minX, minY, maxX, maxY };
-}
-
-function SpacePolygon({ space }: { space: CapturedSpace }) {
-  const hex = CLAN_COLORS[space.clan as ClanId] ?? '#FFFFFF';
-
+function SpacePolygon({ space, isSelected }: { space: CapturedSpace; isSelected: boolean }) {
   const polygonPath = useMemo(
     () => (space.polygonPoints ? buildPolygonPath(space.polygonPoints) : null),
     [space.polygonPoints],
   );
 
-  const bounds = useMemo(
-    () => (space.polygonPoints ? getBounds(space.polygonPoints) : null),
-    [space.polygonPoints],
-  );
+  if (!polygonPath) return null;
 
-  if (!polygonPath || !bounds) return null;
+  const clan = space.clan as ClanId;
 
   return (
     <>
-      {/* Inner glow — gradient fill from clan color to transparent */}
-      <SkiaPath
-        path={polygonPath}
-        style="fill"
-      >
-        <LinearGradient
-          start={vec(bounds.minX, bounds.minY)}
-          end={vec(bounds.maxX, bounds.maxY)}
-          colors={[hexToRgba(hex, 0.10), hexToRgba(hex, 0.04)]}
-        />
-      </SkiaPath>
-
-      {/* Border — stroke outline */}
+      {/* Layer 1 — Glow halo: wide blurred stroke */}
       <SkiaPath
         path={polygonPath}
         style="stroke"
-        strokeWidth={2.5}
-        color={hexToRgba(hex, 0.50)}
+        strokeWidth={15}
+        strokeJoin="round"
+        strokeCap="round"
+        color={clanColorWithOpacity(clan, 0.55)}
+      >
+        <BlurMask blur={15} style="normal" respectCTM={true} />
+      </SkiaPath>
+
+      {/* Layer 2 — Crisp border line */}
+      <SkiaPath
+        path={polygonPath}
+        style="stroke"
+        strokeWidth={4}
+        strokeJoin="round"
+        strokeCap="round"
+        color={clanColorWithOpacity(clan, 0.9)}
       />
+
+      {/* Layer 3 — Selection highlight */}
+      {isSelected && (
+        <SkiaPath
+          path={polygonPath}
+          style="stroke"
+          strokeWidth={3.5}
+          strokeJoin="round"
+          strokeCap="round"
+          color={PALETTE.parchment}
+          opacity={0.85}
+        />
+      )}
     </>
   );
 }
@@ -96,6 +93,7 @@ export function MapOverlay({ capturedSpaces, selectedSpaceId }: Props) {
         <SpacePolygon
           key={space.spaceId}
           space={space}
+          isSelected={space.spaceId === selectedSpaceId}
         />
       ))}
     </>

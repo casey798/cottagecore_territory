@@ -21,6 +21,7 @@ export interface AuthResult {
   token: string;
   clan: ClanId | null;
   tutorialDone: boolean;
+  email: string | null;
 }
 
 export async function googleSignIn(): Promise<ApiResponse<AuthResult>> {
@@ -72,6 +73,9 @@ export async function googleSignIn(): Promise<ApiResponse<AuthResult>> {
     }
 
     const result: ApiResponse<AuthResult> = await response.json();
+    if (result.success && result.data) {
+      result.data.email = result.data.email ?? firebaseUser.email ?? null;
+    }
     return result;
   } catch (err) {
     const error = err as { code?: string; message?: string };

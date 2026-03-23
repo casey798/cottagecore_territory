@@ -1,5 +1,6 @@
-import { scan, getItem, updateItem, putItem, query } from './db';
+import { scan, getItem, updateItem, putItem, query, tableName, docClient } from './db';
 import { getTodayISTString } from './time';
+import { isQuietModeActive } from './quietMode';
 import { buildFeatureVectors } from './clusterFeatures';
 import { computePlayerClusters } from './clustering';
 import type {
@@ -7,12 +8,14 @@ import type {
   GameSession,
   PlayerAssignment,
   LocationMasterConfig,
+  ClusterWeightConfig,
   DailyClusteringRun,
   Phase1Cluster,
   PlayerFeatureVector,
 } from './types';
 import { addDays } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
+import { PutCommand } from '@aws-sdk/lib-dynamodb';
 
 // ── Paginated helpers ────────────────────────────────────────────────
 
@@ -205,6 +208,93 @@ export async function runClusteringPipeline(): Promise<DailyClusteringRun> {
   };
 
   await putItem('clustering-runs', run as unknown as Record<string, unknown>);
+
+  // Step 11b: Write daily cluster history snapshots
+  try {
+    // Check if quiet mode is active for today
+    const quietModeActive = await isQuietModeActive();
+
+    // Fetch current cluster-weight-config for the snapshot
+    let weightsSnapshot: Record<string, unknown> | null = null;
+    try {
+      const weightConfig = await getItem<ClusterWeightConfig>('cluster-weight-config', { configId: 'current' });
+      if (weightConfig) {
+        weightsSnapshot = {
+          weights: weightConfig.weights,
+          coopChances: weightConfig.coopChances ?? null,
+          updatedAt: weightConfig.updatedAt,
+        };
+      }
+    } catch (e) {
+      console.warn('[clustering] Failed to fetch cluster-weight-config for snapshot (non-fatal):', e);
+    }
+
+    // Build a lookup from userId → feature vector
+    const featureVectorMap = new Map<string, PlayerFeatureVector>();
+    for (const fv of validVectors) {
+      featureVectorMap.set(fv.userId, fv);
+    }
+
+    // Write history records in batches of 25 using conditional puts (idempotent)
+    const historyTableName = tableName('cluster-history');
+    const assignedUserIds = Object.keys(clusterResult.assignments);
+    const HISTORY_BATCH_SIZE = 25;
+
+    for (let i = 0; i < assignedUserIds.length; i += HISTORY_BATCH_SIZE) {
+      const batch = assignedUserIds.slice(i, i + HISTORY_BATCH_SIZE);
+      await Promise.all(
+        batch.map(async (uid) => {
+          const cluster = clusterResult.assignments[uid];
+          const fv = featureVectorMap.get(uid);
+          const featureSnapshot: Record<string, unknown> = {};
+          if (fv) {
+            featureSnapshot.visits = fv.visits;
+            featureSnapshot.avg_duration = fv.avg_duration;
+            featureSnapshot.avg_satisfaction = fv.avg_satisfaction;
+            featureSnapshot.unique_spaces = fv.unique_spaces;
+            featureSnapshot.space_diversity = fv.space_diversity;
+            featureSnapshot.pct_morning = fv.pct_morning;
+            featureSnapshot.pct_he_social = fv.pct_he_social;
+            featureSnapshot.pct_he_personal = fv.pct_he_personal;
+            featureSnapshot.pct_le_social = fv.pct_le_social;
+            featureSnapshot.pct_le_personal = fv.pct_le_personal;
+            featureSnapshot.pct_social_hub = fv.pct_social_hub;
+            featureSnapshot.pct_transit = fv.pct_transit;
+            featureSnapshot.pct_hidden_gem = fv.pct_hidden_gem;
+            featureSnapshot.pct_dead_zone = fv.pct_dead_zone;
+          }
+
+          const item: Record<string, unknown> = {
+            userId: uid,
+            date: today,
+            computedCluster: cluster,
+            clusterComputedAt: computedAt,
+            quietModeActive,
+            featureSnapshot,
+            ...(weightsSnapshot ? { assignmentWeightsSnapshot: weightsSnapshot } : {}),
+          };
+
+          try {
+            await docClient.send(new PutCommand({
+              TableName: historyTableName,
+              Item: item,
+              ConditionExpression: 'attribute_not_exists(userId)',
+            }));
+          } catch (err) {
+            // ConditionalCheckFailedException = already written (idempotent re-run)
+            if ((err as { name?: string }).name !== 'ConditionalCheckFailedException') {
+              console.warn(`[clustering] Failed to write cluster-history for ${uid}:`, err);
+            }
+          }
+        }),
+      );
+    }
+
+    console.log(`[clustering] Wrote ${assignedUserIds.length} cluster-history snapshots for ${today}`);
+  } catch (historyErr) {
+    // Non-fatal — don't fail the entire pipeline if history writes fail
+    console.error('[clustering] Failed to write cluster-history snapshots (non-fatal):', historyErr);
+  }
 
   // Step 12: Log summary
   console.log(

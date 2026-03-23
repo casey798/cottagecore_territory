@@ -28,6 +28,9 @@ export const ENDPOINTS = {
   GAME_CHECKIN: '/game/checkin',
   SUBMIT_LEAVE: '/game/session/leave',
   SEASON_SUMMARY: '/season/summary',
+  PLAYER_JOURNAL: '/player/journal',
+  PLAYER_TUTORIAL_DONE: '/player/tutorialDone',
+  ACCEPT_TC: '/player/acceptTc',
 } as const;
 
 export function SUBMIT_SENTIMENT(sessionId: string): string {

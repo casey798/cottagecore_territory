@@ -40,12 +40,13 @@ export async function handler(
       lastKey = result.lastEvaluatedKey;
     } while (lastKey);
 
-    const header = 'userId,email,displayName,clan,seasonXp,totalWins,currentStreak,bestStreak,lastActiveDate,tutorialDone,createdAt,phase1Cluster';
+    const header = 'userId,email,displayName,clan,seasonXp,totalWins,currentStreak,bestStreak,lastActiveDate,tutorialDone,createdAt,phase1Cluster,computedCluster,clusterComputedAt';
     const rows = allItems.map((u) =>
       csvRow([
         u.userId, u.email, u.displayName, u.clan, u.seasonXp,
         u.totalWins, u.currentStreak, u.bestStreak, u.lastActiveDate,
         u.tutorialDone, u.createdAt, u.phase1Cluster ?? '',
+        u.computedCluster ?? '', u.clusterComputedAt ?? '',
       ])
     );
 

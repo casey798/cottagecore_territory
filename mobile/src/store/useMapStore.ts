@@ -3,7 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import FastImage from 'react-native-fast-image';
 import type { SkImage } from '@shopify/react-native-skia';
-import { AffineMatrix, Location, CapturedSpace, MapConfig } from '@/types';
+import { AffineMatrix, Location, CapturedSpace, MapConfig, SpaceDecoration, AssetCategory } from '@/types';
 import * as mapApi from '@/api/map';
 import * as spacesApi from '@/api/spaces';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -31,14 +31,20 @@ interface MapState {
   capturedSpaces: CapturedSpace[];
   playerPosition: PlayerPosition | null;
   skiaMapImage: SkImage | null;
-  lockedLocationIds: string[];
+  lockedLocationIds: Record<string, string>;
   locksDate: string | null;
+  spaceDecorations: Record<string, SpaceDecoration>;
+  assetCategories: Record<string, AssetCategory>;
+  assetIdMap: Record<string, string>;
+  setAssetCategories: (map: Record<string, AssetCategory>) => void;
+  setAssetIdMap: (map: Record<string, string>) => void;
   setSkiaMapImage: (image: SkImage | null) => void;
   loadMapConfig: () => Promise<void>;
   loadTodayLocations: () => Promise<void>;
   loadCapturedSpaces: () => Promise<void>;
+  loadSpaceDecoration: (spaceId: string, force?: boolean) => Promise<void>;
   updatePlayerPosition: (position: PlayerPosition) => void;
-  lockLocation: (locationId: string) => void;
+  lockLocation: (locationId: string, lockedUntil: string) => void;
   clearLockedFlags: () => void;
   reset: () => void;
 }
@@ -52,8 +58,17 @@ export const useMapStore = create<MapState>()(
   capturedSpaces: [],
   skiaMapImage: null,
   playerPosition: null,
-  lockedLocationIds: [],
+  lockedLocationIds: {},
   locksDate: null,
+  spaceDecorations: {},
+  assetCategories: {},
+  assetIdMap: {},
+
+  setAssetCategories: (map: Record<string, AssetCategory>) =>
+    set((state) => ({ assetCategories: { ...state.assetCategories, ...map } })),
+
+  setAssetIdMap: (map: Record<string, string>) =>
+    set((state) => ({ assetIdMap: { ...state.assetIdMap, ...map } })),
 
   setSkiaMapImage: (image: SkImage | null) => set({ skiaMapImage: image }),
 
@@ -92,9 +107,12 @@ export const useMapStore = create<MapState>()(
     if (__DEV__) console.log('[locations/today] response:', JSON.stringify(result, null, 2));
     if (result.success && result.data) {
       const { lockedLocationIds } = get();
-      const locations = (result.data.locations ?? []).map((loc) =>
-        lockedLocationIds.includes(loc.locationId) ? { ...loc, locked: true } : loc,
-      );
+      const now = new Date();
+      const locations = (result.data.locations ?? []).map((loc) => {
+        const lockedUntil = lockedLocationIds[loc.locationId];
+        const isStillLocked = lockedUntil && new Date(lockedUntil) > now;
+        return isStillLocked ? { ...loc, locked: true } : loc;
+      });
       set({ todayLocations: locations });
     } else {
       console.warn('[locations/today] failed:', result.error?.code, result.error?.message);
@@ -108,17 +126,31 @@ export const useMapStore = create<MapState>()(
     }
   },
 
+  loadSpaceDecoration: async (spaceId: string, force?: boolean) => {
+    if (!force) {
+      const cached = get().spaceDecorations[spaceId];
+      if (cached) return;
+    }
+    const result = await spacesApi.getDecoration(spaceId);
+    if (result.success && result.data) {
+      set((state) => ({
+        spaceDecorations: { ...state.spaceDecorations, [spaceId]: result.data! },
+      }));
+    }
+  },
+
   updatePlayerPosition: (position: PlayerPosition) =>
     set({ playerPosition: position }),
 
-  lockLocation: (locationId: string) =>
+  lockLocation: (locationId: string, lockedUntil: string) =>
     set((state) => ({
       todayLocations: state.todayLocations.map((loc) =>
         loc.locationId === locationId ? { ...loc, locked: true } : loc,
       ),
-      lockedLocationIds: state.lockedLocationIds.includes(locationId)
-        ? state.lockedLocationIds
-        : [...state.lockedLocationIds, locationId],
+      lockedLocationIds: {
+        ...state.lockedLocationIds,
+        [locationId]: lockedUntil,
+      },
       locksDate: getTodayISTString(),
     })),
 
@@ -127,7 +159,7 @@ export const useMapStore = create<MapState>()(
       todayLocations: state.todayLocations.map((loc) =>
         loc.locked ? { ...loc, locked: false } : loc,
       ),
-      lockedLocationIds: [],
+      lockedLocationIds: {},
       locksDate: null,
     })),
 
@@ -139,8 +171,11 @@ export const useMapStore = create<MapState>()(
       capturedSpaces: [],
       skiaMapImage: null,
       playerPosition: null,
-      lockedLocationIds: [],
+      lockedLocationIds: {},
       locksDate: null,
+      spaceDecorations: {},
+      assetCategories: {},
+      assetIdMap: {},
     });
     AsyncStorage.removeItem('grove-wars-map');
   },
@@ -158,7 +193,7 @@ export const useMapStore = create<MapState>()(
           const today = getTodayISTString();
           if (state.locksDate && state.locksDate !== today) {
             useMapStore.setState({
-              lockedLocationIds: [],
+              lockedLocationIds: {},
               locksDate: null,
             });
           }

@@ -19,7 +19,7 @@ export const handler = async (
         status: null,
         resetSeq: 0,
         winnerClan: null,
-        quietMode: true,
+        quietMode: false,
       });
     }
 

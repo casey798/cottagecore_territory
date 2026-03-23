@@ -5,6 +5,10 @@ import {
   StyleSheet,
   Dimensions,
   Animated,
+  ImageBackground,
+  Modal,
+  Pressable,
+  TouchableOpacity,
 } from 'react-native';
 import {
   Canvas,
@@ -18,7 +22,9 @@ import {
   Gesture,
   GestureDetector,
 } from 'react-native-gesture-handler';
+import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { FIREFLY_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
@@ -40,11 +46,7 @@ const GRID_WIDTH = Math.floor(SCREEN_WIDTH * 0.88);
 const CELL_SIZE = Math.floor(GRID_WIDTH / GRID_SIZE);
 const ACTUAL_GRID = CELL_SIZE * GRID_SIZE;
 
-const BG_COLOR = '#1A2E1A';
-const CELL_COLOR = '#243324';
-const CELL_BORDER = '#2D5A27';
-const TIMER_COLOR = '#D4A843';
-const TIMER_DANGER = '#C0392B';
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -109,11 +111,11 @@ function isPathConnected(path: Cell[] | undefined, pair: { start: Cell; end: Cel
 // ─── Component ──────────────────────────────────────────────────────────────
 
 export default function FireflyFlowGame(props: MinigamePlayProps) {
-  const { sessionId, timeLimit, onComplete } = props;
+  const { sessionId, timeLimit, onComplete, practiceMode } = props;
 
   const puzzleRef = useRef(generatePuzzle());
   const puzzle = puzzleRef.current;
-  const gameDuration = timeLimit > 0 ? timeLimit : 90;
+  const gameDuration = timeLimit > 0 ? timeLimit : FIREFLY_TIME_LIMIT;
 
   // React state for rendering
   const [playerPaths, setPlayerPaths] = useState<PlayerPath>(() => {
@@ -130,6 +132,7 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [winFlash, setWinFlash] = useState(false);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   // Refs for gesture callbacks (they capture stale React state otherwise)
   const activeColorRef = useRef<PairColor | null>(null);
@@ -141,6 +144,9 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
+  const winTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
 
   // Pulse animation for completed endpoint dots
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -149,6 +155,7 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
@@ -205,8 +212,13 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
     if (gameOver) return;
     if (validateSolution(puzzle, playerPaths)) {
       setWinFlash(true);
-      const timer = setTimeout(() => finishGame('win'), 400);
-      return () => clearTimeout(timer);
+      winTimeoutRef.current = setTimeout(() => finishGame('win'), 400);
+      return () => {
+        if (winTimeoutRef.current) {
+          clearTimeout(winTimeoutRef.current);
+          winTimeoutRef.current = null;
+        }
+      };
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playerPaths, gameOver]);
@@ -230,6 +242,21 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
       return isPathConnected(path, pair);
     }).length;
   }, [playerPaths, puzzle.pairs]);
+
+  // ─── How-To-Play ─────────────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
   // ─── Touch handling ───────────────────────────────────────────────────────
   // Use refs for all mutable state inside gesture callbacks so we never
@@ -363,10 +390,6 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
 
   // ─── Render ─────────────────────────────────────────────────────────────
 
-  const timerFraction = timeLeft / gameDuration;
-  const timerDanger = timeLeft <= 15;
-  const timerBarColor = timerDanger ? TIMER_DANGER : TIMER_COLOR;
-
   // Build all path data for rendering
   const pathsToRender = useMemo(() => {
     const result: Array<{ color: PairColor; cells: Cell[]; connected: boolean }> = [];
@@ -384,35 +407,43 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
     return result;
   }, [puzzle.pairs, playerPaths, activeColor, drawingPath]);
 
-  // Cells covered by all paths (for "light every tile" tracking)
+  // Cells covered by all paths (tracks which color covers each cell)
   const coveredCells = useMemo(() => {
-    const set = new Set<string>();
-    for (const { cells } of pathsToRender) {
+    const map = new Map<string, PairColor>();
+    for (const { color, cells } of pathsToRender) {
       for (const cell of cells) {
-        set.add(cellKey(cell));
+        map.set(cellKey(cell), color);
       }
     }
-    return set;
+    return map;
   }, [pathsToRender]);
 
   return (
-    <View style={styles.root}>
-      {/* Timer bar */}
-      <View style={styles.timerBarContainer}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Top bar */}
+      <View style={styles.topBar}>
+        <View />
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
+      <Text style={styles.instruction}>Connect the pairs. Light every tile.</Text>
+
+      {/* Timer */}
+      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
+      <View style={styles.timerBarBg}>
         <View
           style={[
-            styles.timerBar,
+            styles.timerBarFill,
             {
-              width: `${timerFraction * 100}%`,
-              backgroundColor: timerBarColor,
+              width: `${(timeLeft / gameDuration) * 100}%`,
+              backgroundColor:
+                timeLeft / gameDuration > 0.25 ? PALETTE.softGreen : PALETTE.mutedRose,
             },
           ]}
         />
       </View>
-
-      {/* Title */}
-      <Text style={styles.title}>Firefly Flow</Text>
-      <Text style={styles.instruction}>Connect the pairs. Light every tile.</Text>
 
       {/* Grid */}
       <View style={styles.gridWrapper}>
@@ -425,7 +456,7 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
                   const x = col * CELL_SIZE;
                   const y = row * CELL_SIZE;
                   const key = `${row},${col}`;
-                  const isLit = coveredCells.has(key);
+                  const coverColor = coveredCells.get(key);
 
                   return (
                     <Group key={key}>
@@ -434,14 +465,15 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
                         y={y + 1}
                         width={CELL_SIZE - 2}
                         height={CELL_SIZE - 2}
-                        color={isLit ? '#2A4A2A' : CELL_COLOR}
+                        color={coverColor ? COLOR_HEX[coverColor] : PALETTE.parchmentBg}
+                        opacity={coverColor ? 0.4 : 1}
                       />
                       <SkiaRect
                         x={x + 1}
                         y={y + 1}
                         width={CELL_SIZE - 2}
                         height={CELL_SIZE - 2}
-                        color={CELL_BORDER}
+                        color={PALETTE.warmBrown}
                         style="stroke"
                         strokeWidth={1}
                       />
@@ -503,7 +535,7 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
                   y={0}
                   width={ACTUAL_GRID}
                   height={ACTUAL_GRID}
-                  color="white"
+                  color={PALETTE.honeyGold}
                   opacity={0.3}
                 />
               )}
@@ -521,10 +553,47 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
+          practiceMode={practiceMode}
           onContinue={handleContinue}
+          xpEarned={overlayResult === 'win' ? 25 : 0}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Connect the Dots</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} A 6{'\u00D7'}6 grid shows pairs of coloured dots.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Draw a path connecting each matching pair.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Paths cannot cross each other.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Every cell on the grid must be covered to win.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a mid-path cell to erase that colour's path and redraw.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Fill every cell {'\u2014'} a solution that connects all pairs but leaves gaps won't count.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
@@ -533,28 +602,55 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: BG_COLOR,
     alignItems: 'center',
+    paddingTop: 8,
   },
-  timerBarContainer: {
+  topBar: {
     width: '100%',
-    height: 8,
-    backgroundColor: '#0D1A0D',
+    height: 48,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginBottom: 4,
   },
-  timerBar: {
-    height: 8,
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  title: {
-    fontFamily: FONTS.headerBold,
-    fontSize: 28,
-    color: '#D4A843',
-    marginTop: 8,
-    textAlign: 'center',
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+  },
+  timerText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    alignSelf: 'flex-start',
+    marginLeft: '5%',
+    marginBottom: 2,
+  },
+  timerBarBg: {
+    width: '90%',
+    height: 8,
+    backgroundColor: PALETTE.stoneGrey,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 2,
+  },
+  timerBarFill: {
+    height: '100%',
+    borderRadius: 4,
   },
   instruction: {
     fontFamily: FONTS.bodyRegular,
     fontSize: 13,
-    color: '#7CAA5E',
+    color: PALETTE.stoneGrey,
     marginTop: 2,
     marginBottom: 12,
     textAlign: 'center',
@@ -571,8 +667,57 @@ const styles = StyleSheet.create({
   pairCount: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 15,
-    color: '#D4A843',
+    color: PALETTE.darkBrown,
     marginBottom: 20,
     textAlign: 'center',
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

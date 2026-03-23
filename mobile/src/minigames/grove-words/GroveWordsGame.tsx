@@ -1,5 +1,5 @@
 /**
- * Grove Words - Wordle-style minigame component (portrait mode).
+ * Wordle - Wordle-style minigame component (portrait mode).
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
@@ -8,12 +8,16 @@ import {
   TouchableOpacity,
   StyleSheet,
   Dimensions,
+  ImageBackground,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { PALETTE, UI, KEYBOARD } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { GROVE_WORDS_TIME_LIMIT } from '@/constants/config';
 
 import { generateClientCompletionHash } from '@/utils/hmac';
-import type { MinigamePlayProps } from '@/types/minigame';
+import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import {
   generatePuzzle,
   evaluateGuess,
@@ -52,6 +56,8 @@ const KEY_V_GAP = 6;
 const KEY_HEIGHT = 56;
 const KB_H_PAD = 16;
 
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
+
 // ── Helper: best state for keyboard coloring ─────────────────────────
 
 type KeyState = LetterResult | 'unused';
@@ -66,12 +72,12 @@ function bestKeyState(current: KeyState, incoming: LetterResult): KeyState {
 // ── Component ────────────────────────────────────────────────────────
 
 export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Element {
-  const { sessionId, timeLimit, onComplete } = props;
+  const { sessionId, timeLimit, onComplete, practiceMode } = props;
 
   // Generate puzzle client-side on mount
   const puzzleRef = useRef(generatePuzzle());
   const targetWord = puzzleRef.current.word;
-  const gameDuration = timeLimit > 0 ? timeLimit : 180;
+  const gameDuration = timeLimit > 0 ? timeLimit : GROVE_WORDS_TIME_LIMIT;
 
   // ── State ──────────────────────────────────────────────────────────
 
@@ -84,10 +90,20 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [timeLeft, setTimeLeft] = useState(gameDuration);
+  const [loseTitle, setLoseTitle] = useState("Time's up!");
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
-  const pendingCompleteRef = useRef<Parameters<typeof onComplete>[0] | null>(null);
+  const pendingResultRef = useRef<MinigameResult | null>(null);
+  const guessesRef = useRef<string[]>([]);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+
+  // Keep guessesRef in sync with guesses state
+  useEffect(() => {
+    guessesRef.current = guesses;
+  }, [guesses]);
 
   // ── Timer (Date.now() deltas) ──────────────────────────────────────
 
@@ -95,12 +111,13 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
     if (gameOver) return;
 
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
 
       if (remaining <= 0) {
-        finishGame('timeout');
+        finishGame('timeout', [...guessesRef.current]);
       }
     }, 200);
 
@@ -111,37 +128,61 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
   // ── Finish helper ──────────────────────────────────────────────────
 
   const finishGame = useCallback(
-    (outcome: 'win' | 'lose' | 'timeout') => {
+    (outcome: 'win' | 'lose' | 'timeout', committedGuesses: string[]) => {
       if (completedRef.current) return;
       completedRef.current = true;
       setGameOver(true);
-      setOverlayResult(outcome === 'win' ? 'win' : 'lose');
-      setShowCompleteOverlay(true);
 
       const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
-      const solved = outcome === 'win';
-      const allGuesses = [...guesses, ...(currentInput.length === WORD_LENGTH ? [currentInput] : [])].filter(Boolean);
-      const completionHash = generateClientCompletionHash(sessionId, outcome, timeTaken);
+      const resultOutcome = outcome === 'timeout' ? 'lose' : outcome;
+      const completionHash = generateClientCompletionHash(sessionId, resultOutcome, timeTaken);
+      const finalGuess = committedGuesses[committedGuesses.length - 1] ?? '';
 
-      pendingCompleteRef.current = {
-        result: outcome,
+      const result: MinigameResult = {
+        result: resultOutcome,
         timeTaken,
         completionHash,
         solutionData: {
-          guesses: allGuesses,
-          solved,
+          guesses: committedGuesses,
+          finalGuess,
+          solved: outcome === 'win',
         },
       };
+
+      pendingResultRef.current = result;
+
+      if (outcome === 'timeout') {
+        setOverlayResult('lose');
+        setShowCompleteOverlay(true);
+      } else {
+        setOverlayResult(outcome === 'win' ? 'win' : 'lose');
+        setShowCompleteOverlay(true);
+      }
     },
-    [guesses, currentInput, sessionId],
+    [sessionId],
   );
 
   const handleContinue = useCallback(() => {
-    if (pendingCompleteRef.current) {
-      onComplete(pendingCompleteRef.current);
-      pendingCompleteRef.current = null;
+    if (pendingResultRef.current) {
+      onComplete(pendingResultRef.current);
+      pendingResultRef.current = null;
     }
   }, [onComplete]);
+
+  // ── How to Play ────────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
   // ── Key press handler ──────────────────────────────────────────────
 
@@ -187,35 +228,14 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
 
         // Check win
         if (result.every((r) => r === 'correct')) {
-          completedRef.current = true;
-          setGameOver(true);
-          setOverlayResult('win');
-          setShowCompleteOverlay(true);
-          const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
-          const completionHash = generateClientCompletionHash(sessionId, 'win', timeTaken);
-          pendingCompleteRef.current = {
-            result: 'win',
-            timeTaken,
-            completionHash,
-            solutionData: { guesses: newGuesses, solved: true },
-          };
+          finishGame('win', newGuesses);
           return;
         }
 
         // Check lose (used all guesses)
         if (newGuesses.length >= MAX_GUESSES) {
-          completedRef.current = true;
-          setGameOver(true);
-          setOverlayResult('lose');
-          setShowCompleteOverlay(true);
-          const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
-          const completionHash = generateClientCompletionHash(sessionId, 'lose', timeTaken);
-          pendingCompleteRef.current = {
-            result: 'lose',
-            timeTaken,
-            completionHash,
-            solutionData: { guesses: newGuesses, solved: false },
-          };
+          setLoseTitle('Out of guesses!');
+          finishGame('lose', newGuesses);
           return;
         }
 
@@ -228,7 +248,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
         setMessage('');
       }
     },
-    [gameOver, currentInput, guesses, results, keyStates, targetWord, sessionId],
+    [gameOver, currentInput, guesses, results, keyStates, targetWord, finishGame],
   );
 
   // ── Render helpers ─────────────────────────────────────────────────
@@ -320,7 +340,15 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
   // ── Render ─────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.container}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Top bar */}
+      <View style={styles.topBar}>
+        <View />
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Timer bar */}
       <View style={styles.timerBarBg}>
         <View
@@ -345,7 +373,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
 
       {/* Keyboard */}
       {!showCompleteOverlay && <View style={styles.keyboard}>
-        {/* Row 1: Q–P (10 keys, full width) */}
+        {/* Row 1: Q-P (10 keys, full width) */}
         <View style={styles.keyboardRow}>
           {KEYBOARD_ROWS[0].map((key) => (
             <TouchableOpacity
@@ -359,7 +387,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
             </TouchableOpacity>
           ))}
         </View>
-        {/* Row 2: A–L (9 keys, centered with half-key offset) */}
+        {/* Row 2: A-L (9 keys, centered with half-key offset) */}
         <View style={[styles.keyboardRow, { paddingHorizontal: (regularKeyWidth + KEY_H_GAP) / 2 }]}>
           {KEYBOARD_ROWS[1].map((key) => (
             <TouchableOpacity
@@ -373,7 +401,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
             </TouchableOpacity>
           ))}
         </View>
-        {/* Row 3: ENTER Z–M DEL */}
+        {/* Row 3: ENTER Z-M DEL */}
         <View style={styles.keyboardRow}>
           {KEYBOARD_ROWS[2].map((key) => {
             const isWide = key === 'ENTER' || key === 'DEL';
@@ -385,7 +413,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
                   styles.key,
                   {
                     width: isWide ? wideKeyWidth : regularKeyWidth,
-                    backgroundColor: isWide ? KEY_COLORS.absent : keyBgColor(key),
+                    backgroundColor: isWide ? KEY_DEFAULT_BG : keyBgColor(key),
                   },
                 ]}
                 onPress={() => handleKey(key)}
@@ -396,7 +424,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
                   style={[
                     styles.keyText,
                     {
-                      color: isWide ? KEY_COLORED_TEXT : keyTextColor(key),
+                      color: isWide ? KEY_DEFAULT_TEXT : keyTextColor(key),
                       fontSize: key === 'ENTER' ? 11 : 13,
                     },
                   ]}
@@ -415,22 +443,74 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
           result={overlayResult}
           xpEarned={overlayResult === 'win' ? 25 : 0}
           correctWord={targetWord}
+          loseTitle={loseTitle}
+          practiceMode={practiceMode}
           onContinue={handleContinue}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Wordle</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Guess the hidden 5-letter word in 6 tries.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Type a word using the keyboard below, then press ENTER to submit.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Each guess must be a valid 5-letter word.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} After each guess, the tiles change colour:
+            </Text>
+            <Text style={styles.modalRule}>
+              {'  '}GREEN {'\u2014'} letter is in the correct spot.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'  '}YELLOW {'\u2014'} letter is in the word but wrong spot.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'  '}GREY {'\u2014'} letter is not in the word at all.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Duplicate letters: if a letter appears more than once in the word, only the matching tiles will light up.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Start with a word that uses common letters like E, A, R, S, T.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 // ── Styles ───────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: UI.background,
     alignItems: 'center',
     paddingTop: 8,
     paddingBottom: 4,
+  },
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
   },
   timerBarBg: {
     width: '90%',
@@ -473,7 +553,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   tileLetter: {
-    fontFamily: FONTS.bodyBold,
     textTransform: 'uppercase',
   },
   keyboard: {
@@ -494,7 +573,67 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   keyText: {
-    fontFamily: FONTS.bodyBold,
     fontSize: 13,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+  },
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

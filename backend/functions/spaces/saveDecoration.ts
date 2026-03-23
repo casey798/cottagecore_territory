@@ -4,6 +4,7 @@ import { getItem, putItem, query, updateItem } from '../../shared/db';
 import { saveDecorationSchema } from '../../shared/schemas';
 import { success, error, ErrorCode } from '../../shared/response';
 import { CapturedSpace, PlayerAsset, User, SpaceDecoration } from '../../shared/types';
+import { getMidnightISTAsISO } from '../../shared/time';
 
 export const handler = async (
   event: APIGatewayProxyEvent
@@ -60,29 +61,60 @@ export const handler = async (
     }
 
     for (const placedAsset of layout.placedAssets) {
-      if (!activeAssetMap.has(placedAsset.assetId)) {
+      const asset = activeAssetMap.get(placedAsset.userAssetId);
+      if (!asset) {
         return error(
           ErrorCode.VALIDATION_ERROR,
-          `Asset ${placedAsset.assetId} not found in inventory or is expired`,
+          `Asset ${placedAsset.userAssetId} not found in inventory or is expired`,
           400
         );
       }
     }
 
-    // Mark placed assets as placed=true in player-assets
-    const placedAssetIds = new Set(layout.placedAssets.map((a) => a.assetId));
+    // Check for assets already placed in another space
+    const existingDecoration = await getItem<SpaceDecoration>('space-decorations', {
+      userSpaceId: `${userId}#${spaceId}`,
+    });
+    const existingAssetIds = new Set(
+      existingDecoration?.layout?.placedAssets?.map((a) => a.userAssetId) ?? []
+    );
+
+    for (const placedAsset of layout.placedAssets) {
+      const asset = activeAssetMap.get(placedAsset.userAssetId);
+      if (asset && asset.placed && !existingAssetIds.has(placedAsset.userAssetId)) {
+        return error(
+          ErrorCode.VALIDATION_ERROR,
+          'One or more assets are already placed in another space',
+          400
+        );
+      }
+    }
+
+    // Mark placed assets as placed=true in player-assets;
+    // assets removed from decoration get placed=false + new midnight IST expiry
+    const placedAssetIds = new Set(layout.placedAssets.map((a) => a.userAssetId));
+    const newMidnightISO = getMidnightISTAsISO();
 
     await Promise.all(
       playerAssets
         .filter((asset) => !asset.expired)
         .map(async (asset) => {
           const shouldBePlaced = placedAssetIds.has(asset.userAssetId);
-          if (asset.placed !== shouldBePlaced) {
+          if (asset.placed && !shouldBePlaced) {
+            // Asset removed from decoration — unplace and set new midnight expiry
+            await updateItem(
+              'player-assets',
+              { userAssetId: asset.userAssetId },
+              'SET placed = :placed, expiresAt = :expiresAt',
+              { ':placed': false, ':expiresAt': newMidnightISO }
+            );
+          } else if (!asset.placed && shouldBePlaced) {
+            // Asset newly placed in decoration
             await updateItem(
               'player-assets',
               { userAssetId: asset.userAssetId },
               'SET placed = :placed',
-              { ':placed': shouldBePlaced }
+              { ':placed': true }
             );
           }
         })

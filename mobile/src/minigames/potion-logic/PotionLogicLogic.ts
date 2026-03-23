@@ -1,4 +1,4 @@
-// PotionLogicLogic.ts — Pure logic for the Potion Logic minigame.
+// PotionLogicLogic.ts — Pure logic for the Logic Grid minigame.
 // Zero React dependencies. Fully unit-testable.
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -484,9 +484,28 @@ export function generatePuzzle(): Puzzle {
     }
   }
 
-  // Ultimate fallback: use 5 direct positives + 1 relational (guaranteed solvable)
-  const fallback = [...shuffle(directPositive).slice(0, 3), ...shuffle(relational).slice(0, 2)];
-  return { solution, clues: fallback };
+  // Ultimate fallback: try all combinations of 3 direct positives + 2 relational
+  for (const dp of [shuffle(directPositive).slice(0, 3)]) {
+    for (let i = 0; i < relational.length; i++) {
+      for (let j = i + 1; j < relational.length; j++) {
+        const candidate = [...dp, relational[i], relational[j]];
+        if (isSolvable(candidate)) {
+          return { solution, clues: candidate };
+        }
+      }
+    }
+  }
+
+  // Last resort: use first 6 clues from the full set (always solvable with enough clues)
+  for (let size = 6; size <= allClues.length; size++) {
+    const candidate = allClues.slice(0, size);
+    if (isSolvable(candidate)) {
+      return { solution, clues: candidate };
+    }
+  }
+
+  // Absolute fallback: return all clues (guaranteed solvable)
+  return { solution, clues: allClues };
 }
 
 // ── Validation ────────────────────────────────────────────────────────

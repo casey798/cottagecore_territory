@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -6,6 +6,9 @@ import {
   Dimensions,
   Animated,
   Pressable,
+  ImageBackground,
+  Modal,
+  TouchableOpacity,
 } from 'react-native';
 import {
   Canvas,
@@ -29,23 +32,17 @@ import { checkWin, type PathWeaverConfig } from './PathWeaverLogic';
 
 // ── Constants ──────────────────────────────────────────────────────────
 
-const TIME_LIMIT = 150;
+const TIME_LIMIT = 180;
 const GRID_PADDING = 16;
-const FILLED_COLOR = '#3D2B1F';
-const REVEALED_COLOR = '#7BA3C4';
-const FLASH_COLOR = '#D4A843';
-const EMPTY_COLOR = '#F5EACB';
-const BORDER_COLOR = '#A0937D';
-const X_COLOR = '#A0937D';
 const FLASH_DURATION = 300;
 const REVEAL_DURATION = 2000;
 const HINT_LOCK_SECONDS = 60;
 const HINT_FADE_MS = 400;
 const HINT_LABEL_MS = 1500;
-const VALIDATION_CORRECT_COLOR = '#27AE60';
-const VALIDATION_INCORRECT_COLOR = '#C0392B';
 const VALIDATION_FLASH_MS = 800;
 const MAX_CELL_REVEALS = 2;
+
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 // Cell state: 0 = empty, 1 = filled, 2 = x-marked
 type CellState = 0 | 1 | 2;
@@ -54,7 +51,7 @@ type LineValidation = 'correct' | 'incorrect' | 'idle';
 // ── Component ──────────────────────────────────────────────────────────
 
 export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Element {
-  const { sessionId, timeLimit: propTimeLimit, onComplete, puzzleData } = props;
+  const { sessionId, timeLimit: propTimeLimit, onComplete, puzzleData, practiceMode } = props;
   const gameDuration = propTimeLimit > 0 ? propTimeLimit : TIME_LIMIT;
 
   // Parse config from puzzleData
@@ -107,9 +104,24 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
   const [revealedCells, setRevealedCells] = useState<Set<string>>(() => new Set());
   const [revealMessage, setRevealMessage] = useState('');
 
+  // How to Play modal state
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
+
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
+  const winTimeoutsRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+
+  // ── Cleanup win sequence timeouts on unmount ──────────────────────────
+
+  useEffect(() => {
+    return () => {
+      winTimeoutsRef.current.forEach(clearTimeout);
+      winTimeoutsRef.current = [];
+    };
+  }, []);
 
   // ── Timer ────────────────────────────────────────────────────────────
 
@@ -117,6 +129,8 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
     if (gameOver) return;
 
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
+
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
@@ -159,6 +173,21 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameOver, gameDuration]);
 
+  // ── How to Play ────────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
+
   // ── Win sequence helper ──────────────────────────────────────────────
 
   const triggerWinSequence = useCallback(
@@ -177,17 +206,19 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
 
       // Step 1: gold flash (300ms)
       setFlashing(true);
-      setTimeout(() => {
+      const t1 = setTimeout(() => {
         setFlashing(false);
         // Step 2: reveal state (2000ms)
         setRevealing(true);
-        setTimeout(() => {
+        const t2 = setTimeout(() => {
           setRevealing(false);
           // Step 3: show overlay
           setOverlayResult('win');
           setShowCompleteOverlay(true);
         }, REVEAL_DURATION);
+        winTimeoutsRef.current.push(t2);
       }, FLASH_DURATION);
+      winTimeoutsRef.current.push(t1);
     },
     [sessionId],
   );
@@ -445,8 +476,8 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
 
   const getClueColor = useCallback(
     (validation: LineValidation): string => {
-      if (validation === 'correct') return VALIDATION_CORRECT_COLOR;
-      if (validation === 'incorrect') return VALIDATION_INCORRECT_COLOR;
+      if (validation === 'correct') return PALETTE.successGreen;
+      if (validation === 'incorrect') return PALETTE.errorRed;
       return PALETTE.stoneGrey;
     },
     [],
@@ -460,10 +491,10 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
 
   const getCellFillColor = useCallback(
     (rowIdx: number, colIdx: number, cell: CellState): string => {
-      if (cell !== 1) return EMPTY_COLOR;
-      if (flashing || revealing) return FLASH_COLOR;
-      if (revealedCells.has(`${rowIdx},${colIdx}`)) return REVEALED_COLOR;
-      return FILLED_COLOR;
+      if (cell !== 1) return PALETTE.parchmentBg;
+      if (flashing || revealing) return PALETTE.honeyGold;
+      if (revealedCells.has(`${rowIdx},${colIdx}`)) return PALETTE.softBlue;
+      return PALETTE.darkBrown;
     },
     [flashing, revealing, revealedCells],
   );
@@ -471,10 +502,9 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
   // ── Render ───────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.container}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.title}>Path Weaver</Text>
         <View style={styles.timerBarBg}>
           <View
             style={[
@@ -488,6 +518,9 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
           />
         </View>
         <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Grid + Clues */}
@@ -517,7 +550,7 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
                       y={y}
                       width={cellSize}
                       height={cellSize}
-                      color={BORDER_COLOR}
+                      color={PALETTE.stoneGrey}
                       style="stroke"
                       strokeWidth={0.5}
                     />
@@ -526,13 +559,13 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
                         <Line
                           p1={vec(x + cellSize * 0.25, y + cellSize * 0.25)}
                           p2={vec(x + cellSize * 0.75, y + cellSize * 0.75)}
-                          color={X_COLOR}
+                          color={PALETTE.stoneGrey}
                           strokeWidth={1.5}
                         />
                         <Line
                           p1={vec(x + cellSize * 0.75, y + cellSize * 0.25)}
                           p2={vec(x + cellSize * 0.25, y + cellSize * 0.75)}
-                          color={X_COLOR}
+                          color={PALETTE.stoneGrey}
                           strokeWidth={1.5}
                         />
                       </>
@@ -576,7 +609,7 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
                     </Text>
                   ))}
                   {validation === 'correct' && (
-                    <Text style={styles.clueCheck}>✓</Text>
+                    <Text style={styles.clueCheck}>{'\u2713'}</Text>
                   )}
                 </View>
               </Pressable>
@@ -614,7 +647,7 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
                     {clues.join(' ')}
                   </Text>
                   {validation === 'correct' && (
-                    <Text style={styles.clueCheck}>✓</Text>
+                    <Text style={styles.clueCheck}>{'\u2713'}</Text>
                   )}
                 </View>
               </Pressable>
@@ -676,18 +709,56 @@ export default function PathWeaverGame(props: MinigamePlayProps): React.JSX.Elem
         <GameCompleteOverlay
           result={overlayResult}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Nonogram</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Each row and column shows number clues on the left and top.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} A clue like '3' means fill exactly 3 connected cells in that row or column.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} A clue like '2 1' means fill 2 cells, leave at least 1 gap, then fill 1 more {'\u2014'} in that order.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a cell to fill it. Tap again to empty it.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Long-press a cell to mark it {'\u2715'} {'\u2014'} use this for cells you know must stay empty.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Fill the grid correctly to reveal a hidden pixel image.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Start with rows or columns that have the largest numbers {'\u2014'} they have the fewest possible positions.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 // ── Styles ─────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: UI.background,
     alignItems: 'center',
     paddingTop: 8,
   },
@@ -700,7 +771,7 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   title: {
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.title,
     fontSize: 22,
     color: PALETTE.darkBrown,
   },
@@ -721,6 +792,19 @@ const styles = StyleSheet.create({
     color: UI.text,
     minWidth: 36,
     textAlign: 'right',
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
   gridWrapper: {
     position: 'relative',
@@ -766,7 +850,7 @@ const styles = StyleSheet.create({
   clueCheck: {
     fontFamily: FONTS.bodyBold,
     fontSize: 10,
-    color: '#27AE60',
+    color: PALETTE.successGreen,
     marginLeft: 1,
   },
 
@@ -821,5 +905,54 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: PALETTE.stoneGrey,
     marginTop: 2,
+  },
+
+  // ── How to Play modal ──
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

@@ -1,3 +1,4 @@
+// Fixes applied: 8
 // GameCompleteOverlay — shared win/lose overlay for all GroveWars minigames.
 // Usage pattern for every minigame:
 //   1. When game ends (win or lose), set showCompleteOverlay = true and freeze game state.
@@ -15,15 +16,20 @@ import {
   View,
 } from 'react-native';
 import { FONTS } from '@/constants/fonts';
+import { PALETTE } from '@/constants/colors';
 
 interface GameCompleteOverlayProps {
   result: 'win' | 'lose';
   onContinue: () => void;
   xpEarned?: number;
   correctWord?: string;
+  loseTitle?: string;
+  practiceMode?: boolean;
+  /** Full sentence to reveal on loss (e.g. the decoded quote in Cipher). */
+  revealQuote?: string;
 }
 
-export function GameCompleteOverlay({ result, onContinue, xpEarned, correctWord }: GameCompleteOverlayProps) {
+export function GameCompleteOverlay({ result, onContinue, xpEarned, correctWord, loseTitle, practiceMode, revealQuote }: GameCompleteOverlayProps) {
   const isWin = result === 'win';
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -67,13 +73,17 @@ export function GameCompleteOverlay({ result, onContinue, xpEarned, correctWord 
           pointerEvents="auto"
         >
           <Text style={styles.icon}>{isWin ? '🌿' : '🍂'}</Text>
-          <Text style={styles.title}>{isWin ? 'Well done!' : "Time's up!"}</Text>
+          <Text style={styles.title}>{isWin ? 'Well done!' : (loseTitle ?? "Time's up!")}</Text>
           <Text style={styles.subtitle}>
-            {isWin && xpEarned && xpEarned > 0
-              ? `+${xpEarned} XP for your clan`
-              : isWin
-                ? ''
-                : 'Better luck next time'}
+            {practiceMode && isWin
+              ? 'Practice \u2014 no XP'
+              : isWin && xpEarned && xpEarned > 0
+                ? `+${xpEarned} XP for your clan`
+                : isWin
+                  ? 'Great work!'
+                  : practiceMode
+                    ? 'Practice \u2014 better luck next time'
+                    : 'Better luck next time'}
           </Text>
 
           {correctWord ? (
@@ -82,6 +92,13 @@ export function GameCompleteOverlay({ result, onContinue, xpEarned, correctWord 
               <Text style={[styles.correctWordText, isWin ? styles.correctWordWin : styles.correctWordLose]}>
                 {correctWord.toUpperCase()}
               </Text>
+            </View>
+          ) : null}
+
+          {revealQuote && !isWin ? (
+            <View style={styles.revealQuoteContainer}>
+              <Text style={styles.revealQuoteLabel}>The quote was</Text>
+              <Text style={styles.revealQuoteText}>{revealQuote}</Text>
             </View>
           ) : null}
 
@@ -111,10 +128,10 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(136, 136, 136, 0.20)',
   },
   card: {
-    backgroundColor: '#F5EACB',
+    backgroundColor: PALETTE.parchmentBg,
     borderRadius: 20,
     borderWidth: 3,
-    borderColor: '#A0784C',
+    borderColor: PALETTE.midBrown,
     paddingHorizontal: 32,
     paddingTop: 28,
     paddingBottom: 24,
@@ -134,14 +151,14 @@ const styles = StyleSheet.create({
   title: {
     fontFamily: FONTS.headerBold,
     fontSize: 32,
-    color: '#3D2B1F',
+    color: PALETTE.darkBrown,
     marginBottom: 4,
     textAlign: 'center',
   },
   subtitle: {
     fontFamily: FONTS.bodyRegular,
     fontSize: 14,
-    color: '#7A6652',
+    color: PALETTE.warmGreyBrown,
     textAlign: 'center',
     marginBottom: 20,
     minHeight: 20,
@@ -153,7 +170,7 @@ const styles = StyleSheet.create({
   correctWordLabel: {
     fontFamily: FONTS.bodyRegular,
     fontSize: 12,
-    color: '#7A6652',
+    color: PALETTE.warmGreyBrown,
     marginBottom: 2,
   },
   correctWordText: {
@@ -162,18 +179,36 @@ const styles = StyleSheet.create({
     letterSpacing: 3,
   },
   correctWordWin: {
-    color: '#D4A843',
+    color: PALETTE.honeyGold,
   },
   correctWordLose: {
-    color: '#A0937D',
+    color: PALETTE.stoneGrey,
+  },
+  revealQuoteContainer: {
+    alignItems: 'center',
+    marginBottom: 16,
+    paddingHorizontal: 8,
+  },
+  revealQuoteLabel: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 12,
+    color: PALETTE.warmGreyBrown,
+    marginBottom: 4,
+  },
+  revealQuoteText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 15,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
+    lineHeight: 22,
   },
   continueBtn: {
-    backgroundColor: '#D4A843',
+    backgroundColor: PALETTE.honeyGold,
     paddingHorizontal: 36,
     paddingVertical: 14,
     borderRadius: 12,
     borderBottomWidth: 3,
-    borderBottomColor: '#A0784C',
+    borderBottomColor: PALETTE.midBrown,
     alignItems: 'center',
     minWidth: 160,
     zIndex: 999,
@@ -181,6 +216,6 @@ const styles = StyleSheet.create({
   continueBtnText: {
     fontFamily: FONTS.bodyBold,
     fontSize: 16,
-    color: '#3D2B1F',
+    color: PALETTE.darkBrown,
   },
 });

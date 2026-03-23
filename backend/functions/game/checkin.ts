@@ -26,8 +26,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.NOT_FOUND, 'User not found', 404);
     }
 
-    // Load all locations
-    const { items: locations } = await scan<Location>('locations');
+    // Load only active locations
+    const { items: locations } = await scan<Location>('locations', {
+      filterExpression: 'active = :active',
+      expressionValues: { ':active': true },
+    });
 
     // Find a matching location within geofence
     let matchedLocation: Location | null = null;
@@ -84,7 +87,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       chestAssetId: null,
       completionHash: '',
       coopPartnerId: null,
-      practiceSession: true,
+      practiceSession: false,
     };
 
     await putItem('game-sessions', checkinRecord);

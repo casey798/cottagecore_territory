@@ -43,8 +43,8 @@ export async function handler(
     await updateItem(
       'game-sessions',
       { sessionId },
-      'SET spaceSentiment = :sentiment',
-      { ':sentiment': spaceSentiment },
+      'SET spaceSentiment = :sentiment, sentimentSubmittedAt = :submittedAt',
+      { ':sentiment': spaceSentiment, ':submittedAt': new Date().toISOString() },
     );
 
     return success({ submitted: true });

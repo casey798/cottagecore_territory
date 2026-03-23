@@ -1,5 +1,5 @@
 /**
- * Grove Words — answer pool and guess validation.
+ * Wordle — answer pool and guess validation.
  *
  * ANSWER_WORDS: curated list of common, everyday words used as daily answers.
  * All 5-letter, uppercase.

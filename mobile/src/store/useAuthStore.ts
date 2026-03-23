@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { ClanId } from '@/types';
+import { ClanId, AvatarConfig } from '@/types';
 import * as authApi from '@/api/auth';
 import * as playerApi from '@/api/player';
 import { storeTokens, clearTokens, getStoredTokens } from '@/api/client';
@@ -32,8 +32,11 @@ interface AuthState {
   playerCode: string | null;
   displayName: string | null;
   selectedPresetId: number | null;
+  avatarConfig: AvatarConfig | null;
   tutorialDone: boolean;
   tutorialSkipped: boolean;
+  tcAcceptedAt: string | null;
+  tcVersion: string | null;
   isAuthenticated: boolean;
   isHydrated: boolean;
   isLoading: boolean;
@@ -41,9 +44,12 @@ interface AuthState {
   logout: () => Promise<void>;
   setClan: (clan: ClanId) => Promise<boolean>;
   refreshSession: () => Promise<boolean>;
+  setTcAccepted: (acceptedAt: string, version: string) => void;
   setTutorialDone: () => void;
   setTutorialSkipped: () => void;
+  resetTutorial: () => void;
   setSelectedPresetId: (id: number) => void;
+  setDisplayName: (name: string) => void;
   restoreSession: () => Promise<boolean>;
 }
 
@@ -57,8 +63,11 @@ export const useAuthStore = create<AuthState>()(
       playerCode: null,
       displayName: null,
       selectedPresetId: null,
+      avatarConfig: null,
       tutorialDone: false,
       tutorialSkipped: false,
+      tcAcceptedAt: null,
+      tcVersion: null,
       isAuthenticated: false,
       isHydrated: false,
       isLoading: false,
@@ -67,13 +76,16 @@ export const useAuthStore = create<AuthState>()(
         set({ isLoading: true });
         const result = await authApi.googleSignIn();
         if (result.success && result.data) {
+          const firebaseEmail = result.data.email ?? null;
           await storeTokens(result.data.token, '');
           set({
             userId: result.data.userId,
             token: result.data.token,
-            clan: maybeOverrideClan(result.data.clan, null),
-            email: null,
+            clan: maybeOverrideClan(result.data.clan, firebaseEmail),
+            email: firebaseEmail,
             tutorialDone: result.data.tutorialDone,
+            tcAcceptedAt: result.data.tcAcceptedAt ?? null,
+            tcVersion: result.data.tcVersion ?? null,
             isAuthenticated: true,
             isLoading: false,
           });
@@ -85,10 +97,16 @@ export const useAuthStore = create<AuthState>()(
             const profileEmail = profile.data.email ?? null;
             set({
               clan: maybeOverrideClan(profile.data.clan, profileEmail),
-              email: profileEmail,
+              email: profileEmail ?? firebaseEmail,
               playerCode: profile.data.playerCode ?? null,
               displayName: profile.data.displayName ?? null,
+              avatarConfig: profile.data.avatarConfig ?? null,
               tutorialDone: profile.data.tutorialDone,
+              tcAcceptedAt: profile.data.tcAcceptedAt ?? null,
+              tcVersion: profile.data.tcVersion ?? null,
+              ...(profile.data.avatarConfig?.characterPreset != null
+                ? { selectedPresetId: profile.data.avatarConfig.characterPreset }
+                : {}),
             });
           }
 
@@ -113,8 +131,11 @@ export const useAuthStore = create<AuthState>()(
           playerCode: null,
           displayName: null,
           selectedPresetId: null,
+          avatarConfig: null,
           tutorialDone: false,
           tutorialSkipped: false,
+          tcAcceptedAt: null,
+          tcVersion: null,
           isAuthenticated: false,
           isLoading: false,
         });
@@ -147,26 +168,48 @@ export const useAuthStore = create<AuthState>()(
             userId: result.data.userId,
             token: stored.token,
             clan: maybeOverrideClan(result.data.clan, currentEmail),
+            email: result.data.email ?? currentEmail,
             playerCode: result.data.playerCode ?? null,
             displayName: result.data.displayName ?? null,
+            avatarConfig: result.data.avatarConfig ?? null,
             tutorialDone: result.data.tutorialDone,
+            tcAcceptedAt: result.data.tcAcceptedAt ?? null,
+            tcVersion: result.data.tcVersion ?? null,
             isAuthenticated: true,
+            ...(result.data.avatarConfig?.characterPreset != null
+              ? { selectedPresetId: result.data.avatarConfig.characterPreset }
+              : {}),
           });
           return true;
         }
         return false;
       },
 
+      setTcAccepted: (acceptedAt: string, version: string) =>
+        set({ tcAcceptedAt: acceptedAt, tcVersion: version }),
+
       setTutorialDone: () => {
         set({ tutorialDone: true });
+        // Fire-and-forget — persist flag to backend so other devices skip the tutorial
+        playerApi.updateTutorialDone().catch(() => {
+          // Silent fail — local state is already set; backend syncs on next login
+        });
       },
 
       setTutorialSkipped: () => {
         set({ tutorialSkipped: true });
       },
 
+      resetTutorial: () => {
+        set({ tutorialDone: false, tutorialSkipped: false });
+      },
+
       setSelectedPresetId: (id: number) => {
         set({ selectedPresetId: id });
+      },
+
+      setDisplayName: (name: string) => {
+        set({ displayName: name });
       },
 
       restoreSession: async () => {
@@ -178,7 +221,8 @@ export const useAuthStore = create<AuthState>()(
         }
         const result = await playerApi.getProfile();
         if (result.success && result.data) {
-          const restoredEmail = result.data.email ?? null;
+          const currentEmail = useAuthStore.getState().email;
+          const restoredEmail = result.data.email ?? currentEmail ?? null;
           set({
             userId: result.data.userId,
             token: stored.token,
@@ -186,9 +230,15 @@ export const useAuthStore = create<AuthState>()(
             email: restoredEmail,
             playerCode: result.data.playerCode ?? null,
             displayName: result.data.displayName ?? null,
+            avatarConfig: result.data.avatarConfig ?? null,
             tutorialDone: result.data.tutorialDone,
+            tcAcceptedAt: result.data.tcAcceptedAt ?? null,
+            tcVersion: result.data.tcVersion ?? null,
             isAuthenticated: true,
             isLoading: false,
+            ...(result.data.avatarConfig?.characterPreset != null
+              ? { selectedPresetId: result.data.avatarConfig.characterPreset }
+              : {}),
           });
           return true;
         }
@@ -205,10 +255,13 @@ export const useAuthStore = create<AuthState>()(
         clan: state.clan,
         tutorialDone: state.tutorialDone,
         tutorialSkipped: state.tutorialSkipped,
+        tcAcceptedAt: state.tcAcceptedAt,
+        tcVersion: state.tcVersion,
         email: state.email,
         playerCode: state.playerCode,
         displayName: state.displayName,
         selectedPresetId: state.selectedPresetId,
+        avatarConfig: state.avatarConfig,
         isAuthenticated: state.isAuthenticated,
       }),
       onRehydrateStorage: () => {

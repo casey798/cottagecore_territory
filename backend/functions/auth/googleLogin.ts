@@ -124,12 +124,15 @@ export const handler = async (
         email,
         displayName: email.split('@')[0],
         clan,
+        avatarConfig: { hairStyle: 0, hairColor: 0, skinTone: 0, outfit: 0, accessory: 0 },
         todayXp: 0,
         seasonXp: 0,
         totalWins: 0,
         currentStreak: 0,
         bestStreak: 0,
         tutorialDone: false,
+        tcAcceptedAt: null,
+        tcVersion: null,
         playerCode,
         createdAt: now,
         ...(phase1Cluster ? { phase1Cluster } : {}),
@@ -180,6 +183,8 @@ export const handler = async (
       token: idToken,
       clan: user.clan ?? null,
       tutorialDone: user.tutorialDone ?? false,
+      tcAcceptedAt: user.tcAcceptedAt ?? null,
+      tcVersion: user.tcVersion ?? null,
     });
   } catch (err) {
     console.error('Google login error:', err);

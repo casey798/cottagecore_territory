@@ -5,6 +5,10 @@ import {
   StyleSheet,
   Dimensions,
   Vibration,
+  ImageBackground,
+  Modal,
+  Pressable,
+  TouchableOpacity,
 } from 'react-native';
 import {
   Canvas,
@@ -26,6 +30,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
@@ -37,13 +42,15 @@ import {
   computePlacementState,
 } from './MosaicLogic';
 
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
+
 // ─── Constants ───────────────────────────────────────────────────────────────
 
 const TILE_COLORS: Record<string, string> = {
-  mo_tile_leaf:     '#7CAA5E',
+  mo_tile_leaf:     PALETTE.softGreen,
   mo_tile_mushroom: '#C0392B',
-  mo_tile_stone:    '#A0937D',
-  mo_tile_acorn:    '#D4A843',
+  mo_tile_stone:    PALETTE.stoneGrey,
+  mo_tile_acorn:    PALETTE.honeyGold,
 };
 
 const GHOST_VALID   = 'rgba(122, 188, 94, 0.45)';
@@ -120,7 +127,7 @@ function TrayTile({ tile, isSelected, isOtherSelected, rotation, onTap, makePanG
   const maxCol = Math.max(...cells.map(c => c.col)) + 1;
   const maxRow = Math.max(...cells.map(c => c.row)) + 1;
   const cellSet = new Set(cells.map(c => `${c.col},${c.row}`));
-  const color = TILE_COLORS[tile.assetKey] || '#A0937D';
+  const color = TILE_COLORS[tile.assetKey] || PALETTE.stoneGrey;
 
   const gridCells: React.JSX.Element[] = [];
   for (let r = 0; r < maxRow; r++) {
@@ -137,7 +144,7 @@ function TrayTile({ tile, isSelected, isOtherSelected, rotation, onTap, makePanG
             height: TRAY_PREVIEW_CELL,
             backgroundColor: filled ? color : 'transparent',
             borderWidth: filled ? 1 : 0,
-            borderColor: filled ? '#3D2B1F' : 'transparent',
+            borderColor: filled ? PALETTE.darkBrown : 'transparent',
             borderRadius: 2,
           }}
         />,
@@ -184,7 +191,7 @@ function TrayTile({ tile, isSelected, isOtherSelected, rotation, onTap, makePanG
 // ─── Component ───────────────────────────────────────────────────────────────
 
 export default function MosaicGame(props: MinigamePlayProps): React.JSX.Element {
-  const { sessionId, timeLimit, onComplete } = props;
+  const { sessionId, timeLimit, onComplete, practiceMode } = props;
   const puzzle = props.puzzleData as MosaicPuzzleClient | undefined;
 
   // No puzzle data → auto-lose
@@ -199,11 +206,11 @@ export default function MosaicGame(props: MinigamePlayProps): React.JSX.Element 
 
   if (!puzzle || !puzzle.gridCols) {
     return (
-      <View style={styles.container}>
-        <Text style={{ fontFamily: FONTS.bodySemiBold, fontSize: 16, color: PALETTE.mutedRose, textAlign: 'center', marginTop: 40 }}>
+      <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+        <Text style={styles.errorFallback}>
           Puzzle data missing. Returning...
         </Text>
-      </View>
+      </ImageBackground>
     );
   }
 
@@ -220,7 +227,7 @@ interface InnerProps {
 }
 
 function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProps): React.JSX.Element {
-  const gameDuration = timeLimit > 0 ? timeLimit : 90;
+  const gameDuration = timeLimit > 0 ? timeLimit : 120;
 
   // ── Game state ──
   const [placements, setPlacements] = useState<MosaicTilePlacement[]>([]);
@@ -233,6 +240,11 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
   const completedRef = useRef(false);
   const pendingCompleteRef = useRef<MinigameResult | null>(null);
   const placementOrderRef = useRef<string[]>([]);
+
+  // ── How to Play modal (pauses timer) ──
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
 
   // ── Selection state (tap-to-select, tap-to-rotate in tray) ──
   const [selectedTileId, setSelectedTileId] = useState<string | null>(null);
@@ -286,6 +298,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
@@ -334,6 +347,20 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
       pendingCompleteRef.current = null;
     }
   }, [onComplete]);
+
+  // ── How to Play open/close ──
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
   // ── Tray tap: select or rotate ──
   const handleTrayTap = useCallback((tileId: string) => {
@@ -541,7 +568,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
       if (!tile) continue;
       const cells = getPlacedCells(tile, p);
       const cellKeys = new Set(cells.map(c => `${c.col},${c.row}`));
-      const color = TILE_COLORS[tile.assetKey] || '#A0937D';
+      const color = TILE_COLORS[tile.assetKey] || PALETTE.stoneGrey;
       const borderPath = buildCellBordersPath(cells, cellSize, cellKeys);
       data.push({ tileId: tile.tileId, color, cells, borderPath });
     }
@@ -610,9 +637,9 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
   }, [dragTileId, selectedRotation, puzzle.tiles]);
 
   const floatingPieceColor = useMemo(() => {
-    if (!dragTileId) return '#A0937D';
+    if (!dragTileId) return PALETTE.stoneGrey;
     const tile = puzzle.tiles.find(t => t.tileId === dragTileId);
-    return tile ? (TILE_COLORS[tile.assetKey] || '#A0937D') : '#A0937D';
+    return tile ? (TILE_COLORS[tile.assetKey] || PALETTE.stoneGrey) : PALETTE.stoneGrey;
   }, [dragTileId, puzzle.tiles]);
 
   // ── Pan gesture factory for tray tiles ──
@@ -659,7 +686,20 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
   }, [measureGrid]);
 
   return (
-    <View style={styles.container}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Top bar with help button */}
+      <View style={styles.topBar}>
+        <View style={{ width: 32 }} />
+        <TouchableOpacity
+          style={styles.helpBtn}
+          onPress={openHowToPlay}
+          disabled={gameOver}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Timer bar */}
       <View style={styles.timerBarBg}>
         <View
@@ -736,7 +776,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
                 {/* Tile outline */}
                 <SkiaPath
                   path={borderPath}
-                  color="#3D2B1F"
+                  color={PALETTE.darkBrown}
                   style="stroke"
                   strokeWidth={2}
                 />
@@ -819,7 +859,7 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
                   height: FLOAT_PREVIEW_CELL,
                   backgroundColor: floatingPieceColor,
                   borderWidth: 1,
-                  borderColor: '#3D2B1F',
+                  borderColor: PALETTE.darkBrown,
                   borderRadius: 3,
                 }}
               />
@@ -832,22 +872,85 @@ function MosaicGameInner({ puzzle, sessionId, timeLimit, onComplete }: InnerProp
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play — Tile Fit</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Place all tiles to fill the highlighted area exactly.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a tile in the tray to select it. Drag it onto the grid to place.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a selected tile again to rotate it 90{'\u00B0'}.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tiles cannot overlap. All highlighted cells must be covered.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap any placed tile on the grid to pick it back up.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: If a piece doesn{'\u2019'}t fit, try rotating it{'\u2014'}it may work in a different orientation.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: UI.background,
     alignItems: 'center',
     paddingTop: 8,
+  },
+  errorFallback: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 16,
+    color: PALETTE.mutedRose,
+    textAlign: 'center',
+    marginTop: 40,
+  },
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    marginBottom: 4,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
   timerBarBg: {
     width: '90%',
@@ -856,6 +959,7 @@ const styles = StyleSheet.create({
     borderRadius: 4,
     overflow: 'hidden',
     marginBottom: 2,
+    alignSelf: 'center',
   },
   timerBarFill: {
     height: '100%',
@@ -866,12 +970,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: UI.text,
     marginBottom: 6,
+    alignSelf: 'center',
   },
   gridContainer: {
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
-    borderColor: '#A0937D',
+    borderColor: PALETTE.stoneGrey,
     borderRadius: 6,
     padding: 2,
     backgroundColor: '#F0E6D0',
@@ -896,9 +1001,9 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   tileCard: {
-    backgroundColor: '#FFF5DC',
+    backgroundColor: PALETTE.cream,
     borderWidth: 2,
-    borderColor: '#A0937D',
+    borderColor: PALETTE.stoneGrey,
     borderRadius: 8,
     padding: 10,
     minWidth: 60,
@@ -930,5 +1035,53 @@ const styles = StyleSheet.create({
   floatingPiece: {
     width: 80,
     height: 80,
+  },
+  // ── How to Play modal ──
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

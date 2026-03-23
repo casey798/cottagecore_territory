@@ -29,6 +29,10 @@ export async function setDailyConfig(
   return res.data;
 }
 
+export async function setQuietMode(date: string, quietMode: boolean): Promise<void> {
+  await apiClient.patch('/admin/daily/quiet-mode', { date, quietMode });
+}
+
 export async function sendTestNotification(
   window: string,
   targetUserId?: string,

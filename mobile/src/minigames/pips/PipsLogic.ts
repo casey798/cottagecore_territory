@@ -1,7 +1,9 @@
+import { PIPS_MOVE_BUFFER } from '@/constants/config';
+
 export type CellState = 0 | 1;
 export type Grid = CellState[][];
 
-const GRID_SIZE = 5;
+export const GRID_SIZE = 5;
 
 export function createEmptyGrid(): Grid {
   return Array.from({ length: GRID_SIZE }, () =>
@@ -49,8 +51,10 @@ export interface PipsPuzzle {
 }
 
 /**
- * Generate a puzzle by applying 4–6 random taps to an empty grid.
+ * Generate a puzzle by applying 5–8 random taps to an empty grid.
  * Replaying the same taps returns to all-OFF, guaranteeing solvability.
+ * Duplicate taps on the same cell are deduplicated (even count = remove,
+ * odd count = keep one) so moveLimit reflects true minimum moves.
  */
 export function generatePuzzle(): PipsPuzzle {
   for (let attempt = 0; attempt < 200; attempt++) {
@@ -89,10 +93,22 @@ export function generatePuzzle(): PipsPuzzle {
     }
     if (onCount < 8) continue;
 
+    // Deduplicate: two taps on the same cell cancel out (Lights Out is self-inverse).
+    // Keep exactly one entry per cell if count is odd; remove all if even.
+    const deduplicatedTaps: Array<{ row: number; col: number }> = [];
+    const seen = new Set<string>();
+    for (const [key, count] of posCount.entries()) {
+      if (count % 2 === 1) {
+        const [r, c] = key.split(',').map(Number);
+        deduplicatedTaps.push({ row: r, col: c });
+        seen.add(key);
+      }
+    }
+
     return {
       startGrid: grid,
-      solutionTaps: taps,
-      moveLimit: taps.length + 2,
+      solutionTaps: deduplicatedTaps,
+      moveLimit: deduplicatedTaps.length + PIPS_MOVE_BUFFER,
     };
   }
 

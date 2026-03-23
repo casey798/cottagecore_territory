@@ -2,11 +2,13 @@ import React, { useEffect, useState, useCallback } from 'react';
 import {
   View,
   Text,
+  Image,
+  ImageBackground,
+  ImageSourcePropType,
   StyleSheet,
   ScrollView,
   ActivityIndicator,
   Pressable,
-  Alert,
   Share,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
@@ -16,31 +18,39 @@ import { FONTS } from '@/constants/fonts';
 import { DAILY_XP_CAP } from '@/constants/config';
 import { useAuthStore } from '@/store/useAuthStore';
 import * as playerApi from '@/api/player';
-import { PlayerProfile, ClanId } from '@/types';
+import { PlayerProfile } from '@/types';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { getPresetById } from '@/utils/characterPresets';
+
+const dialogueFrame = require('@/assets/ui/frames/dialogue_frame.png');
+
+const CLAN_CRESTS: Record<string, ImageSourcePropType> = {
+  ember: require('../assets/sprites/crests/crest_seekers.png'),
+  tide: require('../assets/sprites/crests/crest_guardians.png'),
+  bloom: require('../assets/sprites/crests/crest_wardens.png'),
+  gale: require('../assets/sprites/crests/crest_keepers.png'),
+  hearth: require('../assets/sprites/crests/crest_chroniclers.png'),
+};
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 
 interface StreakMilestone {
-  emoji: string;
+  icon: ImageSourcePropType;
   label: string;
   days: number;
 }
 
 const MILESTONES: StreakMilestone[] = [
-  { emoji: '\u{1F331}', label: 'Seedling', days: 3 },
-  { emoji: '\u{1F33F}', label: 'Sapling', days: 7 },
-  { emoji: '\u{1F333}', label: 'Ancient Oak', days: 14 },
+  { icon: require('../assets/sprites/badges/seedling.png'), label: 'Seedling', days: 3 },
+  { icon: require('../assets/sprites/badges/sapling.png'), label: 'Sapling', days: 7 },
+  { icon: require('../assets/sprites/badges/oak.png'), label: 'Ancient Oak', days: 14 },
 ];
 
 export default function PlayerProfileScreen() {
   const navigation = useNavigation<Nav>();
-  const token = useAuthStore((s) => s.token);
-  const playerCode = useAuthStore((s) => s.playerCode);
   const selectedPresetId = useAuthStore((s) => s.selectedPresetId);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
-  const [assetCount, setAssetCount] = useState(0);
+  const [assetCount, setAssetCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -59,12 +69,15 @@ export default function PlayerProfileScreen() {
       }
       if (assetsRes.success && assetsRes.data) {
         setAssetCount(assetsRes.data.assets.length);
+      } else {
+        setAssetCount(null);
       }
     } catch {
       setErrorMsg('Network error — please try again');
     } finally {
       setLoading(false);
     }
+  // deps: [] is intentional — only references module-level playerApi and stable state setters
   }, []);
 
   useEffect(() => {
@@ -97,33 +110,30 @@ export default function PlayerProfileScreen() {
   const bestStreak = profile.bestStreak ?? 0;
 
   const handleAssetsTap = () => {
-    try {
-      navigation.navigate('AssetInventory');
-    } catch {
-      // AssetInventoryScreen not in navigator — no-op
-    }
+    navigation.navigate('AssetInventory');
   };
 
   return (
-    <ScrollView
+    <ImageBackground
+      source={require('../assets/ui/backgrounds/bg_plain.png')}
       style={styles.container}
+      resizeMode="cover"
+    >
+    <ScrollView
       contentContainerStyle={styles.content}
       showsVerticalScrollIndicator={false}
     >
       {/* HEADER */}
       <View style={styles.headerSection}>
         <Text style={styles.displayName}>{profile.displayName}</Text>
-        <View style={[styles.clanBadge, { backgroundColor: clanColor }]}>
-          <Text style={styles.clanBadgeText}>{clanLabel}</Text>
-        </View>
-        {playerCode && (
+        {profile.playerCode && (
           <View style={styles.playerCodeSection}>
             <View style={styles.playerCodeRow}>
-              <Text style={styles.playerCodeText}>{playerCode.toUpperCase()}</Text>
+              <Text style={styles.playerCodeText}>{profile.playerCode.toUpperCase()}</Text>
               <Pressable
                 style={styles.copyBtn}
                 onPress={() => {
-                  Share.share({ message: playerCode.toUpperCase() });
+                  Share.share({ message: profile.playerCode!.toUpperCase() });
                 }}
               >
                 <Text style={styles.copyBtnText}>{'📋'}</Text>
@@ -132,6 +142,13 @@ export default function PlayerProfileScreen() {
             <Text style={styles.playerCodeHint}>Share this code to play co-op</Text>
           </View>
         )}
+        {CLAN_CRESTS[profile.clan] && (
+          <Image
+            source={CLAN_CRESTS[profile.clan]}
+            style={styles.clanCrest}
+            resizeMode="contain"
+          />
+        )}
         {(() => {
           const preset = selectedPresetId
             ? getPresetById(selectedPresetId)
@@ -139,11 +156,18 @@ export default function PlayerProfileScreen() {
           if (preset) {
             return (
               <>
-                <View style={[styles.avatarRing, { borderColor: clanColor }]}>
-                  <View style={[styles.presetCard, { backgroundColor: preset.color }]}>
-                    <Text style={styles.presetEmoji}>{preset.emoji}</Text>
-                  </View>
-                </View>
+                <ImageBackground
+                  source={dialogueFrame}
+                  resizeMode="stretch"
+                  style={styles.avatarFrame}
+                  imageStyle={styles.avatarFrameImage}
+                >
+                  <Image
+                    source={preset.fullBody}
+                    style={styles.avatarFullBody}
+                    resizeMode="contain"
+                  />
+                </ImageBackground>
                 <Pressable
                   style={styles.changeCharBtn}
                   onPress={() => navigation.navigate('CharacterCreation')}
@@ -196,7 +220,7 @@ export default function PlayerProfileScreen() {
         </View>
         <Pressable style={styles.statCard} onPress={handleAssetsTap}>
           <Text style={styles.statLabel}>Assets Collected</Text>
-          <Text style={styles.statValue}>{assetCount}</Text>
+          <Text style={styles.statValue}>{assetCount ?? '—'}</Text>
         </Pressable>
       </View>
 
@@ -204,7 +228,7 @@ export default function PlayerProfileScreen() {
       <View style={styles.section}>
         <Text style={styles.streakTitle}>Streak</Text>
         <View style={styles.streakCurrentRow}>
-          <Text style={styles.streakFireEmoji}>{'\u{1F525}'}</Text>
+          <Image source={require('../assets/ui/icons/pin_streak.png')} style={styles.streakFlameIcon} resizeMode="contain" />
           <Text style={styles.streakNumber}>{streak}</Text>
           <Text style={styles.streakDayText}>day streak</Text>
         </View>
@@ -220,7 +244,7 @@ export default function PlayerProfileScreen() {
                   { backgroundColor: reached ? clanColor : PALETTE.stoneGrey },
                 ]}
               >
-                <Text style={styles.milestoneEmoji}>{m.emoji}</Text>
+                <Image source={m.icon} style={styles.milestoneBadgeIcon} resizeMode="contain" />
                 <Text style={styles.milestoneLabel}>{m.label}</Text>
                 <Text style={styles.milestoneDays}>{m.days}d</Text>
               </View>
@@ -238,13 +262,13 @@ export default function PlayerProfileScreen() {
         Playing for {clanLabel} {'\u2022'} Season in progress
       </Text>
     </ScrollView>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: UI.background,
   },
   content: {
     paddingHorizontal: 20,
@@ -279,7 +303,7 @@ const styles = StyleSheet.create({
   // Header
   headerSection: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 4,
   },
   displayName: {
     fontSize: 28,
@@ -287,20 +311,16 @@ const styles = StyleSheet.create({
     color: PALETTE.darkBrown,
     marginBottom: 6,
   },
-  clanBadge: {
-    paddingHorizontal: 14,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginBottom: 16,
-  },
-  clanBadgeText: {
-    fontSize: 13,
-    fontFamily: FONTS.bodySemiBold,
-    color: '#FFFFFF',
+  clanCrest: {
+    width: 125,
+    height: 125,
+    alignSelf: 'center',
+    marginVertical: 8,
   },
   playerCodeSection: {
     alignItems: 'center',
     marginBottom: 12,
+    marginTop: -20,
   },
   playerCodeRow: {
     flexDirection: 'row',
@@ -330,6 +350,7 @@ const styles = StyleSheet.create({
     height: 104,
     borderRadius: 52,
     borderWidth: 3,
+    marginTop: -20,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -342,20 +363,28 @@ const styles = StyleSheet.create({
   },
   avatarSilhouette: {
     fontSize: 40,
-    color: '#FFFFFF',
+    color: PALETTE.cream,
   },
-  presetCard: {
-    width: 80,
-    height: 80,
-    borderRadius: 16,
-    justifyContent: 'center',
+  avatarFrame: {
+    width: 220,
+    height: 325,
+    marginTop: -20,
+    marginLeft: 30,
     alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
   },
-  presetEmoji: {
-    fontSize: 36,
+  avatarFrameImage: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarFullBody: {
+    width: 148,
+    height: 188,
+    marginRight: 20,
   },
   changeCharBtn: {
-    marginTop: 8,
+    marginTop: -37,
     paddingVertical: 6,
     paddingHorizontal: 16,
     borderRadius: 10,
@@ -454,8 +483,9 @@ const styles = StyleSheet.create({
     alignItems: 'baseline',
     marginBottom: 16,
   },
-  streakFireEmoji: {
-    fontSize: 28,
+  streakFlameIcon: {
+    width: 28,
+    height: 28,
     marginRight: 6,
   },
   streakNumber: {
@@ -481,8 +511,9 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     minWidth: 80,
   },
-  milestoneEmoji: {
-    fontSize: 22,
+  milestoneBadgeIcon: {
+    width: 48,
+    height: 48,
     marginBottom: 2,
   },
   milestoneLabel: {

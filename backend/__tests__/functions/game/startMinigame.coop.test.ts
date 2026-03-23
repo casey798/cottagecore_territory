@@ -77,7 +77,7 @@ function makeEvent(body: Record<string, unknown>): APIGatewayProxyEvent {
 function makeBody(overrides: Partial<{ locationId: string; minigameId: string; coopPartnerId: string | null }> = {}) {
   return {
     locationId: LOCATION_ID,
-    minigameId: 'kindred-coop',
+    minigameId: 'word-clusters-coop',
     coopPartnerId: PARTNER_ID,
     ...overrides,
   };
@@ -174,7 +174,7 @@ describe('startMinigame co-op tests', () => {
       },
     });
 
-    const event = makeEvent(makeBody({ minigameId: 'kindred', coopPartnerId: PARTNER_ID }));
+    const event = makeEvent(makeBody({ minigameId: 'word-clusters', coopPartnerId: PARTNER_ID }));
     const result = await handler(event);
     const body = JSON.parse(result.body);
 
@@ -279,6 +279,7 @@ describe('startMinigame co-op tests', () => {
       partnerLock: {
         dateUserLocation: `${TODAY}#${PARTNER_ID}#${LOCATION_ID}`,
         lockedAt: '2026-03-07T10:00:00.000Z',
+        lockedUntil: new Date(Date.now() + 3600 * 1000).toISOString(),
         ttl: 9999999999,
       },
     });
@@ -303,7 +304,7 @@ describe('startMinigame co-op tests', () => {
             sessionId: 'partner-session-1',
             userId: PARTNER_ID,
             locationId: LOCATION_ID,
-            minigameId: 'kindred-coop',
+            minigameId: 'word-clusters-coop',
             date: TODAY,
             startedAt: '2026-03-07T09:00:00.000Z',
             completedAt: '2026-03-07T09:05:00.000Z',

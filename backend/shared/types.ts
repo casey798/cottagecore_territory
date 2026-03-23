@@ -88,6 +88,8 @@ export interface User {
   bestStreak: number;
   lastActiveDate: string;
   tutorialDone: boolean;
+  tcAcceptedAt: string | null;
+  tcVersion: string | null;
   fcmToken: string;
   playerCode: string;
   createdAt: string;
@@ -121,7 +123,7 @@ export interface Location {
 }
 
 export const COOP_MINIGAME_IDS: readonly string[] = [
-  'kindred-coop',
+  'word-clusters-coop',
   'cipher-stones-coop',
   'pips-coop',
   'stone-pairs-coop',
@@ -201,6 +203,7 @@ export interface GameSession {
   puzzleData?: MinigamePuzzle;
   timeLimit?: number;
   spaceSentiment?: SpaceSentiment | null;
+  sentimentSubmittedAt?: string;
   practiceSession?: boolean;
   leftAt?: string | null;
   dwellTime?: number | null;
@@ -210,6 +213,7 @@ export interface GameSession {
 export interface PlayerLock {
   dateUserLocation: string;
   lockedAt: string;
+  lockedUntil: string;
   ttl: number;
 }
 
@@ -245,10 +249,11 @@ export interface PlayerAsset {
   placed: boolean;
   expiresAt: string | null;
   expired: boolean;
+  permanent?: boolean;
 }
 
 export interface PlacedAssetLayout {
-  assetId: string;
+  userAssetId: string;
   x: number;
   y: number;
   rotation: number;

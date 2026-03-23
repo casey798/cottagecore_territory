@@ -1,180 +1,161 @@
 /**
+ * TutorialScreen — 9-scene onboarding flow.
+ *
  * Navigation guard: route here only when !tutorialDone && !tutorialSkipped.
- * tutorialDone is set at end of Scene 9 (handleTutorialComplete).
+ * setTutorialDone() is called at the end of scene 8 (handleTutorialDone).
+ *
+ * Scene layout:
+ *   0–5  TutorialSlide    (image-backed slides, skip allowed)
+ *   6    Character creation (no skip)
+ *   7    Map scene with practice minigame (no skip)
+ *   8    Map outro (no skip) — completing this ends the tutorial
  */
 import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  Pressable,
-  SafeAreaView,
-  Modal,
-  ActivityIndicator,
-  StyleSheet,
-} from 'react-native';
-import { PALETTE, LORE_CLANS, CLAN_TO_LORE_MAP } from '@/constants/colors';
-import { FONTS } from '@/constants/fonts';
+import { View, StyleSheet } from 'react-native';
 import { useAuthStore } from '@/store/useAuthStore';
-import * as playerApi from '@/api/player';
-import type { AvatarConfig } from '@/types';
-import SceneBackground from '@/components/tutorial/SceneBackground';
+import { TUTORIAL_IMAGES } from '@/assets/tutorial/tutorialAssets';
 import TutorialProgressBar from '@/components/tutorial/TutorialProgressBar';
-import Scene0Awakening from '@/components/tutorial/scenes/Scene0Awakening';
-import Scene1Landmarks from '@/components/tutorial/scenes/Scene1Landmarks';
-import Scene2Clans from '@/components/tutorial/scenes/Scene2Clans';
-import Scene3Silence from '@/components/tutorial/scenes/Scene3Silence';
-import Scene4MossAppears from '@/components/tutorial/scenes/Scene4MossAppears';
-import Scene5Stirring from '@/components/tutorial/scenes/Scene5Stirring';
-import Scene6YourClan from '@/components/tutorial/scenes/Scene6YourClan';
-import Scene7TrueGoal from '@/components/tutorial/scenes/Scene7TrueGoal';
-import Scene8CharacterCreation from '@/components/tutorial/scenes/Scene8CharacterCreation';
-import Scene9DemoGame from '@/components/tutorial/scenes/Scene9DemoGame';
+import TutorialSlide from '@/components/tutorial/TutorialSlide';
+import TutorialCharacterScene from '@/components/tutorial/scenes/TutorialCharacterScene';
+import TutorialMapScene from '@/components/tutorial/scenes/TutorialMapScene';
+import TutorialMapOutroScene from '@/components/tutorial/scenes/TutorialMapOutroScene';
 
-const TOTAL_SCENES = 10;
+const TOTAL_SCENES = 9;
+const SLIDE_COUNT = 6; // scenes 0–5
 
 export default function TutorialScreen() {
   const [sceneIndex, setSceneIndex] = useState(0);
-  const [displayName, setDisplayName] = useState('');
-  const [avatarConfig, setAvatarConfig] = useState<AvatarConfig | null>(null);
-  const [presetId, setPresetId] = useState<number | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [uploadError, setUploadError] = useState<string | null>(null);
-  const [showSkipModal, setShowSkipModal] = useState(false);
+  const [arrivedViaSkip, setArrivedViaSkip] = useState(false);
 
-  const setTutorialSkipped = useAuthStore((s) => s.setTutorialSkipped);
   const setTutorialDone = useAuthStore((s) => s.setTutorialDone);
-  const setSelectedPresetId = useAuthStore((s) => s.setSelectedPresetId);
-  const gameClan = useAuthStore((s) => s.clan);
+  const setTutorialSkipped = useAuthStore((s) => s.setTutorialSkipped);
+  const clan = useAuthStore((s) => s.clan);
 
-  const activeClanColor = React.useMemo(() => {
-    const loreId = gameClan ? CLAN_TO_LORE_MAP[gameClan] : undefined;
-    const loreClan = LORE_CLANS.find((c) => c.id === loreId);
-    return loreClan?.color;
-  }, [gameClan]);
+  // Pick the clan-specific s5 image, falling back to ember if clan unknown
+  const s5Image =
+    clan && clan in TUTORIAL_IMAGES.s5
+      ? TUTORIAL_IMAGES.s5[clan as keyof typeof TUTORIAL_IMAGES.s5]
+      : TUTORIAL_IMAGES.s5.ember;
 
   const advance = () => {
     setSceneIndex((prev) => Math.min(prev + 1, TOTAL_SCENES - 1));
   };
 
-  const handleSkipPress = () => {
-    setShowSkipModal(true);
+  /**
+   * Skip handler: jump to character creation without setting any store flag yet.
+   * The store is updated only after character creation completes (handleTutorialDone).
+   */
+  const handleSkip = () => {
+    setArrivedViaSkip(true);
+    setSceneIndex(6);
   };
 
-  const handleSkipConfirm = () => {
-    setShowSkipModal(false);
-    setTutorialSkipped();
-  };
-
-  const handleScene8Complete = async (
-    name: string,
-    config: AvatarConfig,
-    selectedPreset: number,
-  ) => {
-    if (isSubmitting) return;
-    setDisplayName(name);
-    setAvatarConfig(config);
-    setPresetId(selectedPreset);
-    setUploadError(null);
-    setIsSubmitting(true);
-
-    try {
-      const result = await playerApi.updateAvatar(name, config);
-      if (result.success) {
-        setSelectedPresetId(selectedPreset);
-        setSceneIndex(9);
-      } else {
-        setUploadError(result.error?.message ?? 'Could not save your character. Check your connection and try again.');
-      }
-    } catch {
-      setUploadError('Could not save your character. Check your connection and try again.');
-    } finally {
-      setIsSubmitting(false);
+  /**
+   * Called at the very end of the tutorial (scene 8 completes, or skip path finishes
+   * character creation). Persists the flag locally and to the backend, then lets
+   * RootNavigator automatically transition to Main.
+   */
+  const handleTutorialDone = () => {
+    // setTutorialDone also fires the backend API call internally (fire-and-forget)
+    setTutorialDone(); // → RootNavigator will switch to Main
+    // Also record as skipped if user used the skip path (belt-and-suspenders)
+    if (arrivedViaSkip) {
+      setTutorialSkipped();
     }
   };
 
-  const handleTutorialComplete = () => {
-    setTutorialDone();
+  /**
+   * Called when character creation (scene 6) completes.
+   * - Skip path  → end tutorial immediately (no map scenes)
+   * - Normal path → advance to scene 7 (map)
+   */
+  const handleCharCreationComplete = () => {
+    if (arrivedViaSkip) {
+      handleTutorialDone();
+    } else {
+      advance();
+    }
   };
 
   const renderScene = () => {
     switch (sceneIndex) {
       case 0:
-        return <Scene0Awakening onComplete={advance} />;
+        return (
+          <TutorialSlide
+            image={TUTORIAL_IMAGES.s1}
+            onNext={advance}
+            onSkip={handleSkip}
+          />
+        );
       case 1:
-        return <Scene1Landmarks onComplete={advance} />;
+        return (
+          <TutorialSlide
+            image={TUTORIAL_IMAGES.s2}
+            onNext={advance}
+            onSkip={handleSkip}
+          />
+        );
       case 2:
-        return <Scene2Clans onComplete={advance} />;
+        return (
+          <TutorialSlide
+            image={TUTORIAL_IMAGES.s3}
+            onNext={advance}
+            onSkip={handleSkip}
+          />
+        );
       case 3:
-        return <Scene3Silence onComplete={advance} />;
+        return (
+          <TutorialSlide
+            image={TUTORIAL_IMAGES.s4}
+            onNext={advance}
+            onSkip={handleSkip}
+          />
+        );
       case 4:
-        return <Scene4MossAppears onComplete={advance} />;
+        return (
+          <TutorialSlide
+            image={s5Image}
+            onNext={advance}
+            onSkip={handleSkip}
+          />
+        );
       case 5:
-        return <Scene5Stirring onComplete={advance} />;
+        return (
+          <TutorialSlide
+            image={TUTORIAL_IMAGES.s6}
+            onNext={advance}
+            onSkip={handleSkip}
+          />
+        );
       case 6:
-        return <Scene6YourClan onComplete={advance} />;
+        return (
+          <TutorialCharacterScene
+            onComplete={handleCharCreationComplete}
+            arrivedViaSkip={arrivedViaSkip}
+          />
+        );
       case 7:
-        return <Scene7TrueGoal onComplete={advance} />;
+        return <TutorialMapScene onComplete={advance} />;
       case 8:
-        return <Scene8CharacterCreation onComplete={handleScene8Complete} />;
-      case 9:
-        return <Scene9DemoGame onComplete={handleTutorialComplete} />;
+        return <TutorialMapOutroScene onComplete={handleTutorialDone} />;
       default:
         return null;
     }
   };
 
-  return (
-    <SafeAreaView style={styles.screen}>
-      <SceneBackground sceneIndex={sceneIndex} activeClanColor={activeClanColor} />
-      <TutorialProgressBar sceneIndex={sceneIndex} totalScenes={TOTAL_SCENES} />
-      <View style={styles.skipRow}>
-        <Pressable onPress={handleSkipPress} hitSlop={12}>
-          <Text style={styles.skipText}>Skip</Text>
-        </Pressable>
-      </View>
-      <View style={styles.sceneArea}>
-        {renderScene()}
-        {/* Scene 8 error & loading overlay */}
-        {sceneIndex === 8 && isSubmitting && (
-          <View style={styles.overlay}>
-            <ActivityIndicator size="large" color={PALETTE.honeyGold} />
-          </View>
-        )}
-        {sceneIndex === 8 && uploadError && !isSubmitting && (
-          <View style={styles.errorBanner}>
-            <Text style={styles.errorText}>{uploadError}</Text>
-          </View>
-        )}
-      </View>
+  // Progress bar is only shown during the 6 slides (scenes 0–5)
+  const showProgress = sceneIndex < SLIDE_COUNT;
 
-      {/* Skip confirmation modal */}
-      <Modal
-        visible={showSkipModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowSkipModal(false)}
-      >
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Skip the tutorial?</Text>
-            <Text style={styles.modalBody}>
-              You won&apos;t be asked again. You can always find game tips in Settings.
-            </Text>
-            <View style={styles.modalButtons}>
-              <Pressable
-                style={styles.modalBtnSecondary}
-                onPress={() => setShowSkipModal(false)}
-              >
-                <Text style={styles.modalBtnSecondaryText}>Go Back</Text>
-              </Pressable>
-              <Pressable style={styles.modalBtnPrimary} onPress={handleSkipConfirm}>
-                <Text style={styles.modalBtnPrimaryText}>Skip Tutorial</Text>
-              </Pressable>
-            </View>
-          </View>
-        </View>
-      </Modal>
-    </SafeAreaView>
+  return (
+    <View style={styles.screen}>
+      {showProgress && (
+        <TutorialProgressBar
+          sceneIndex={sceneIndex}
+          totalScenes={SLIDE_COUNT}
+        />
+      )}
+      <View style={styles.sceneArea}>{renderScene()}</View>
+    </View>
   );
 }
 
@@ -182,95 +163,7 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
   },
-  skipRow: {
-    position: 'absolute',
-    top: 12,
-    right: 16,
-    zIndex: 10,
-  },
-  skipText: {
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 13,
-    color: PALETTE.stoneGrey,
-  },
   sceneArea: {
     flex: 1,
-  },
-  overlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0,0,0,0.4)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  errorBanner: {
-    position: 'absolute',
-    bottom: 16,
-    left: 16,
-    right: 16,
-  },
-  errorText: {
-    fontFamily: FONTS.bodyRegular,
-    fontSize: 13,
-    color: PALETTE.errorRed,
-    textAlign: 'center',
-  },
-  // Skip confirmation modal
-  modalBackdrop: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  modalCard: {
-    backgroundColor: PALETTE.parchmentBg,
-    borderRadius: 16,
-    paddingVertical: 24,
-    paddingHorizontal: 28,
-    marginHorizontal: 32,
-    borderWidth: 1.5,
-    borderColor: PALETTE.honeyGold,
-  },
-  modalTitle: {
-    fontFamily: FONTS.headerBold,
-    fontSize: 24,
-    color: PALETTE.darkBrown,
-    textAlign: 'center',
-    marginBottom: 8,
-  },
-  modalBody: {
-    fontFamily: FONTS.bodyRegular,
-    fontSize: 14,
-    color: PALETTE.stoneGrey,
-    textAlign: 'center',
-    marginBottom: 20,
-    lineHeight: 20,
-  },
-  modalButtons: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: 12,
-  },
-  modalBtnSecondary: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: PALETTE.stoneGrey,
-  },
-  modalBtnSecondaryText: {
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 14,
-    color: PALETTE.stoneGrey,
-  },
-  modalBtnPrimary: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 8,
-    backgroundColor: PALETTE.errorRed,
-  },
-  modalBtnPrimaryText: {
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 14,
-    color: PALETTE.cream,
   },
 });

@@ -1,5 +1,5 @@
 /**
- * Potion Logic - Logic deduction minigame (portrait mode).
+ * Logic Grid — Logic deduction minigame (portrait mode).
  * 3 potions, 3 ingredients, 3 effects. Use clues to deduce all assignments.
  * Features an auto-marking cascade system for satisfying grid-fill UX.
  */
@@ -12,9 +12,13 @@ import {
   StyleSheet,
   Dimensions,
   Animated,
+  ImageBackground,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { LOGIC_GRID_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import {
@@ -31,6 +35,7 @@ import {
   EFFECTS,
   type CellState,
   type GridId,
+  type GridState,
   type Puzzle,
   type Potion,
   type Ingredient,
@@ -41,52 +46,48 @@ import {
 } from './PotionLogicLogic';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 
+import {
+  POTION_DISPLAY,
+  INGREDIENT_LABELS,
+  EFFECT_LABELS,
+  cellBg,
+  cellSymbol,
+} from './potionLogicShared';
+
 // ── Constants ────────────────────────────────────────────────────────
 
-const POTION_DISPLAY: Record<Potion, { color: string; label: string }> = {
-  red: { color: '#C0392B', label: 'Red' },
-  blue: { color: '#2980B9', label: 'Blue' },
-  green: { color: '#27AE60', label: 'Green' },
-};
+const MAX_WRONG = 3;
 
-const INGREDIENT_LABELS: Record<Ingredient, string> = {
-  herb: '\u{1F33F}Herb',
-  crystal: '\u{1F48E}Crys',
-  mushroom: '\u{1F344}Mush',
-};
-
-const EFFECT_LABELS: Record<Effect, string> = {
-  healing: '\u{1F49A}Heal',
-  speed: '\u26A1Spd',
-  shield: '\u{1F6E1}Shld',
-};
-
-function cellBg(origin: CellOrigin, state: CellState): string {
-  if (state === 'empty') return PALETTE.cream;
-  if (origin === 'auto_eliminated') return '#EAE4DA';
-  if (origin === 'manual_eliminated') return '#E0D8CC';
-  if (origin === 'auto_confirmed') return '#C4E0B0';
-  if (origin === 'manual_confirmed') return '#B8D9A0';
-  return PALETTE.cream;
-}
-
-function cellSymbol(state: CellState): string {
-  if (state === 'confirmed') return '\u2713';
-  if (state === 'eliminated') return '\u2717';
-  return '';
-}
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 // ── Component ────────────────────────────────────────────────────────
 
 export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Element {
-  const { sessionId, timeLimit, onComplete } = props;
+  const { sessionId, timeLimit, onComplete, puzzleData, practiceMode } = props;
 
   const puzzleRef = useRef<Puzzle | null>(null);
   if (puzzleRef.current === null) {
-    puzzleRef.current = generatePuzzle();
+    // Use server-generated puzzle when available; fall back to client generation
+    if (puzzleData?.clueTexts && puzzleData?.solution) {
+      const serverSolution = puzzleData.solution as { ingredients: Record<string, string>; effects: Record<string, string> };
+      const serverClueTexts = puzzleData.clueTexts as string[];
+      puzzleRef.current = {
+        solution: {
+          ingredients: serverSolution.ingredients as Puzzle['solution']['ingredients'],
+          effects: serverSolution.effects as Puzzle['solution']['effects'],
+        },
+        clues: serverClueTexts.map(text => ({
+          type: 'direct_positive' as const,
+          text,
+          apply: (grid: GridState) => grid,
+        })),
+      };
+    } else {
+      puzzleRef.current = generatePuzzle();
+    }
   }
   const puzzle = puzzleRef.current;
-  const gameDuration = timeLimit > 0 ? timeLimit : 120;
+  const gameDuration = timeLimit > 0 ? timeLimit : LOGIC_GRID_TIME_LIMIT;
 
   // ── State ──────────────────────────────────────────────────────────
 
@@ -94,14 +95,19 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
   const [highlightedClue, setHighlightedClue] = useState<number | null>(null);
   const [message, setMessage] = useState('');
   const [wrongFlash, setWrongFlash] = useState(false);
+  const [wrongCount, setWrongCount] = useState(0);
   const [gameOver, setGameOver] = useState(false);
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [timeLeft, setTimeLeft] = useState(gameDuration);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
   const pendingCompleteRef = useRef<MinigameResult | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+  const wrongCountRef = useRef(0);
 
   // ── Derived grid state (recomputed from manual marks) ──────────────
 
@@ -165,6 +171,7 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
     if (gameOver) return;
 
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
@@ -213,6 +220,42 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
     }
   }, [onComplete]);
 
+  // ── How to Play ────────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
+
+  // ── Wrong-answer handler ───────────────────────────────────────────
+
+  const handleWrongAnswer = useCallback(() => {
+    const newCount = wrongCountRef.current + 1;
+    wrongCountRef.current = newCount;
+    setWrongCount(newCount);
+
+    if (newCount >= MAX_WRONG) {
+      finishGame('lose');
+      return;
+    }
+
+    setWrongFlash(true);
+    const remaining = MAX_WRONG - newCount;
+    setMessage(`Wrong! ${remaining} attempt${remaining === 1 ? '' : 's'} remaining`);
+    setTimeout(() => {
+      setWrongFlash(false);
+      setMessage('');
+    }, 1200);
+  }, [finishGame]);
+
   // ── Auto-win check (after every recompute) ─────────────────────────
 
   useEffect(() => {
@@ -230,8 +273,11 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
       // Brief delay so the cascade animation finishes visually
       const timer = setTimeout(() => finishGame('win'), 350);
       return () => clearTimeout(timer);
+    } else {
+      // Grid is complete but incorrect — count as a wrong answer
+      handleWrongAnswer();
     }
-  }, [grid, gameOver, puzzle.solution, finishGame]);
+  }, [grid, gameOver, puzzle.solution, finishGame, handleWrongAnswer]);
 
   // ── Cell tap handler ───────────────────────────────────────────────
 
@@ -248,48 +294,49 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
         return;
       }
 
-      setManualMarks(prev => {
-        // empty → manual ✗
-        if (origin === 'empty') {
-          return {
-            ...prev,
-            eliminations: [...prev.eliminations, { grid: gridType, row, col }],
-          };
+      // manual ✗ → try manual ✓: validate BEFORE calling setManualMarks
+      if (origin === 'manual_eliminated') {
+        const prev = manualMarks;
+        const newElims = prev.eliminations.filter(
+          e => !(e.grid === gridType && e.row === row && e.col === col),
+        );
+        const newConfirms = [...prev.confirms, { grid: gridType, row, col }];
+        const testComputed = computeGridState({ confirms: newConfirms, eliminations: newElims });
+
+        if (!isValidGridState(testComputed.grid[gridType])) {
+          setMessage('Only one per row and column');
+          setTimeout(() => setMessage(''), 1500);
+          return;
         }
 
-        // manual ✗ → try manual ✓
-        if (origin === 'manual_eliminated') {
-          const newElims = prev.eliminations.filter(
-            e => !(e.grid === gridType && e.row === row && e.col === col),
-          );
-          const newConfirms = [...prev.confirms, { grid: gridType, row, col }];
-          const testComputed = computeGridState({ confirms: newConfirms, eliminations: newElims });
+        setManualMarks({ confirms: newConfirms, eliminations: newElims });
+        setMessage('');
+        return;
+      }
 
-          if (!isValidGridState(testComputed.grid[gridType])) {
-            setMessage('Only one per row and column');
-            setTimeout(() => setMessage(''), 1500);
-            return prev;
-          }
+      // empty → manual ✗
+      if (origin === 'empty') {
+        setManualMarks(prev => ({
+          ...prev,
+          eliminations: [...prev.eliminations, { grid: gridType, row, col }],
+        }));
+        setMessage('');
+        return;
+      }
 
-          return { confirms: newConfirms, eliminations: newElims };
-        }
-
-        // manual ✓ → empty
-        if (origin === 'manual_confirmed') {
-          return {
-            ...prev,
-            confirms: prev.confirms.filter(
-              co => !(co.grid === gridType && co.row === row && co.col === col),
-            ),
-          };
-        }
-
-        return prev;
-      });
-
-      setMessage('');
+      // manual ✓ → empty
+      if (origin === 'manual_confirmed') {
+        setManualMarks(prev => ({
+          ...prev,
+          confirms: prev.confirms.filter(
+            co => !(co.grid === gridType && co.row === row && co.col === col),
+          ),
+        }));
+        setMessage('');
+        return;
+      }
     },
-    [gameOver, origins],
+    [gameOver, origins, manualMarks],
   );
 
   // ── Submit handler (fallback if auto-win doesn't fire) ─────────────
@@ -310,14 +357,9 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
     if (isCorrect) {
       finishGame('win');
     } else {
-      setWrongFlash(true);
-      setMessage('Not quite right... keep trying!');
-      setTimeout(() => {
-        setWrongFlash(false);
-        setMessage('');
-      }, 1200);
+      handleWrongAnswer();
     }
-  }, [gameOver, puzzle.solution, finishGame]);
+  }, [gameOver, puzzle.solution, finishGame, handleWrongAnswer]);
 
   // ── Layout calculations ────────────────────────────────────────────
 
@@ -414,8 +456,17 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
   // ── Render ─────────────────────────────────────────────────────────
 
   return (
-    <View style={styles.container}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Top bar */}
+      <View style={styles.topBar}>
+        <View />
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* Timer bar */}
+      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
       <View style={styles.timerBarBg}>
         <View
           style={[
@@ -427,7 +478,6 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
           ]}
         />
       </View>
-      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
 
       {/* Clue panel */}
       <View style={styles.cluePanel}>
@@ -465,7 +515,12 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
         ))}
       </View>
 
-      {/* Message */}
+      {/* Message & attempts */}
+      {!gameOver && (
+        <Text style={styles.attemptsText}>
+          Attempts left: {MAX_WRONG - wrongCount}
+        </Text>
+      )}
       {message !== '' && <Text style={styles.message}>{message}</Text>}
 
       {/* Logic grids */}
@@ -504,22 +559,80 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
+          xpEarned={overlayResult === 'win' && !practiceMode ? 25 : 0}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Logic Grid</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Three potions each have one ingredient and one effect. Use the clues to figure out which belongs to which.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a cell once to mark it {'\u2717'} (eliminated). Tap again to mark {'\u2713'} (confirmed). Tap once more to clear it.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Each row and column can have only one {'\u2713'}. When you confirm a cell, others in that row and column are auto-eliminated.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} When only one option is left in a row or column, it is confirmed automatically.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap Submit when all cells are filled. You have 3 wrong submissions before losing.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Read all clues before touching the grid. Clues that eliminate options are often faster than clues that confirm them.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 // ── Styles ───────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: UI.background,
     alignItems: 'center',
     paddingTop: 8,
     paddingBottom: 8,
+  },
+
+  // Top bar
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
 
   // Timer
@@ -539,7 +652,9 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     fontSize: 14,
     color: UI.text,
-    marginBottom: 4,
+    alignSelf: 'flex-start',
+    marginLeft: '5%',
+    marginBottom: 2,
   },
 
   // Clue panel
@@ -566,7 +681,7 @@ const styles = StyleSheet.create({
   clueCardHighlighted: {
     borderColor: PALETTE.honeyGold,
     borderWidth: 2,
-    backgroundColor: '#FFF8E7',
+    backgroundColor: PALETTE.clueHighlight,
   },
   clueCardDimmed: {
     opacity: 0.5,
@@ -592,6 +707,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     gap: 24,
     marginBottom: 6,
+    left: -20,
   },
   potionBottle: {
     alignItems: 'center',
@@ -607,7 +723,7 @@ const styles = StyleSheet.create({
   bottleNeck: {
     width: 12,
     height: 8,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: PALETTE.glassWhite30,
     borderTopLeftRadius: 4,
     borderTopRightRadius: 4,
     marginTop: -4,
@@ -619,13 +735,21 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // Message
+  // Message & attempts
+  attemptsText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 12,
+    color: PALETTE.darkBrown,
+    marginBottom: 2,
+    left: -20,
+  },
   message: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 13,
     color: PALETTE.mutedRose,
     marginBottom: 2,
     height: 18,
+    left: -20,
   },
 
   // Grids
@@ -642,7 +766,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   gridTitle: {
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.title,
     fontSize: 18,
     color: PALETTE.darkBrown,
     marginBottom: 4,
@@ -652,6 +776,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-end',
     marginBottom: 2,
     gap: 2,
+    left: -20,
   },
   colHeader: {
     alignItems: 'center',
@@ -669,6 +794,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 2,
     marginBottom: 2,
+    left: -20,
   },
   rowHeader: {
     flexDirection: 'row',
@@ -680,7 +806,7 @@ const styles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.15)',
+    borderColor: PALETTE.borderBlack15,
   },
   cell: {
     borderWidth: 1,
@@ -694,7 +820,6 @@ const styles = StyleSheet.create({
   },
   cellSymbol: {
     fontSize: 20,
-    fontFamily: FONTS.bodyBold,
   },
   cellSymbolConfirmed: {
     color: PALETTE.deepGreen,
@@ -718,7 +843,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginTop: 8,
     borderBottomWidth: 3,
-    borderBottomColor: '#A0784C',
+    borderBottomColor: PALETTE.midBrown,
     minWidth: 180,
     alignItems: 'center',
   },
@@ -733,5 +858,54 @@ const styles = StyleSheet.create({
   },
   submitBtnTextDisabled: {
     color: PALETTE.stoneGrey,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: UI.overlay,
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

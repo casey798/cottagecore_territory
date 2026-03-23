@@ -6,18 +6,23 @@ import {
   Animated,
   Easing,
   StyleSheet,
+  ToastAndroid,
 } from 'react-native';
+import messaging from '@react-native-firebase/messaging';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useAuthStore } from '@/store/useAuthStore';
+import { TC_VERSION } from '@/constants/config';
 import LoginScreen from '@/screens/LoginScreen';
 import TutorialScreen from '@/screens/TutorialScreen';
+import TermsAndConditionsScreen from '@/screens/TermsAndConditionsScreen';
 import { MainStack } from './MainStack';
 
 export type RootStackParamList = {
   Login: undefined;
   Tutorial: undefined;
   Main: undefined;
+  TermsAndConditions: { mode: 'consent' | 'view' };
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -66,12 +71,24 @@ function SplashScreen() {
 export function RootNavigator() {
   const isHydrated = useAuthStore((s) => s.isHydrated);
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
+  const tcAcceptedAt = useAuthStore((s) => s.tcAcceptedAt);
+  const tcVersion = useAuthStore((s) => s.tcVersion);
   const tutorialDone = useAuthStore((s) => s.tutorialDone);
   const tutorialSkipped = useAuthStore((s) => s.tutorialSkipped);
   const restoreSession = useAuthStore((s) => s.restoreSession);
   const logout = useAuthStore((s) => s.logout);
 
   const [sessionChecked, setSessionChecked] = React.useState(false);
+
+  // FCM foreground listener — show toast for partner chest notifications
+  useEffect(() => {
+    const unsubscribe = messaging().onMessage(async (remoteMessage) => {
+      if (remoteMessage.data?.type === 'PARTNER_CHEST') {
+        ToastAndroid.show('Co-op reward! You earned XP and a chest', ToastAndroid.LONG);
+      }
+    });
+    return unsubscribe;
+  }, []);
 
   // After Zustand rehydrates persisted state, verify the token is still valid
   // before rendering the main app. This prevents the map screen from firing
@@ -105,6 +122,13 @@ export function RootNavigator() {
       <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!isAuthenticated ? (
           <Stack.Screen name="Login" component={LoginScreen} />
+        ) : !tcAcceptedAt || tcVersion !== TC_VERSION ? (
+          <Stack.Screen
+            name="TermsAndConditions"
+            component={TermsAndConditionsScreen}
+            initialParams={{ mode: 'consent' }}
+            options={{ gestureEnabled: false }}
+          />
         ) : !tutorialDone && !tutorialSkipped ? (
           <Stack.Screen name="Tutorial" component={TutorialScreen} />
         ) : (

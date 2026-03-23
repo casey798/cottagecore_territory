@@ -1,5 +1,5 @@
 /**
- * Vine Trail Co-op — split-screen variant of Vine Trail.
+ * Word Hunt Co-op — split-screen variant of Word Hunt (vine-trail).
  * P1 owns rows 0–3, P2 owns rows 4–7.
  * Boundary words (spanning both zones) require both players to trace
  * their portions, then jointly submit via a shared button.
@@ -12,6 +12,8 @@ import {
   StyleSheet,
   Dimensions,
   Animated,
+  Modal,
+  Pressable,
 } from 'react-native';
 import Svg, { Line, Circle } from 'react-native-svg';
 import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
@@ -45,6 +47,17 @@ const screenWidth = Dimensions.get('window').width;
 const cellSize = Math.floor((screenWidth - GRID_PADDING * 2 - GRID_GAP * (COLS - 1)) / COLS);
 const halfGridHeight = cellSize * HALF_ROWS + GRID_GAP * (HALF_ROWS - 1);
 
+// ── Per-word connector colors mapped to nearest PALETTE constants ──
+const CONNECTOR_COLORS = [
+  PALETTE.mutedRose,   // closest PALETTE match to #E07A5F (terracotta)
+  PALETTE.softGreen,   // closest PALETTE match to #3D9970 (emerald)
+  PALETTE.softBlue,    // closest PALETTE match to #7B6CF6 (lavender — no purple in PALETTE)
+  PALETTE.amberLight,  // closest PALETTE match to #F4A261 (sandy orange)
+  PALETTE.playerBlue,  // closest PALETTE match to #2196F3 (sky blue)
+  PALETTE.errorRed,    // closest PALETTE match to #E91E8C (rose)
+  PALETTE.deepGreen,   // closest PALETTE match to #81B29A (sage)
+];
+
 // ── Color helpers ──────────────────────────────────────────────────
 
 function clanColor(clan: string): string {
@@ -75,11 +88,6 @@ function blendColorOver(baseHex: string, overlayHex: string, alpha: number): str
   const b = Math.round(base.b * (1 - alpha) + over.b * alpha);
   return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
 }
-
-const CONNECTOR_COLORS = [
-  '#E07A5F', '#3D9970', '#7B6CF6', '#F4A261',
-  '#2196F3', '#E91E8C', '#81B29A',
-];
 
 // ── Word ownership helpers ─────────────────────────────────────────
 
@@ -159,7 +167,7 @@ export function validateBoundaryPaths(
 // ── Component ──────────────────────────────────────────────────────
 
 export default function VineTrailCoopGame(props: MinigamePlayProps) {
-  const { sessionId, timeLimit, onComplete, puzzleData } = props;
+  const { sessionId, timeLimit, onComplete, puzzleData, practiceMode } = props;
 
   const p1Name = (puzzleData?.p1Name as string) ?? 'Player 1';
   const p1Clan = (puzzleData?.p1Clan as string) ?? 'ember';
@@ -172,9 +180,8 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
   // ── Init ─────────────────────────────────────────────────────────
 
   const [pack] = useState(() => {
-    const eightRowPacks = vineTrailPacks.filter(p => p.grid.length >= 8);
-    const pool = eightRowPacks.length > 0 ? eightRowPacks : vineTrailPacks;
-    return pool[Math.floor(Math.random() * pool.length)];
+    // All packs are 8-row grids; no filter needed
+    return vineTrailPacks[Math.floor(Math.random() * vineTrailPacks.length)];
   });
 
   const [gameState, setGameState] = useState<VineTrailState>(() => initGame(pack));
@@ -189,6 +196,17 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
   const gameOverHandled = useRef(false);
+  const winDelayRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wrongFlashRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Refs mirroring p1Path/p2Path for access inside callbacks without adding them to dep arrays
+  const p1PathRef = useRef<CellCoord[]>([]);
+  const p2PathRef = useRef<CellCoord[]>([]);
+
+  // How to Play state + pause refs
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
 
   const wordOwnership = useMemo(
     () => classifyWordOwnership(gameState.words),
@@ -222,10 +240,29 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
 
   const shakeAnim = useRef(new Animated.Value(0)).current;
 
+  // Keep path refs in sync with state for use inside callbacks
+  useEffect(() => { p1PathRef.current = p1Path; }, [p1Path]);
+  useEffect(() => { p2PathRef.current = p2Path; }, [p2Path]);
+
+  // Cleanup all timeout refs on unmount
+  useEffect(() => {
+    return () => {
+      if (winDelayRef.current !== null) {
+        clearTimeout(winDelayRef.current);
+        winDelayRef.current = null;
+      }
+      if (wrongFlashRef.current !== null) {
+        clearTimeout(wrongFlashRef.current);
+        wrongFlashRef.current = null;
+      }
+    };
+  }, []);
+
   // ── Timer ────────────────────────────────────────────────────────
 
   useEffect(() => {
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       setGameState(prev => {
         if (prev.gameOver) return prev;
         return tickTimer(prev, timeLimit);
@@ -258,10 +295,10 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
         timeTaken,
         completionHash,
         solutionData: {
-          wordsFound: gameState.words.filter(w => w.found).length,
-          totalWords: gameState.words.length,
-          boundaryWordsFound: boundaryCount,
+          packId: pack.id,
+          wordsFound: gameState.words.filter(w => w.found).map(w => w.word),
           solved: outcome === 'win',
+          boundaryWordsFound: boundaryCount,
         },
       };
     },
@@ -275,13 +312,31 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
     }
   }, [onComplete]);
 
+  // ── How to Play ──────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
+
   // ── Handle game over from logic ──────────────────────────────────
 
   useEffect(() => {
     if (!gameState.gameOver || gameOverHandled.current) return;
     gameOverHandled.current = true;
     if (gameState.won) {
-      setTimeout(() => finishGame('win'), 1000);
+      winDelayRef.current = setTimeout(() => {
+        winDelayRef.current = null;
+        finishGame('win');
+      }, 1000);
     } else {
       finishGame('timeout');
     }
@@ -295,6 +350,10 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
 
     const cellKey = `${row},${col}`;
     if (gameState.lockedCells.has(cellKey)) return;
+
+    // Prevent selecting a cell already in the other player's path (read from refs to avoid dep on state arrays)
+    const otherPath = player === 'p1' ? p2PathRef.current : p1PathRef.current;
+    if (otherPath.some(([r, c]) => r === row && c === col)) return;
 
     const cell: CellCoord = [row, col];
     const setPath = player === 'p1' ? setP1Path : setP2Path;
@@ -319,65 +378,72 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
   // ── Submit logic ─────────────────────────────────────────────────
 
   const handleSubmit = useCallback(() => {
-    if (gameOver || gameState.gameOver) return;
+    if (gameOver) return;
 
-    // Determine what we're submitting
-    const hasBothPaths = p1Path.length > 0 && p2Path.length > 0;
-    const hasP1Only = p1Path.length > 0 && p2Path.length === 0;
-    const hasP2Only = p2Path.length > 0 && p1Path.length === 0;
+    // Snapshot current paths from refs so we can read them inside the setGameState callback
+    const currentP1Path = p1PathRef.current;
+    const currentP2Path = p2PathRef.current;
 
-    let pathToSubmit: CellCoord[] | null = null;
+    setGameState(prev => {
+      if (prev.gameOver) return prev;
 
-    if (hasBothPaths) {
-      // Boundary word attempt
-      const { valid, combinedPath } = validateBoundaryPaths(p1Path, p2Path);
-      if (!valid || !isValidPath(combinedPath, gameState.pack.grid)) {
-        // Invalid combined path — flash and clear
-        setWrongFlash(true);
-        setTimeout(() => setWrongFlash(false), 400);
-        setP1Path([]);
-        setP2Path([]);
-        return;
+      // Determine what we're submitting
+      const hasBothPaths = currentP1Path.length > 0 && currentP2Path.length > 0;
+      const hasP1Only = currentP1Path.length > 0 && currentP2Path.length === 0;
+      const hasP2Only = currentP2Path.length > 0 && currentP1Path.length === 0;
+
+      let pathToSubmit: CellCoord[] | null = null;
+
+      if (hasBothPaths) {
+        // Boundary word attempt
+        const { valid, combinedPath } = validateBoundaryPaths(currentP1Path, currentP2Path);
+        if (!valid || !isValidPath(combinedPath, prev.pack.grid)) {
+          // Invalid combined path — flash and clear
+          setWrongFlash(true);
+          wrongFlashRef.current = setTimeout(() => {
+            wrongFlashRef.current = null;
+            setWrongFlash(false);
+          }, 400);
+          setP1Path([]);
+          setP2Path([]);
+          return prev;
+        }
+        pathToSubmit = combinedPath;
+      } else if (hasP1Only) {
+        pathToSubmit = currentP1Path;
+      } else if (hasP2Only) {
+        pathToSubmit = currentP2Path;
       }
-      pathToSubmit = combinedPath;
-    } else if (hasP1Only) {
-      pathToSubmit = p1Path;
-    } else if (hasP2Only) {
-      pathToSubmit = p2Path;
-    }
 
-    if (!pathToSubmit || pathToSubmit.length === 0) return;
+      if (!pathToSubmit || pathToSubmit.length === 0) return prev;
 
-    // Set the combined/single path into state and submit
-    const stateWithPath: VineTrailState = {
-      ...gameState,
-      selectedPath: pathToSubmit,
-    };
+      // Build state with path and run submission logic against prev (not stale closure)
+      const stateWithPath: VineTrailState = { ...prev, selectedPath: pathToSubmit };
+      const { newState, result, canonicalPath } = submitWord(stateWithPath);
 
-    const { newState, result, canonicalPath } = submitWord(stateWithPath);
-
-    if (result === 'correct' && canonicalPath) {
-      canonicalPath.forEach(([r, c]) => {
-        const anim = cellAnims[r][c];
+      if (result === 'correct' && canonicalPath) {
+        canonicalPath.forEach(([r, c]) => {
+          Animated.sequence([
+            Animated.timing(cellAnims[r][c], { toValue: 1.15, duration: 150, useNativeDriver: true }),
+            Animated.timing(cellAnims[r][c], { toValue: 1, duration: 150, useNativeDriver: true }),
+          ]).start();
+        });
+      } else if (result === 'wrong') {
         Animated.sequence([
-          Animated.timing(anim, { toValue: 1.15, duration: 150, useNativeDriver: true }),
-          Animated.timing(anim, { toValue: 1, duration: 150, useNativeDriver: true }),
+          Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
+          Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
+          Animated.timing(shakeAnim, { toValue: 8, duration: 50, useNativeDriver: true }),
+          Animated.timing(shakeAnim, { toValue: -8, duration: 50, useNativeDriver: true }),
+          Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
         ]).start();
-      });
-    } else if (result === 'wrong') {
-      Animated.sequence([
-        Animated.timing(shakeAnim, { toValue: 10, duration: 50, useNativeDriver: true }),
-        Animated.timing(shakeAnim, { toValue: -10, duration: 50, useNativeDriver: true }),
-        Animated.timing(shakeAnim, { toValue: 8, duration: 50, useNativeDriver: true }),
-        Animated.timing(shakeAnim, { toValue: -8, duration: 50, useNativeDriver: true }),
-        Animated.timing(shakeAnim, { toValue: 0, duration: 50, useNativeDriver: true }),
-      ]).start();
-    }
+      }
 
-    setGameState(newState);
-    setP1Path([]);
-    setP2Path([]);
-  }, [gameOver, gameState, p1Path, p2Path, cellAnims, shakeAnim]);
+      setP1Path([]);
+      setP2Path([]);
+
+      return newState;
+    });
+  }, [gameOver, cellAnims, shakeAnim]);
 
   const handleClear = useCallback((player: 'p1' | 'p2') => {
     if (player === 'p1') setP1Path([]);
@@ -495,7 +561,7 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
                         ]}
                         onPress={() => handleTap(row, col, player)}
                         activeOpacity={isLocked ? 1 : 0.7}
-                        disabled={gameOver}
+                        disabled={gameOver || gameState.gameOver}
                       >
                         <Text style={[styles.cellLetter, { color: cs.letterColor }]}>
                           {gameState.pack.grid[row][col]}
@@ -551,7 +617,7 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
             <TouchableOpacity
               style={styles.clearButton}
               onPress={() => handleClear(player)}
-              disabled={gameOver}
+              disabled={gameOver || gameState.gameOver}
             >
               <Text style={styles.clearButtonText}>Clear</Text>
             </TouchableOpacity>
@@ -565,9 +631,10 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
 
   return (
     <View style={styles.root}>
-      {/* Word tracker */}
-      <View style={styles.wordTracker}>
-        {gameState.words.map((w, i) => (
+      {/* Top row: word tracker + help button */}
+      <View style={styles.topRow}>
+        <View style={styles.wordTracker}>
+          {gameState.words.map((w, i) => (
           <View
             key={i}
             style={[
@@ -582,6 +649,10 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
             </Text>
           </View>
         ))}
+        </View>
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
       </View>
 
       {/* P1 Zone */}
@@ -620,11 +691,50 @@ export default function VineTrailCoopGame(props: MinigamePlayProps) {
         {renderZone(HALF_ROWS, ROWS, 'p2')}
       </View>
 
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Vine Trail Co-op</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} The letter grid is split in half {'\u2014'} Player 1 searches the top half, Player 2 searches the bottom.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Trace words by tapping adjacent letters in your half.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Words that cross the boundary (marked with a dashed border in the word list) need both players to trace their portion and tap Submit Together.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} The word list is shared {'\u2014'} when either player finds a word, it is marked for both.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Find all hidden words before time runs out to win together.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Hints are not available in co-op mode {'\u2014'} work together to find every word!
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Start with words entirely in your half, then coordinate with your partner on boundary words.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
       {/* Game complete overlay */}
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
     </View>
@@ -640,6 +750,7 @@ const styles = StyleSheet.create({
   },
 
   wordTracker: {
+    flex: 1,
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
@@ -781,5 +892,75 @@ const styles = StyleSheet.create({
   },
   submitButtonTextDisabled: {
     color: PALETTE.stoneGrey,
+  },
+
+  // Top row
+  topRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 8,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: 4,
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

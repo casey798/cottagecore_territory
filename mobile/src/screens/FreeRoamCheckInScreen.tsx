@@ -8,6 +8,7 @@ import {
   StyleSheet,
   SafeAreaView,
   ImageBackground,
+  Alert,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -170,6 +171,8 @@ export default function FreeRoamCheckInScreen() {
 
   const canSubmit =
     pinnedPixelX !== null &&
+    pinnedGpsLat !== null &&
+    pinnedGpsLng !== null &&
     activity !== null &&
     satisfaction !== null &&
     sentiment !== null &&
@@ -203,16 +206,15 @@ export default function FreeRoamCheckInScreen() {
   }, [screenState, navigation]);
 
   const handleMapTap = useCallback((pixelX: number, pixelY: number) => {
+    if (!mapConfig?.transformMatrix) {
+      Alert.alert('Map not loaded yet', 'Please wait for the map to finish loading.');
+      return;
+    }
     setPinnedPixelX(pixelX);
     setPinnedPixelY(pixelY);
-    if (mapConfig?.transformMatrix) {
-      const gps = pixelToGps(pixelX, pixelY, mapConfig.transformMatrix);
-      setPinnedGpsLat(gps.lat);
-      setPinnedGpsLng(gps.lng);
-    } else {
-      setPinnedGpsLat(null);
-      setPinnedGpsLng(null);
-    }
+    const gps = pixelToGps(pixelX, pixelY, mapConfig.transformMatrix);
+    setPinnedGpsLat(gps.lat);
+    setPinnedGpsLng(gps.lng);
   }, [mapConfig]);
 
   // Time clamping helpers
@@ -292,8 +294,8 @@ export default function FreeRoamCheckInScreen() {
     const activityTimeISO = `${activityDate}T${pad2(activityHour)}:${pad2(activityMinute)}:00+05:30`;
 
     const result = await submitCheckIn({
-      gpsLat: pinnedGpsLat ?? 0,
-      gpsLng: pinnedGpsLng ?? 0,
+      gpsLat: pinnedGpsLat!,
+      gpsLng: pinnedGpsLng!,
       pixelX: pinnedPixelX ?? 0,
       pixelY: pinnedPixelY ?? 0,
       pixelAvailable: pinnedPixelX !== null,
@@ -487,10 +489,8 @@ export default function FreeRoamCheckInScreen() {
                 key={opt.value}
                 style={[
                   styles.activityCard,
-                  activity === opt.value && {
-                    borderColor: clanColor,
-                    borderWidth: 2,
-                  },
+                  activity === opt.value && styles.activityCardSelected,
+                  activity === opt.value && { borderColor: clanColor },
                 ]}
                 onPress={() => setActivity(opt.value)}
               >
@@ -510,10 +510,8 @@ export default function FreeRoamCheckInScreen() {
                 key={opt.value}
                 style={[
                   styles.satisfactionBtn,
-                  satisfaction === opt.value && {
-                    backgroundColor: clanColor + '30',
-                    borderColor: clanColor,
-                  },
+                  satisfaction === opt.value && styles.satisfactionBtnSelected,
+                  satisfaction === opt.value && { backgroundColor: clanColor + '30', borderColor: clanColor },
                 ]}
                 onPress={() => setSatisfaction(opt.value)}
               >
@@ -700,7 +698,8 @@ export default function FreeRoamCheckInScreen() {
           <Pressable
             style={[
               styles.submitBtn,
-              canSubmit ? { backgroundColor: clanColor } : styles.submitBtnDisabled,
+              canSubmit ? styles.submitBtnEnabled : styles.submitBtnDisabled,
+              canSubmit && { backgroundColor: clanColor },
             ]}
             onPress={handleSubmit}
             disabled={!canSubmit || screenState === 'submitting'}
@@ -836,6 +835,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: PALETTE.stoneGrey + '40',
   },
+  activityCardSelected: {
+    borderWidth: 2,
+  },
   activityIcon: {
     fontSize: 22,
     marginBottom: 4,
@@ -873,6 +875,9 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
     flex: 1,
     marginHorizontal: 2,
+  },
+  satisfactionBtnSelected: {
+    borderWidth: 1,
   },
   satisfactionEmoji: {
     fontSize: 22,
@@ -1009,6 +1014,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginTop: 24,
     marginBottom: 8,
+  },
+  submitBtnEnabled: {
+    opacity: 1,
   },
   submitBtnDisabled: {
     backgroundColor: PALETTE.stoneGrey,

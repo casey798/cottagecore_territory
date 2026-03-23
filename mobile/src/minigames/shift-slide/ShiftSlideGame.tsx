@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
+  ImageBackground,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import {
@@ -33,10 +37,11 @@ import {
 } from './ShiftSlideLogic';
 import { getImageById } from './imageList';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const BOARD_PADDING = 16;
-const CELL_SIZE = (SCREEN_WIDTH - BOARD_PADDING * 2) / 3;
-const BOARD_SIZE = CELL_SIZE * 3;
+const SCREEN_WIDTH = Dimensions.get('window').width;
+const BOARD_SIZE = Math.floor(SCREEN_WIDTH * 0.8);
+const CELL_SIZE = BOARD_SIZE / 3;
+
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 // Cottagecore fallback palette for placeholder tiles (8 tiles)
 const PLACEHOLDER_COLORS = [
@@ -52,14 +57,8 @@ const PLACEHOLDER_COLORS = [
 
 const EMPTY_SLOT_COLOR = 'rgba(61, 43, 31, 0.4)';
 
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.ceil(seconds % 60);
-  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
-}
-
 export default function ShiftSlideGame(props: MinigamePlayProps) {
-  const { sessionId, timeLimit, onComplete, puzzleData } = props;
+  const { sessionId, timeLimit, onComplete, puzzleData, practiceMode } = props;
 
   const imageId = (puzzleData?.imageId as string) || 'fox-face';
   const scrambleSeed = (puzzleData?.scrambleSeed as number) || 42;
@@ -77,10 +76,17 @@ export default function ShiftSlideGame(props: MinigamePlayProps) {
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [showInstruction, setShowInstruction] = useState(true);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+
+  // Store onComplete in a ref so callbacks always use the latest version
+  const onCompleteRef = useRef(onComplete);
+  useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
 
   // Hide instruction after 3 seconds
   useEffect(() => {
@@ -88,40 +94,47 @@ export default function ShiftSlideGame(props: MinigamePlayProps) {
     return () => clearTimeout(timer);
   }, []);
 
-  // Timer
+  const gameDuration = timeLimit > 0 ? timeLimit : 120;
+
+  // Timer — elapsed from startTimeRef, respects isPausedRef
   useEffect(() => {
     if (gameOver) return;
+
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
-      const remaining = Math.max(0, timeLimit - elapsed);
+      const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
+
       if (remaining <= 0) {
         clearInterval(interval);
-        finishGame('lose');
+        finishGame('timeout');
       }
     }, 100);
+
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameOver, timeLimit]);
+  }, [gameOver, gameDuration]);
 
   const finishGame = useCallback(
-    (result: 'win' | 'lose') => {
+    (outcome: 'win' | 'lose' | 'timeout') => {
       if (completedRef.current) return;
       completedRef.current = true;
       setGameOver(true);
 
       const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
-      const completionHash = generateClientCompletionHash(sessionId, result, timeTaken);
+      const completionHash = generateClientCompletionHash(sessionId, outcome, timeTaken);
 
       const solutionData: Record<string, unknown> = {
         finalBoard: board,
         moveCount,
         imageId,
-        solved: result === 'win',
+        solved: outcome === 'win',
       };
 
-      pendingResultRef.current = { result, timeTaken, completionHash, solutionData };
-      setOverlayResult(result);
+      pendingResultRef.current = { result: outcome, timeTaken, completionHash, solutionData };
+      // Timeout shows as 'lose' in the overlay (same as NumberGroveGame)
+      setOverlayResult(outcome === 'win' ? 'win' : 'lose');
       setShowCompleteOverlay(true);
     },
     [sessionId, board, moveCount, imageId],
@@ -129,10 +142,10 @@ export default function ShiftSlideGame(props: MinigamePlayProps) {
 
   const handleContinue = useCallback(() => {
     if (pendingResultRef.current) {
-      onComplete(pendingResultRef.current);
+      onCompleteRef.current(pendingResultRef.current);
       pendingResultRef.current = null;
     }
-  }, [onComplete]);
+  }, []);
 
   const handleTap = useCallback(
     (boardIndex: number) => {
@@ -167,20 +180,49 @@ export default function ShiftSlideGame(props: MinigamePlayProps) {
     [handleTap],
   );
 
-  const isTimeLow = timeLeft < 10;
+  // ── How to Play ──────────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
+
+  const timerFraction = timeLeft / gameDuration;
 
   const imageWidth = skiaImage?.width() ?? 0;
   const imageHeight = skiaImage?.height() ?? 0;
 
   return (
-    <View style={styles.root}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
       {/* Top bar */}
       <View style={styles.topBar}>
-        <Text style={[styles.timerText, isTimeLow && styles.textDanger]}>
-          {'\u23F1'} {formatTime(timeLeft)}
-        </Text>
         <Text style={styles.movesText}>Moves: {moveCount}</Text>
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
       </View>
+
+      {/* Timer bar */}
+      <View style={styles.timerBarBg}>
+        <View
+          style={[
+            styles.timerBarFill,
+            {
+              width: `${timerFraction * 100}%`,
+              backgroundColor: timerFraction > 0.25 ? PALETTE.softGreen : PALETTE.mutedRose,
+            },
+          ]}
+        />
+      </View>
+      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
 
       {/* Board */}
       <View style={styles.boardWrapper}>
@@ -277,41 +319,98 @@ export default function ShiftSlideGame(props: MinigamePlayProps) {
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
+          xpEarned={overlayResult === 'win' ? 25 : 0}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Tile Slide</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} A picture has been scrambled into tiles on a 3{'\u00D7'}3 grid, with one tile missing.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap any tile next to the empty space to slide it in.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Keep sliding tiles until the picture is restored.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} The empty space is always the bottom-right corner in the solved position.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Plan your moves {'\u2014'} you have limited time!
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Work on one row at a time. Get the top row right first, then the middle.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: UI.background,
     alignItems: 'center',
     paddingTop: 8,
   },
   topBar: {
     width: '100%',
-    height: 48,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 20,
-    marginBottom: 16,
-  },
-  timerText: {
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 16,
-    color: UI.text,
   },
   movesText: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 16,
     color: UI.text,
   },
-  textDanger: {
-    color: PALETTE.errorRed,
+  timerBarBg: {
+    width: '90%',
+    height: 8,
+    backgroundColor: PALETTE.stoneGrey,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginBottom: 2,
+  },
+  timerBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  timerText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+    color: UI.text,
+    marginBottom: 16,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
   boardWrapper: {
     width: BOARD_SIZE,
@@ -330,5 +429,54 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: PALETTE.stoneGrey,
     marginTop: 24,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

@@ -1,5 +1,5 @@
 /**
- * Grove Words - Pure game logic (no React dependencies).
+ * Wordle - Pure game logic (no React dependencies).
  */
 import { ANSWER_WORDS, getValidWordSet } from './wordlist';
 

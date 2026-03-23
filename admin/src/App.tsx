@@ -19,6 +19,7 @@ import { SeasonPage } from '@/pages/SeasonPage';
 import { CaptureHistoryPage } from '@/pages/CaptureHistoryPage';
 import { ClusterConfigPage } from '@/pages/ClusterConfigPage';
 import { Phase1ImportPage } from '@/pages/Phase1ImportPage';
+import { ExportsPage } from '@/pages/ExportsPage';
 
 const GOOGLE_CLIENT_ID =
   '425457815141-c7qp4l9sjkn5fgcv9t3odnu83j4nd3nh.apps.googleusercontent.com';
@@ -192,6 +193,14 @@ export function App() {
               element={
                 <ProtectedLayout>
                   <Phase1ImportPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/exports"
+              element={
+                <ProtectedLayout>
+                  <ExportsPage />
                 </ProtectedLayout>
               }
             />

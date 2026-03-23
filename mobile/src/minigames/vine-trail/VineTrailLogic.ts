@@ -52,7 +52,7 @@ export function isAdjacent(a: CellCoord, b: CellCoord): boolean {
 }
 
 export function isValidPath(path: CellCoord[], _grid: string[][]): boolean {
-  if (path.length === 0) return true;
+  if (path.length === 0) return false;
   const seen = new Set<string>();
   for (let i = 0; i < path.length; i++) {
     const key = `${path[i][0]},${path[i][1]}`;
@@ -65,62 +65,6 @@ export function isValidPath(path: CellCoord[], _grid: string[][]): boolean {
 
 export function getWordFromPath(path: CellCoord[], grid: string[][]): string {
   return path.map(([r, c]) => grid[r][c]).join('');
-}
-
-export function findAlternatePath(
-  word: string,
-  grid: string[][],
-  _canonicalPath: CellCoord[],
-  lockedCells: Set<string>,
-): CellCoord[] | null {
-  const rows = grid.length;
-  const cols = grid[0].length;
-  const target = word.toUpperCase();
-
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      if (lockedCells.has(`${r},${c}`)) continue;
-      if (grid[r][c] !== target[0]) continue;
-      const result = dfs(grid, target, 0, r, c, [], new Set(), lockedCells, rows, cols);
-      if (result) return result;
-    }
-  }
-  return null;
-}
-
-function dfs(
-  grid: string[][],
-  target: string,
-  idx: number,
-  r: number,
-  c: number,
-  path: CellCoord[],
-  visited: Set<string>,
-  lockedCells: Set<string>,
-  rows: number,
-  cols: number,
-): CellCoord[] | null {
-  const key = `${r},${c}`;
-  if (lockedCells.has(key) || visited.has(key)) return null;
-  if (grid[r][c] !== target[idx]) return null;
-
-  const newPath: CellCoord[] = [...path, [r, c]];
-  if (idx === target.length - 1) return newPath;
-
-  const newVisited = new Set(visited);
-  newVisited.add(key);
-
-  for (let dr = -1; dr <= 1; dr++) {
-    for (let dc = -1; dc <= 1; dc++) {
-      if (dr === 0 && dc === 0) continue;
-      const nr = r + dr;
-      const nc = c + dc;
-      if (nr < 0 || nr >= rows || nc < 0 || nc >= cols) continue;
-      const result = dfs(grid, target, idx + 1, nr, nc, newPath, newVisited, lockedCells, rows, cols);
-      if (result) return result;
-    }
-  }
-  return null;
 }
 
 export function tapCell(state: VineTrailState, cell: CellCoord): VineTrailState {

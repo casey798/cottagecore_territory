@@ -22,6 +22,7 @@ export interface AvatarConfig {
   skinTone: number;
   outfit: number;
   accessory: number;
+  characterPreset?: number;
 }
 
 export interface User {
@@ -37,6 +38,8 @@ export interface User {
   bestStreak: number;
   lastActiveDate: string;
   tutorialDone: boolean;
+  tcAcceptedAt?: string | null;
+  tcVersion?: string | null;
   fcmToken: string;
   playerCode: string | null;
   createdAt: string;
@@ -166,15 +169,16 @@ export interface StartGameResponse {
   puzzleData: Record<string, unknown>;
 }
 
+export interface ChestDropAsset {
+  assetId: string;
+  name: string;
+  category: string;
+  rarity: AssetRarity;
+}
+
 export interface ChestDrop {
   dropped: boolean;
-  asset?: {
-    assetId: string;
-    name: string;
-    category: AssetCategory;
-    rarity: AssetRarity;
-    imageKey: string;
-  };
+  asset?: ChestDropAsset;
 }
 
 export interface CompleteGameResponse {
@@ -184,9 +188,10 @@ export interface CompleteGameResponse {
   newTodayXp?: number;
   clanTodayXp?: number;
   chestDrop: ChestDrop;
+  partnerChestDrop?: ChestDrop;
   locationLocked?: boolean;
-  bonusXpTriggered?: boolean;
-  linkedLocation?: { locationId: string; name: string } | null;
+  lockedUntil?: string;
+  capReached?: boolean;
 }
 
 export interface ClanScore {
@@ -199,10 +204,20 @@ export interface ClanScore {
 }
 
 export interface CaptureHistoryEntry {
+  spaceId: string;
   date: string;
   spaceName: string;
   clan: ClanId;
   mapOverlayId: string;
+}
+
+export interface GridCellDef {
+  x: number;
+  y: number;
+  col?: number;
+  row?: number;
+  pixelX?: number;
+  pixelY?: number;
 }
 
 export interface CapturedSpace {
@@ -212,11 +227,11 @@ export interface CapturedSpace {
   dateCaptured: string;
   mapOverlayId: string;
   polygonPoints?: Array<{ x: number; y: number }>;
-  gridCells?: Array<{ x: number; y: number }>;
+  gridCells?: GridCellDef[];
 }
 
 export interface PlacedAsset {
-  assetId: string;
+  userAssetId: string;
   x: number;
   y: number;
   rotation: number;
@@ -238,6 +253,8 @@ export interface PlayerAsset {
   placed: boolean;
   expiresAt: string | null;
   obtainedFrom: AssetSource;
+  permanent?: boolean;
+  expired?: boolean;
 }
 
 export interface AssetCatalogItem {
@@ -285,6 +302,8 @@ export interface PlayerProfile {
   currentStreak: number;
   bestStreak: number;
   tutorialDone: boolean;
+  tcAcceptedAt?: string | null;
+  tcVersion?: string | null;
   playerCode?: string | null;
 }
 
@@ -370,6 +389,27 @@ export interface SeasonSummaryData {
     bestStreak: number;
     spacesDiscovered: number;
   };
+}
+
+// ── Journal types ──────────────────────────────────────────────────
+
+export type JournalLocationStatus = 'won' | 'lost' | 'locked' | 'pending';
+
+export interface JournalEntry {
+  locationId: string;
+  name: string;
+  category: string;
+  status: JournalLocationStatus;
+  xpEarned: number;
+  minigameId: string | null;
+  completedAt: string | null;
+  coopPartnerId: string | null;
+}
+
+export interface DayJournal {
+  date: string;
+  totalXp: number;
+  locations: JournalEntry[];
 }
 
 // ── Mosaic minigame types ──────────────────────────────────────────

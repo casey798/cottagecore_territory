@@ -1,13 +1,13 @@
-import React, { useEffect, useRef, useCallback } from 'react';
-import { View, Text, StyleSheet, Pressable } from 'react-native';
-import { Canvas, Circle, Group } from '@shopify/react-native-skia';
+import React, { useEffect, useRef, useState, useCallback } from 'react';
 import {
-  useSharedValue,
-  withRepeat,
-  withTiming,
-  Easing,
-  useDerivedValue,
-} from 'react-native-reanimated';
+  View,
+  Text,
+  StyleSheet,
+  Image,
+  ImageBackground,
+  TouchableOpacity,
+  ImageSourcePropType,
+} from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
@@ -21,36 +21,20 @@ import { ClanId } from '@/types';
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type Route = RouteProp<MainModalParamList, 'CaptureCelebration'>;
 
-const AUTO_DISMISS_MS = 5000;
-const PARTICLE_COUNT = 20;
+const SPRITE_FRAME_COUNT = 9;
+const SPRITE_FRAME_WIDTH = 222;
+const SPRITE_FRAME_HEIGHT = 333;
+const SPRITE_FRAME_DURATION = 100;
 
-interface Particle {
-  startX: number;
-  startY: number;
-  endX: number;
-  endY: number;
-  size: number;
-  color: string;
-}
+const CLAN_CRESTS: Record<ClanId, ImageSourcePropType> = {
+  ember: require('../assets/sprites/crests/crest_wardens.png'),
+  tide: require('../assets/sprites/crests/crest_chroniclers.png'),
+  bloom: require('../assets/sprites/crests/crest_keepers.png'),
+  gale: require('../assets/sprites/crests/crest_seekers.png'),
+  hearth: require('../assets/sprites/crests/crest_guardians.png'),
+};
 
-function generateParticles(clanColor: string): Particle[] {
-  const particles: Particle[] = [];
-  for (let i = 0; i < PARTICLE_COUNT; i++) {
-    const startX = 150 + Math.random() * 100;
-    const startY = 120 + Math.random() * 40;
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 80 + Math.random() * 120;
-    particles.push({
-      startX,
-      startY,
-      endX: startX + Math.cos(angle) * dist,
-      endY: startY + Math.sin(angle) * dist,
-      size: 3 + Math.random() * 5,
-      color: i % 2 === 0 ? clanColor : '#FFD700',
-    });
-  }
-  return particles;
-}
+const CREST_FALLBACK = CLAN_CRESTS.ember;
 
 export default function CaptureCelebrationScreen() {
   const navigation = useNavigation<Nav>();
@@ -60,29 +44,31 @@ export default function CaptureCelebrationScreen() {
   const loadCapturedSpaces = useMapStore((s) => s.loadCapturedSpaces);
   const setCaptureResult = useGameStore((s) => s.setCaptureResult);
   const clearCelebration = useGameStore((s) => s.clearCelebration);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const isOwnClan = playerClan === winnerClan;
+  const isOwnClan = !!playerClan && playerClan === winnerClan;
   const clanColor = CLAN_COLORS[winnerClan as ClanId] ?? '#D4A843';
   const clanDisplayName = winnerClan.charAt(0).toUpperCase() + winnerClan.slice(1);
+  const crestSource = CLAN_CRESTS[winnerClan as ClanId] ?? CREST_FALLBACK;
 
-  const progress = useSharedValue(0);
+  // Spritesheet animation (only used when isOwnClan)
+  const currentFrame = useRef<number>(0);
+  const [displayFrame, setDisplayFrame] = useState<number>(0);
 
   useEffect(() => {
-    progress.value = withRepeat(
-      withTiming(1, { duration: 2000, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true,
-    );
-  }, [progress]);
+    if (!isOwnClan) return;
 
-  const particles = useRef(generateParticles(clanColor)).current;
+    const interval = setInterval(() => {
+      currentFrame.current = (currentFrame.current + 1) % SPRITE_FRAME_COUNT;
+      setDisplayFrame(currentFrame.current);
+    }, SPRITE_FRAME_DURATION);
+
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, [isOwnClan]);
 
   const dismiss = useCallback(() => {
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
     setCaptureResult(null);
     clearCelebration();
     loadCapturedSpaces();
@@ -91,42 +77,33 @@ export default function CaptureCelebrationScreen() {
     }
   }, [navigation, setCaptureResult, clearCelebration, loadCapturedSpaces]);
 
-  useEffect(() => {
-    timerRef.current = setTimeout(dismiss, AUTO_DISMISS_MS);
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, [dismiss]);
-
   return (
-    <Pressable style={styles.container} onPress={dismiss}>
-      <Canvas style={styles.sparkleCanvas}>
-        <Group>
-          {particles.map((p, i) => {
-            const t = ((Date.now() / 1000 + i * 0.2) % 2) / 2;
-            const x = p.startX + (p.endX - p.startX) * t;
-            const y = p.startY + (p.endY - p.startY) * t;
-            const opacity = 1 - t;
-            return (
-              <Circle
-                key={i}
-                cx={x}
-                cy={y}
-                r={p.size * opacity}
-                color={p.color}
-                opacity={opacity}
-              />
-            );
-          })}
-        </Group>
-      </Canvas>
-
+    <ImageBackground
+      source={require('../assets/ui/backgrounds/bg_plain.png')}
+      style={styles.container}
+      resizeMode="cover"
+    >
       <View style={styles.content}>
-        <View style={[styles.bannerCircle, { backgroundColor: clanColor + '30', borderColor: clanColor }]}>
-          <Text style={[styles.bannerEmoji]}>
-            {winnerClan === 'ember' ? '🔥' : winnerClan === 'tide' ? '🌊' : winnerClan === 'bloom' ? '🌻' : winnerClan === 'hearth' ? '🏠' : '🍃'}
-          </Text>
-        </View>
+        {isOwnClan && (
+          <View style={styles.spriteScaleWrapper}>
+            <View style={styles.spriteContainer}>
+              <Image
+                source={require('../assets/sprites/anim_capture.png')}
+                style={[
+                  styles.spriteSheet,
+                  { transform: [{ translateX: -(displayFrame * SPRITE_FRAME_WIDTH) }] },
+                ]}
+                resizeMode="cover"
+              />
+            </View>
+          </View>
+        )}
+
+        <Image
+          source={crestSource}
+          style={styles.crestImage}
+          resizeMode="contain"
+        />
 
         <Text style={[styles.clanName, { color: clanColor }]}>
           {clanDisplayName}
@@ -144,37 +121,48 @@ export default function CaptureCelebrationScreen() {
           <Text style={styles.mutedText}>Better luck tomorrow!</Text>
         )}
 
-        <Text style={styles.tapHint}>Tap anywhere to continue</Text>
+        <TouchableOpacity
+          style={[styles.continueButton, { backgroundColor: clanColor }]}
+          onPress={dismiss}
+        >
+          <Text style={styles.continueButtonText}>
+            {isOwnClan ? 'Continue' : 'Close'}
+          </Text>
+        </TouchableOpacity>
       </View>
-    </Pressable>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: 'rgba(30, 20, 10, 0.92)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  sparkleCanvas: {
-    ...StyleSheet.absoluteFillObject,
   },
   content: {
     alignItems: 'center',
     paddingHorizontal: 32,
+    marginTop: -80,
   },
-  bannerCircle: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    borderWidth: 3,
-    justifyContent: 'center',
-    alignItems: 'center',
+  spriteScaleWrapper: {
+    transform: [{ scale: 1.0 }],
+    marginBottom: 12,
+  },
+  spriteContainer: {
+    width: SPRITE_FRAME_WIDTH,
+    height: SPRITE_FRAME_HEIGHT,
+    overflow: 'hidden',
+  },
+  spriteSheet: {
+    width: SPRITE_FRAME_WIDTH * SPRITE_FRAME_COUNT,
+    height: SPRITE_FRAME_HEIGHT,
+  },
+  crestImage: {
+    width: 84,
+    height: 84,
+    marginTop: 10,
     marginBottom: 20,
-  },
-  bannerEmoji: {
-    fontSize: 40,
   },
   clanName: {
     fontSize: 36,
@@ -185,33 +173,38 @@ const styles = StyleSheet.create({
   capturedText: {
     fontSize: 16,
     fontFamily: FONTS.bodyRegular,
-    color: PALETTE.cream,
+    color: PALETTE.darkBrown,
+    letterSpacing: 1,
     marginVertical: 4,
   },
   spaceName: {
     fontSize: 24,
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.bodySemiBold,
     color: PALETTE.honeyGold,
     textAlign: 'center',
     marginBottom: 16,
   },
   heroText: {
     fontSize: 28,
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.bodySemiBold,
     textTransform: 'uppercase',
     letterSpacing: 3,
     marginBottom: 24,
   },
   mutedText: {
     fontSize: 18,
-    fontFamily: FONTS.bodySemiBold,
+    fontFamily: FONTS.bodyRegular,
     color: PALETTE.stoneGrey,
     marginBottom: 24,
   },
-  tapHint: {
-    fontSize: 12,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.stoneGrey + '80',
-    marginTop: 16,
+  continueButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 36,
+    borderRadius: 8,
+  },
+  continueButtonText: {
+    color: '#FFFFFF',
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
   },
 });

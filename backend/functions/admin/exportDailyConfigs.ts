@@ -50,7 +50,7 @@ export async function handler(
       lastKey = result.lastEvaluatedKey;
     } while (lastKey);
 
-    const header = 'date,activeLocationIds,targetSpaceName,winnerClan,status';
+    const header = 'date,activeLocationIds,targetSpaceName,winnerClan,status,quietMode';
     const rows = allItems.map((d) =>
       csvRow([
         d.date,
@@ -58,6 +58,7 @@ export async function handler(
         d.targetSpace?.name ?? '',
         d.winnerClan ?? '',
         d.status,
+        d.quietMode === true ? 'true' : 'false',
       ])
     );
 

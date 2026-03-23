@@ -3,6 +3,19 @@ import { render, waitFor, fireEvent } from '@testing-library/react-native';
 
 // Mock dependencies
 jest.mock('react-native/Libraries/Animated/NativeAnimatedHelper');
+jest.mock('react-native-reanimated', () => {
+  const { View } = require('react-native');
+  return {
+    __esModule: true,
+    default: { Image: View, View },
+    useSharedValue: (v: number) => ({ value: v }),
+    useAnimatedStyle: () => ({}),
+    useDerivedValue: (fn: () => unknown) => ({ value: fn() }),
+    withTiming: (v: number) => v,
+    withSequence: (...args: number[]) => args[args.length - 1],
+    Easing: { out: () => {}, inOut: () => {} },
+  };
+});
 jest.mock('@react-navigation/native', () => ({
   useNavigation: () => ({ popToTop: jest.fn() }),
   useRoute: () => ({ params: mockParams }),
@@ -70,7 +83,6 @@ describe('ResultScreen', () => {
           name: 'Golden Banner',
           category: 'banner',
           rarity: 'legendary',
-          imageKey: 'banners/golden.png',
         },
       },
       locationLocked: false,
@@ -120,20 +132,19 @@ describe('ResultScreen', () => {
     expect(getByText('Not this time...')).toBeTruthy();
   });
 
-  it('lose state with location locked shows lock message', () => {
+  it('lose state with location locked shows lock countdown', () => {
     mockParams = {
       result: 'lose',
       xpEarned: 0,
       chestDrop: { dropped: false },
       locationLocked: true,
+      lockedUntil: new Date(Date.now() + 3600 * 1000).toISOString(),
     };
 
     const { getByText } = render(<ResultScreen />);
 
     expect(getByText('Not this time...')).toBeTruthy();
-    expect(
-      getByText('This location is locked for today. Try a different spot!'),
-    ).toBeTruthy();
+    expect(getByText('This grove is sealed for now.')).toBeTruthy();
   });
 
   it('win with xpAwarded=false shows practice message', () => {

@@ -1,5 +1,5 @@
 import admin from 'firebase-admin';
-import { scan, query } from './db';
+import { getItem, scan, query } from './db';
 import { User } from './types';
 import { ensureFirebaseInitialized } from './firebase';
 
@@ -9,6 +9,19 @@ export interface FCMMessage {
     body: string;
   };
   data: Record<string, string>;
+}
+
+export async function sendToPlayer(
+  userId: string,
+  message: FCMMessage
+): Promise<void> {
+  try {
+    const user = await getItem<User>('users', { userId });
+    if (!user?.fcmToken) return;
+    await sendToTokens([user.fcmToken], message);
+  } catch (e) {
+    console.error('sendToPlayer failed:', e);
+  }
 }
 
 const BATCH_SIZE = 500;

@@ -17,7 +17,7 @@ function buffer(beads: JarData['beads'] = []): JarData {
   return { beads, isBuffer: true };
 }
 
-describe('LeafSortLogic', () => {
+describe('ColorSortLogic', () => {
   describe('generatePuzzle', () => {
     it('returns 5 jars total', () => {
       const jars = generatePuzzle();

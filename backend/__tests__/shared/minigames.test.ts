@@ -19,27 +19,26 @@ describe('minigames metadata', () => {
 
   it('includes grove-words with 120s timeLimit', () => {
     expect(MINIGAME_POOL['grove-words']).toEqual({
-      name: 'Grove Words',
+      name: 'Wordle',
       timeLimit: 120,
       description: 'Guess the word in 6 tries',
       difficulty: 'medium',
     });
   });
 
-  it('includes kindred with 150s timeLimit', () => {
-    expect(MINIGAME_POOL['kindred']).toEqual({
-      name: 'Kindred',
-      timeLimit: 150,
-      description: 'Group 16 words into 4 groups',
-      difficulty: 'medium',
+  it('includes word-clusters with 180s timeLimit', () => {
+    expect(MINIGAME_POOL['word-clusters']).toEqual({
+      name: 'Word Clusters',
+      timeLimit: 180,
+      description: 'Sort 16 words into 4 groups. 8 mistakes allowed.',
     });
   });
 
-  it('includes stone-pairs with 60s timeLimit', () => {
+  it('includes stone-pairs with 90s timeLimit', () => {
     expect(MINIGAME_POOL['stone-pairs']).toEqual({
-      name: 'Stone Pairs',
-      timeLimit: 60,
-      description: 'Find matching pairs',
+      name: 'Flip & Match',
+      timeLimit: 90,
+      description: 'Flip cards to find matching pairs. Remember what you saw \u2014 every flip counts.',
       difficulty: 'easy',
     });
   });

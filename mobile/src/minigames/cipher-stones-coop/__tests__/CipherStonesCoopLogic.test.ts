@@ -1,6 +1,6 @@
 import {
-  P1_KEYS,
-  P2_KEYS,
+  VOWEL_KEYS,
+  CONSONANT_KEYS,
   applyKeyToMappings,
   allQuoteLettersMapped,
 } from '../CipherStonesCoopGame';
@@ -9,27 +9,27 @@ import { generatePuzzle, checkGuess } from '../../cipher-stones/CipherStonesLogi
 // ── Keyboard split ────────────────────────────────────────────────
 
 describe('CipherStonesCoop: keyboard split', () => {
-  it('P1 has exactly keys A through M (13 keys)', () => {
-    expect(P1_KEYS).toHaveLength(13);
-    const expected = 'ABCDEFGHIJKLM'.split('');
-    expect([...P1_KEYS]).toEqual(expected);
+  it('P1 has exactly 5 vowel keys', () => {
+    expect(VOWEL_KEYS).toHaveLength(5);
+    const expected = ['A', 'E', 'I', 'O', 'U'];
+    expect([...VOWEL_KEYS]).toEqual(expected);
   });
 
-  it('P2 has exactly keys N through Z (13 keys)', () => {
-    expect(P2_KEYS).toHaveLength(13);
-    const expected = 'NOPQRSTUVWXYZ'.split('');
-    expect([...P2_KEYS]).toEqual(expected);
+  it('P2 has exactly 21 consonant keys', () => {
+    expect(CONSONANT_KEYS).toHaveLength(21);
+    const expected = 'BCDFGHJKLMNPQRSTVWXYZ'.split('');
+    expect([...CONSONANT_KEYS]).toEqual(expected);
   });
 
   it('P1 and P2 keys have no overlap', () => {
-    const p1Set = new Set<string>(P1_KEYS);
-    for (const key of P2_KEYS) {
+    const p1Set = new Set<string>(VOWEL_KEYS);
+    for (const key of CONSONANT_KEYS) {
       expect(p1Set.has(key)).toBe(false);
     }
   });
 
   it('union of P1 and P2 covers the full 26-letter alphabet', () => {
-    const all: Set<string> = new Set([...P1_KEYS, ...P2_KEYS]);
+    const all: Set<string> = new Set([...VOWEL_KEYS, ...CONSONANT_KEYS]);
     expect(all.size).toBe(26);
     for (let i = 0; i < 26; i++) {
       expect(all.has(String.fromCharCode(65 + i))).toBe(true);

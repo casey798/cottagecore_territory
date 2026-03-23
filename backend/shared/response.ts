@@ -57,14 +57,15 @@ export function success(data: unknown, statusCode = 200): APIGatewayProxyResult 
 export function error(
   code: ErrorCode,
   message: string,
-  statusCode: number
+  statusCode: number,
+  extras?: Record<string, unknown>
 ): APIGatewayProxyResult {
   return {
     statusCode,
     headers: CORS_HEADERS,
     body: JSON.stringify({
       success: false,
-      error: { code, message },
+      error: { code, message, ...extras },
     }),
   };
 }

@@ -1,6 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { error, ErrorCode } from '../../shared/response';
 import { scan } from '../../shared/db';
+import { classifySession, isTrueAbandoned } from '../../shared/sessionClassification';
 import type { GameSession, User, LocationMasterConfig } from '../../shared/types';
 
 function csvEscape(val: unknown): string {
@@ -24,14 +25,14 @@ const CSV_HEADERS = {
 };
 
 const MINIGAME_NAMES: Record<string, string> = {
-  'grove-words': 'Grove Words',
-  'kindred': 'Kindred',
+  'grove-words': 'Wordle',
+  'word-clusters': 'Word Clusters',
   'stone-pairs': 'Stone Pairs',
-  'vine-trail': 'Vine Trail',
+  'vine-trail': 'Word Hunt',
   'mosaic': 'Mosaic',
   'pips': 'Pips',
   'cipher-stones': 'Cipher Stones',
-  'potion-logic': 'Potion Logic',
+  'potion-logic': 'Logic Grid',
   'leaf-sort': 'Leaf Sort',
   'path-weaver': 'Path Weaver',
   'firefly-flow': 'Firefly Flow',
@@ -39,13 +40,13 @@ const MINIGAME_NAMES: Record<string, string> = {
   'bloom-sequence': 'Bloom Sequence',
   'shift-slide': 'Shift & Slide',
   'signal-path': 'Signal Path',
-  'number-grove': 'Number Grove',
-  'kindred-coop': 'Kindred (Co-op)',
+  'number-grove': 'Mini Sudoku',
+  'word-clusters-coop': 'Word Clusters (Co-op)',
   'cipher-stones-coop': 'Cipher Stones (Co-op)',
   'pips-coop': 'Pips (Co-op)',
   'stone-pairs-coop': 'Stone Pairs (Co-op)',
-  'potion-logic-coop': 'Potion Logic (Co-op)',
-  'vine-trail-coop': 'Vine Trail (Co-op)',
+  'potion-logic-coop': 'Logic Grid (Co-op)',
+  'vine-trail-coop': 'Word Hunt (Co-op)',
 };
 
 async function scanAll<T>(table: string, opts?: Parameters<typeof scan>[1]): Promise<T[]> {
@@ -92,7 +93,7 @@ export async function handler(
     const locationMap = new Map<string, LocationMasterConfig>();
     for (const l of locations) locationMap.set(l.locationId, l);
 
-    const header = 'sessionId,userId,locationId,locationQRNumber,locationName,locationClassification,minigameId,minigameName,date,startedAt,completedAt,result,xpEarned,chestDropped,chestAssetId,coopPartnerId,coopMode,dwellTimeSeconds,phase1Cluster,practiceSession';
+    const header = 'sessionId,userId,locationId,locationQRNumber,locationName,locationClassification,minigameId,minigameName,date,startedAt,completedAt,result,xpEarned,chestDropped,chestAssetId,coopPartnerId,coopMode,dwellTimeSeconds,phase1Cluster,practiceSession,sessionType,trueAbandoned,leaveReason,spaceSentiment,sentimentSubmittedAt';
     const rows = allItems.map((s) => {
       const user = userMap.get(s.userId);
       const loc = locationMap.get(s.locationId);
@@ -117,6 +118,11 @@ export async function handler(
         s.dwellTime ?? '',
         user?.phase1Cluster ?? '',
         s.practiceSession ? 'yes' : 'no',
+        classifySession(s),
+        isTrueAbandoned(s) ? 'true' : 'false',
+        s.leaveReason ?? '',
+        s.spaceSentiment ?? '',
+        s.sentimentSubmittedAt ?? '',
       ]);
     });
 

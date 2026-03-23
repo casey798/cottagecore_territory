@@ -11,4 +11,6 @@ export const FONTS = {
   // Aliases (same underlying fonts, kept for semantic clarity)
   heading: 'Bungee-Regular',
   pixel: 'PixelifySans-VariableFont_wght',
+  title: 'Bungee-Regular',
+  body: 'PixelifySans-VariableFont_wght',
 } as const;

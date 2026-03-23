@@ -18,6 +18,7 @@ export const avatarConfigSchema = z.object({
   skinTone: z.number().int().min(0).max(7),
   outfit: z.number().int().min(0).max(7),
   accessory: z.number().int().min(0).max(9),
+  characterPreset: z.number().int().min(0).max(7).optional(),
 });
 
 export const updateAvatarSchema = z.object({
@@ -96,7 +97,7 @@ export const seasonResetSchema = z.object({
 });
 
 export const placedAssetSchema = z.object({
-  assetId: z.string(),
+  userAssetId: z.string(),
   x: z.number(),
   y: z.number(),
   rotation: z.number(),

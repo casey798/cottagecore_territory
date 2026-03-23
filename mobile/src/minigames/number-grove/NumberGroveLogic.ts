@@ -1,4 +1,5 @@
 import { BASE_GRIDS } from './baseGrids';
+import { NUMBER_FILL_TIME_LIMIT } from '@/constants/config';
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -220,6 +221,9 @@ function carveSymmetric(solution: number[][]): number[][] {
 // ── Public API ────────────────────────────────────────────────────────
 
 export function generatePuzzle(): NumberGrovePuzzle {
+  // Guard: ensure base grids are available
+  if (BASE_GRIDS.length === 0) throw new Error('BASE_GRIDS is empty');
+
   // 1. Pick random base grid
   let grid = cloneGrid(BASE_GRIDS[Math.floor(Math.random() * BASE_GRIDS.length)]);
 
@@ -235,7 +239,30 @@ export function generatePuzzle(): NumberGrovePuzzle {
   // 3. Carve cells (target 12 removals → 24 givens)
   const puzzle = carveSymmetric(solution);
 
-  return { puzzle, solution, timeLimit: 120 };
+  // 4. Ensure at least one empty cell exists
+  let emptyCount = 0;
+  for (let r = 0; r < 6; r++) {
+    for (let c = 0; c < 6; c++) {
+      if (puzzle[r][c] === 0) emptyCount++;
+    }
+  }
+
+  if (emptyCount === 0) {
+    // Force-carve a single cell that preserves unique solvability
+    for (let r = 0; r < 6; r++) {
+      for (let c = 0; c < 6; c++) {
+        const v = puzzle[r][c];
+        puzzle[r][c] = 0;
+        if (hasUniqueSolution(puzzle)) {
+          return { puzzle, solution, timeLimit: NUMBER_FILL_TIME_LIMIT };
+        }
+        puzzle[r][c] = v;
+      }
+    }
+    throw new Error('Cannot carve even one cell while preserving unique solution');
+  }
+
+  return { puzzle, solution, timeLimit: NUMBER_FILL_TIME_LIMIT };
 }
 
 export function getConflicts(board: number[][]): Set<string> {

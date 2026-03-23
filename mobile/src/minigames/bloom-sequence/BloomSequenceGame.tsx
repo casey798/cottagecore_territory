@@ -1,5 +1,5 @@
 /**
- * Bloom Sequence — 3-round pattern recognition minigame.
+ * Spot the Pattern — 3-round pattern recognition minigame.
  * Each round: 5-item sequence + pick the correct 6th item from 4 options.
  */
 import React, { useState, useEffect, useRef, useCallback } from 'react';
@@ -10,11 +10,15 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
+  ImageBackground,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { SPOT_THE_PATTERN_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
-import type { MinigamePlayProps } from '@/types/minigame';
+import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import {
   generateGame,
   validateAnswer,
@@ -24,20 +28,20 @@ import {
 } from './BloomSequenceLogic';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 
-// ── Sizes for visual items ─────────────────────────────────────────────
+// ── Constants ─────────────────────────────────────────────────────────
 
 const SIZE_PX = { small: 24, medium: 36, large: 52 } as const;
 const ITEM_BOX = 56;
 const OPTION_BOX = 72;
 
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
+
 // ── SequenceItem renderer ──────────────────────────────────────────────
 
 function renderItem(item: SequenceItem, boxSize: number): React.JSX.Element {
-  const center = { alignItems: 'center' as const, justifyContent: 'center' as const };
-
   if (item.kind === 'number') {
     return (
-      <View style={[styles.numTile, { width: boxSize, height: boxSize }]}>
+      <View style={[styles.numTile, styles.itemBox, { width: boxSize, height: boxSize }]}>
         <Text style={styles.numText}>{item.value}</Text>
       </View>
     );
@@ -47,8 +51,8 @@ function renderItem(item: SequenceItem, boxSize: number): React.JSX.Element {
     const sz = item.size ? SIZE_PX[item.size] : 36;
     const borderR = item.shape === 'square' ? 4 : sz / 2;
     return (
-      <View style={[center, { width: boxSize, height: boxSize }]}>
-        <View style={{ width: sz, height: sz, borderRadius: borderR, backgroundColor: item.color! }} />
+      <View style={[styles.itemCenter, { width: boxSize, height: boxSize }]}>
+        <View style={[styles.colorSwatch, { width: sz, height: sz, borderRadius: borderR, backgroundColor: item.color! }]} />
       </View>
     );
   }
@@ -57,8 +61,18 @@ function renderItem(item: SequenceItem, boxSize: number): React.JSX.Element {
     const sz = 36;
     const borderR = item.shape === 'circle' ? sz / 2 : 4;
     return (
-      <View style={[center, { width: boxSize, height: boxSize }]}>
-        <View style={{ width: sz, height: sz, borderRadius: borderR, backgroundColor: item.color! }} />
+      <View style={[styles.itemCenter, { width: boxSize, height: boxSize }]}>
+        <View style={[styles.colorSwatch, { width: sz, height: sz, borderRadius: borderR, backgroundColor: item.color! }]} />
+      </View>
+    );
+  }
+
+  if (item.kind === 'size') {
+    const sz = item.size ? SIZE_PX[item.size] : 36;
+    const borderR = item.shape === 'square' ? 4 : sz / 2;
+    return (
+      <View style={[styles.itemCenter, { width: boxSize, height: boxSize }]}>
+        <View style={[styles.colorSwatch, { width: sz, height: sz, borderRadius: borderR, backgroundColor: item.color! }]} />
       </View>
     );
   }
@@ -71,8 +85,8 @@ function renderItem(item: SequenceItem, boxSize: number): React.JSX.Element {
     const sz = item.size ? SIZE_PX[item.size] : 36;
     const borderR = item.shape === 'circle' ? sz / 2 : 4;
     return (
-      <View style={[center, { width: boxSize, height: boxSize }]}>
-        <View style={{ width: sz, height: sz, borderRadius: borderR, backgroundColor: item.color! }} />
+      <View style={[styles.itemCenter, { width: boxSize, height: boxSize }]}>
+        <View style={[styles.colorSwatch, { width: sz, height: sz, borderRadius: borderR, backgroundColor: item.color! }]} />
       </View>
     );
   }
@@ -88,18 +102,12 @@ function renderDots(count: number, boxSize: number): React.JSX.Element {
     dots.push(
       <View
         key={i}
-        style={{
-          width: dotSize,
-          height: dotSize,
-          borderRadius: dotSize / 2,
-          backgroundColor: PALETTE.darkBrown,
-          margin: 1,
-        }}
+        style={[styles.dot, { width: dotSize, height: dotSize, borderRadius: dotSize / 2 }]}
       />,
     );
   }
   return (
-    <View style={{ width: boxSize, height: boxSize, flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', justifyContent: 'center', padding: 4 }}>
+    <View style={[styles.dotContainer, { width: boxSize, height: boxSize }]}>
       {dots}
     </View>
   );
@@ -138,7 +146,7 @@ function OptionCard({ item, index, onPress, disabled, state }: OptionCardProps) 
   return (
     <Animated.View style={{ transform: [{ translateX: shakeAnim }] }}>
       <TouchableOpacity
-        style={[styles.optionCard, { backgroundColor: bgColor, width: OPTION_BOX * 1.6, height: OPTION_BOX * 1.3 }]}
+        style={[styles.optionCard, { backgroundColor: bgColor }]}
         onPress={() => onPress(index)}
         disabled={disabled}
         activeOpacity={0.7}
@@ -152,8 +160,8 @@ function OptionCard({ item, index, onPress, disabled, state }: OptionCardProps) 
 // ── Main Component ─────────────────────────────────────────────────────
 
 export default function BloomSequenceGameComponent(props: MinigamePlayProps): React.JSX.Element {
-  const { sessionId, timeLimit, onComplete } = props;
-  const gameDuration = timeLimit > 0 ? timeLimit : 90;
+  const { sessionId, timeLimit, onComplete, practiceMode } = props;
+  const gameDuration = timeLimit > 0 ? timeLimit : SPOT_THE_PATTERN_TIME_LIMIT;
 
   // Use server puzzleData if available, otherwise generate client-side
   const puzzleData = props.puzzleData as { rounds?: Round[] } | undefined;
@@ -166,7 +174,6 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
   // ── State ────────────────────────────────────────────────────────────
 
   const [currentRound, setCurrentRound] = useState(0);
-  const [wrongCount, setWrongCount] = useState(0);
   const [optionStates, setOptionStates] = useState<Array<'default' | 'correct' | 'wrong'>>(['default', 'default', 'default', 'default']);
   const [roundLocked, setRoundLocked] = useState(false);
   const [showRoundOverlay, setShowRoundOverlay] = useState(false);
@@ -175,10 +182,20 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [timeLeft, setTimeLeft] = useState(gameDuration);
   const [answers, setAnswers] = useState<number[]>([]);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
-  const pendingCompleteRef = useRef<Parameters<typeof onComplete>[0] | null>(null);
+  const pendingResultRef = useRef<MinigameResult | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+
+  // Refs for stale-closure fix (CHANGE 5)
+  const answersRef = useRef<number[]>([]);
+  const currentRoundRef = useRef(0);
+
+  useEffect(() => { answersRef.current = answers; }, [answers]);
+  useEffect(() => { currentRoundRef.current = currentRound; }, [currentRound]);
 
   const round = gameRef.current.rounds[currentRound];
 
@@ -187,10 +204,14 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
-      if (remaining <= 0) finishGame('timeout');
+      if (remaining <= 0) {
+        clearInterval(interval);
+        finishGame('timeout');
+      }
     }, 200);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -209,25 +230,40 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
       const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
       const completionHash = generateClientCompletionHash(sessionId, outcome, timeTaken);
 
-      pendingCompleteRef.current = {
+      pendingResultRef.current = {
         result: outcome,
         timeTaken,
         completionHash,
         solutionData: {
-          answers,
-          roundReached: currentRound + 1,
+          answers: answersRef.current,
+          roundReached: currentRoundRef.current + 1,
         },
       };
     },
-    [answers, currentRound, sessionId],
+    [sessionId],
   );
 
   const handleContinue = useCallback(() => {
-    if (pendingCompleteRef.current) {
-      onComplete(pendingCompleteRef.current);
-      pendingCompleteRef.current = null;
+    if (pendingResultRef.current) {
+      onComplete(pendingResultRef.current);
+      pendingResultRef.current = null;
     }
   }, [onComplete]);
+
+  // ── How to Play ────────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
   // ── Option tap handler ───────────────────────────────────────────────
 
@@ -251,23 +287,22 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
         setAnswers(newAnswers);
 
         if (currentRound >= 2) {
-          // Won all 3 rounds
-          setTimeout(() => {
-            if (!completedRef.current) {
-              completedRef.current = true;
-              setGameOver(true);
-              setOverlayResult('win');
-              setShowCompleteOverlay(true);
+          // Won all 3 rounds — set guard IMMEDIATELY before setTimeout (CHANGE 4)
+          completedRef.current = true;
 
-              const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
-              const completionHash = generateClientCompletionHash(sessionId, 'win', timeTaken);
-              pendingCompleteRef.current = {
-                result: 'win',
-                timeTaken,
-                completionHash,
-                solutionData: { answers: newAnswers, roundReached: 3 },
-              };
-            }
+          setTimeout(() => {
+            setGameOver(true);
+            setOverlayResult('win');
+            setShowCompleteOverlay(true);
+
+            const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
+            const completionHash = generateClientCompletionHash(sessionId, 'win', timeTaken);
+            pendingResultRef.current = {
+              result: 'win',
+              timeTaken,
+              completionHash,
+              solutionData: { answers: newAnswers, roundReached: 3 },
+            };
           }, 400);
         } else {
           // Show round complete overlay, advance
@@ -278,7 +313,6 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
                 if (!completedRef.current) {
                   setShowRoundOverlay(false);
                   setCurrentRound((r) => r + 1);
-                  setWrongCount(0);
                   setOptionStates(['default', 'default', 'default', 'default']);
                   setRoundLocked(false);
                 }
@@ -287,23 +321,38 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
           }, 400);
         }
       } else {
-        // Wrong answer
+        // Wrong answer — immediate loss (CHANGE 3)
+        // Set guard IMMEDIATELY to prevent timer race
+        completedRef.current = true;
+
         setOptionStates((prev) => {
           const next = [...prev];
           next[optionIndex] = 'wrong';
           return next;
         });
+        setRoundLocked(true);
 
-        const newWrong = wrongCount + 1;
-        setWrongCount(newWrong);
+        // Brief red flash, then finishGame
+        setTimeout(() => {
+          setGameOver(true);
+          setOverlayResult('lose');
+          setShowCompleteOverlay(true);
 
-        if (newWrong >= 2) {
-          // Two wrong in same round → LOSE
-          setTimeout(() => finishGame('lose'), 300);
-        }
+          const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
+          const completionHash = generateClientCompletionHash(sessionId, 'lose', timeTaken);
+          pendingResultRef.current = {
+            result: 'lose',
+            timeTaken,
+            completionHash,
+            solutionData: {
+              answers: [...answersRef.current],
+              roundReached: currentRoundRef.current + 1,
+            },
+          };
+        }, 300);
       }
     },
-    [gameOver, roundLocked, round, answers, currentRound, wrongCount, sessionId, finishGame],
+    [gameOver, roundLocked, round, answers, currentRound, sessionId],
   );
 
   // ── Render ───────────────────────────────────────────────────────────
@@ -311,8 +360,17 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
   const timerFraction = timeLeft / gameDuration;
 
   return (
-    <View style={styles.container}>
-      {/* Timer bar */}
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Top bar */}
+      <View style={styles.topBar}>
+        <View />
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Timer */}
+      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
       <View style={styles.timerBarBg}>
         <View
           style={[
@@ -324,7 +382,6 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
           ]}
         />
       </View>
-      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
 
       {/* Round indicator */}
       <Text style={styles.roundLabel}>Round {currentRound + 1} of 3</Text>
@@ -348,14 +405,14 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
             item={round.options[0]}
             index={0}
             onPress={handleOptionPress}
-            disabled={gameOver || roundLocked || optionStates[0] === 'wrong'}
+            disabled={gameOver || roundLocked}
             state={optionStates[0]}
           />
           <OptionCard
             item={round.options[1]}
             index={1}
             onPress={handleOptionPress}
-            disabled={gameOver || roundLocked || optionStates[1] === 'wrong'}
+            disabled={gameOver || roundLocked}
             state={optionStates[1]}
           />
         </View>
@@ -364,14 +421,14 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
             item={round.options[2]}
             index={2}
             onPress={handleOptionPress}
-            disabled={gameOver || roundLocked || optionStates[2] === 'wrong'}
+            disabled={gameOver || roundLocked}
             state={optionStates[2]}
           />
           <OptionCard
             item={round.options[3]}
             index={3}
             onPress={handleOptionPress}
-            disabled={gameOver || roundLocked || optionStates[3] === 'wrong'}
+            disabled={gameOver || roundLocked}
             state={optionStates[3]}
           />
         </View>
@@ -392,21 +449,76 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
           result={overlayResult}
           xpEarned={overlayResult === 'win' ? 25 : 0}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Spot the Pattern</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} You are shown 5 items in a row following a pattern.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} The pattern may be numeric (counting, doubling), a color cycle, shape progression, or dot count.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Pick the correct 6th item from the 4 options below.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Complete all 3 rounds to win. One wrong answer ends the game.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} The timer runs across all 3 rounds {'\u2014'} open this sheet to pause it.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Look at the gap between items {'\u2014'} is it constant, multiplying, or cycling?
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 // ── Styles ──────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  container: {
+  root: {
     flex: 1,
-    backgroundColor: UI.background,
     alignItems: 'center',
     paddingTop: 8,
     paddingBottom: 8,
+  },
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
   timerBarBg: {
     width: '90%',
@@ -424,13 +536,16 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     fontSize: 14,
     color: UI.text,
-    marginBottom: 8,
+    alignSelf: 'flex-start',
+    marginLeft: '5%',
+    marginBottom: 2,
   },
   roundLabel: {
-    fontFamily: FONTS.bodySemiBold,
-    fontSize: 13,
-    color: PALETTE.stoneGrey,
+    fontFamily: FONTS.title,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
     marginBottom: 12,
+    marginTop: 4,
   },
   sequenceScroll: {
     flexGrow: 0,
@@ -463,7 +578,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   blankText: {
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.title,
     fontSize: 28,
     color: PALETTE.stoneGrey,
   },
@@ -477,6 +592,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   optionCard: {
+    width: OPTION_BOX * 1.6,
+    height: OPTION_BOX * 1.3,
     borderWidth: 2,
     borderColor: PALETTE.warmBrown,
     borderRadius: 12,
@@ -488,19 +605,40 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 2,
   },
+  // ── Sequence item styles ──
+  itemCenter: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  itemBox: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  colorSwatch: {
+    // dimensions, borderRadius, backgroundColor applied dynamically
+  },
   numTile: {
     backgroundColor: PALETTE.stoneGrey,
     borderRadius: 8,
     borderBottomWidth: 3,
-    borderBottomColor: '#7A6F63',
-    alignItems: 'center',
-    justifyContent: 'center',
+    borderBottomColor: PALETTE.warmGreyBrown,
   },
   numText: {
-    fontFamily: FONTS.headerBold,
     fontSize: 22,
     color: PALETTE.cream,
   },
+  dot: {
+    backgroundColor: PALETTE.darkBrown,
+    margin: 1,
+  },
+  dotContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 4,
+  },
+  // ── Overlays ──
   roundOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(61, 43, 31, 0.6)',
@@ -508,7 +646,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   roundOverlayText: {
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.title,
     fontSize: 24,
     color: PALETTE.cream,
     backgroundColor: PALETTE.softGreen,
@@ -516,5 +654,53 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
     borderRadius: 14,
     overflow: 'hidden',
+  },
+  // ── How to Play modal ──
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

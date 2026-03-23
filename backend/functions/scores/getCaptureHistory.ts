@@ -3,6 +3,8 @@ import { query } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
 import { CapturedSpace } from '../../shared/types';
 
+const PAGE_SIZE = 14;
+
 export const handler = async (
   event: APIGatewayProxyEvent
 ): Promise<APIGatewayProxyResult> => {
@@ -14,11 +16,29 @@ export const handler = async (
       return error(ErrorCode.VALIDATION_ERROR, 'Invalid season parameter', 400);
     }
 
-    const { items: captures } = await query<CapturedSpace>(
+    // Decode cursor from base64 if provided
+    let exclusiveStartKey: Record<string, unknown> | undefined;
+    const cursorParam = event.queryStringParameters?.cursor;
+    if (cursorParam) {
+      try {
+        exclusiveStartKey = JSON.parse(
+          Buffer.from(cursorParam, 'base64').toString('utf-8'),
+        );
+      } catch {
+        return error(ErrorCode.VALIDATION_ERROR, 'Invalid cursor parameter', 400);
+      }
+    }
+
+    const { items: captures, lastEvaluatedKey } = await query<CapturedSpace>(
       'captured-spaces',
       'season = :season',
       { ':season': String(seasonNum) },
-      { indexName: 'SeasonIndex' }
+      {
+        indexName: 'SeasonIndex',
+        limit: PAGE_SIZE,
+        scanIndexForward: false,
+        exclusiveStartKey,
+      },
     );
 
     const history = captures.map((capture) => ({
@@ -29,7 +49,11 @@ export const handler = async (
       mapOverlayId: capture.mapOverlayId,
     }));
 
-    return success({ captures: history });
+    const nextCursor = lastEvaluatedKey
+      ? Buffer.from(JSON.stringify(lastEvaluatedKey)).toString('base64')
+      : null;
+
+    return success({ captures: history, nextCursor });
   } catch (err) {
     console.error('getCaptureHistory error:', err);
     return error(ErrorCode.INTERNAL_ERROR, 'Failed to get capture history', 500);

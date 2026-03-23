@@ -1,6 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Animated,
   Dimensions,
+  ImageBackground,
+  Modal,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -10,15 +14,19 @@ import {
 import Orientation from 'react-native-orientation-locker';
 import { PALETTE, UI, KEYBOARD } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { CIPHER_STONES_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import { generatePuzzle, checkGuess, getProgress, MINIGAME_CONFIG } from './CipherStonesLogic';
+import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
+
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TILE_SIZE = Math.floor((SCREEN_WIDTH - 48) / 14);
 const TILE_GAP = 3;
 
-// ─── Keyboard constants (mirrored from Grove Words) ─────────────────────────
+// ─── Keyboard constants ──────────────────────────────────────────────────────
 
 const KEYBOARD_ROWS: string[][] = [
   ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P'],
@@ -26,18 +34,15 @@ const KEYBOARD_ROWS: string[][] = [
   ['Z', 'X', 'C', 'V', 'B', 'N', 'M', 'DEL'],
 ];
 
-const KEY_DEFAULT_BG = KEYBOARD.defaultBg;
-const KEY_DEFAULT_TEXT = KEYBOARD.textDark;
-const KEY_DEL_BG = KEYBOARD.absentGray;
-const KEY_DEL_TEXT = KEYBOARD.textLight;
 const KEY_H_GAP = 4;
 const KEY_V_GAP = 6;
 const KEY_HEIGHT = 56;
 const KB_H_PAD = 16;
 
 const INITIAL_HINT_DELAY = 30;
+const MAX_HINTS = 3;
 const WRONG_TILE_BG = KEYBOARD.wrongTileBg;
-const QUOTE_REVEAL_DURATION_MS = 2500;
+const REVIEW_TIMEOUT_MS = 15000;
 
 function isLetter(ch: string): boolean {
   return /^[A-Z]$/.test(ch);
@@ -54,6 +59,7 @@ interface LetterTileProps {
   isWrong: boolean;
   disabled: boolean;
   onPress: (encoded: string) => void;
+  shakeTranslateX: Animated.Value;
 }
 
 const LetterTile = React.memo(function LetterTile({
@@ -65,10 +71,34 @@ const LetterTile = React.memo(function LetterTile({
   isWrong,
   disabled,
   onPress,
+  shakeTranslateX,
 }: LetterTileProps) {
   const handlePress = useCallback(() => {
     onPress(encoded);
   }, [onPress, encoded]);
+
+  const tileContent = (
+    <View
+      style={[
+        styles.tile,
+        isSelected && styles.tileSelected,
+        isRevealed && styles.tileRevealed,
+        isCorrectReview && styles.tileRevealed,
+        isWrong && styles.tileWrong,
+      ]}
+    >
+      <Text style={styles.tileEncodedText}>{encoded}</Text>
+      <Text
+        style={[
+          styles.tileDecodedText,
+          (isRevealed || isCorrectReview) && styles.tileDecodedRevealed,
+          isWrong && styles.tileDecodedWrong,
+        ]}
+      >
+        {decoded ?? ''}
+      </Text>
+    </View>
+  );
 
   return (
     <TouchableOpacity
@@ -76,26 +106,13 @@ const LetterTile = React.memo(function LetterTile({
       disabled={disabled}
       activeOpacity={0.7}
     >
-      <View
-        style={[
-          styles.tile,
-          isSelected && styles.tileSelected,
-          isRevealed && styles.tileRevealed,
-          isCorrectReview && styles.tileRevealed,
-          isWrong && styles.tileWrong,
-        ]}
-      >
-        <Text style={styles.tileEncodedText}>{encoded}</Text>
-        <Text
-          style={[
-            styles.tileDecodedText,
-            (isRevealed || isCorrectReview) && styles.tileDecodedRevealed,
-            isWrong && styles.tileDecodedWrong,
-          ]}
-        >
-          {decoded ?? ''}
-        </Text>
-      </View>
+      {isSelected ? (
+        <Animated.View style={{ transform: [{ translateX: shakeTranslateX }] }}>
+          {tileContent}
+        </Animated.View>
+      ) : (
+        tileContent
+      )}
     </TouchableOpacity>
   );
 });
@@ -103,13 +120,14 @@ const LetterTile = React.memo(function LetterTile({
 // ─── Main component ─────────────────────────────────────────────────────────
 
 export default function CipherStonesGame(props: MinigamePlayProps) {
-  const { sessionId, timeLimit, onComplete } = props;
+  const { sessionId, timeLimit, onComplete, practiceMode } = props;
+  const gameDuration = timeLimit > 0 ? timeLimit : CIPHER_STONES_TIME_LIMIT;
 
   // Puzzle is generated once on mount — never changes
   const puzzleRef = useRef(generatePuzzle());
   const puzzle = puzzleRef.current;
 
-  // Fully decoded quote (for end-of-game reveal)
+  // Fully decoded quote (for loss reveal)
   const decodedQuote = useMemo(() => {
     let result = '';
     for (const ch of puzzle.encodedQuote) {
@@ -178,9 +196,10 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
     () => ({ ...puzzle.revealedLetters }),
   );
   const [selectedEncoded, setSelectedEncoded] = useState<string | null>(null);
-  const [timeLeft, setTimeLeft] = useState(timeLimit);
+  const [timeLeft, setTimeLeft] = useState(gameDuration);
   const [gameOver, setGameOver] = useState(false);
-  const [showQuoteReveal, setShowQuoteReveal] = useState(false);
+  const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
+  const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
 
   // Wrong-submission review: timer paused, incorrect tiles highlighted
   const [reviewingWrong, setReviewingWrong] = useState(false);
@@ -188,18 +207,28 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
   // Time of last hint use (seconds elapsed), starts at 0 so first hint unlocks at t=30
   const [lastHintElapsed, setLastHintElapsed] = useState(0);
   const [hintCooldownLeft, setHintCooldownLeft] = useState(INITIAL_HINT_DELAY);
+  const [hintsUsed, setHintsUsed] = useState(0);
+
+  // How to Play modal
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
   const userMappingsRef = useRef(userMappings);
-  // Stable ref for onComplete to avoid stale closures in setTimeout
   const onCompleteRef = useRef(onComplete);
   // Track whether the current cooldown uses the initial delay or the full hintCooldown
   const isFirstHintRef = useRef(true);
   // Timer pause tracking
   const pausedAtMsRef = useRef(0);
   const totalPausedMsRef = useRef(0);
+  // How-to-play pause tracking
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+  // Review timeout ref
+  const reviewTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Shake animation
+  const shakeAnim = useRef(new Animated.Value(0)).current;
 
   // Keep refs in sync
   useEffect(() => {
@@ -209,7 +238,7 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
     onCompleteRef.current = onComplete;
   }, [onComplete]);
 
-  const progress = getProgress(puzzle.solution, userMappings);
+  const progress = getProgress(puzzle.solution, userMappings, quoteEncodedSet);
 
   // Derive incorrect / correct-non-revealed sets during review
   const incorrectEncodedSet = useMemo(() => {
@@ -240,15 +269,92 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
     };
   }, []);
 
+  // Cleanup review timeout on unmount
+  useEffect(() => {
+    return () => {
+      if (reviewTimeoutRef.current !== null) {
+        clearTimeout(reviewTimeoutRef.current);
+        reviewTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  // Shake animation trigger
+  const triggerShake = useCallback(() => {
+    shakeAnim.setValue(0);
+    Animated.sequence([
+      Animated.timing(shakeAnim, { toValue: 4, duration: 40, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: -4, duration: 40, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 4, duration: 40, useNativeDriver: true }),
+      Animated.timing(shakeAnim, { toValue: 0, duration: 40, useNativeDriver: true }),
+    ]).start();
+  }, [shakeAnim]);
+
+  // Resume from review mode helper
+  const resumeFromReview = useCallback(() => {
+    totalPausedMsRef.current += Date.now() - pausedAtMsRef.current;
+    setReviewingWrong(false);
+    if (reviewTimeoutRef.current !== null) {
+      clearTimeout(reviewTimeoutRef.current);
+      reviewTimeoutRef.current = null;
+    }
+  }, []);
+
+  // Auto-resume review after 15s
+  useEffect(() => {
+    if (!reviewingWrong) return;
+    reviewTimeoutRef.current = setTimeout(() => {
+      reviewTimeoutRef.current = null;
+      resumeFromReview();
+    }, REVIEW_TIMEOUT_MS);
+    return () => {
+      if (reviewTimeoutRef.current !== null) {
+        clearTimeout(reviewTimeoutRef.current);
+        reviewTimeoutRef.current = null;
+      }
+    };
+  }, [reviewingWrong, resumeFromReview]);
+
+  // Finish game helper
+  const finishGame = useCallback(
+    (outcome: 'win' | 'lose', mappings: Record<string, string>) => {
+      if (completedRef.current) return;
+      completedRef.current = true;
+      setGameOver(true);
+
+      const timeTaken = Math.round(
+        (Date.now() - startTimeRef.current - totalPausedMsRef.current) / 1000,
+      );
+      const completionHash = generateClientCompletionHash(sessionId, outcome, timeTaken);
+      pendingResultRef.current = {
+        result: outcome,
+        timeTaken,
+        completionHash,
+        solutionData: { solved: outcome === 'win' },
+      };
+
+      setOverlayResult(outcome);
+      setShowCompleteOverlay(true);
+    },
+    [sessionId],
+  );
+
+  const handleContinue = useCallback(() => {
+    if (pendingResultRef.current) {
+      onCompleteRef.current(pendingResultRef.current);
+      pendingResultRef.current = null;
+    }
+  }, []);
+
   // Single timer interval using Date.now() deltas — also drives hint cooldown
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
-      // Skip ticking while reviewing wrong submission (timer is paused)
-      if (reviewingWrong) return;
+      // Skip ticking while reviewing wrong submission or how-to-play is open
+      if (reviewingWrong || isPausedRef.current) return;
 
       const elapsed = (Date.now() - startTimeRef.current - totalPausedMsRef.current) / 1000;
-      const remaining = Math.max(0, timeLimit - elapsed);
+      const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
 
       // Derive hint cooldown from elapsed time
@@ -259,36 +365,11 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
 
       if (remaining <= 0) {
         clearInterval(interval);
-        if (!completedRef.current) {
-          completedRef.current = true;
-          setGameOver(true);
-
-          const timeTaken = Math.round(elapsed);
-          const completionHash = generateClientCompletionHash(sessionId, 'lose', timeTaken);
-          pendingResultRef.current = {
-            result: 'lose',
-            timeTaken,
-            completionHash,
-            solutionData: { mappings: userMappingsRef.current, solved: false },
-          };
-          setShowQuoteReveal(true);
-        }
+        finishGame('lose', userMappingsRef.current);
       }
     }, 100);
     return () => clearInterval(interval);
-  }, [gameOver, timeLimit, sessionId, lastHintElapsed, reviewingWrong]);
-
-  // Auto-call onComplete after quote reveal timeout (uses ref to avoid stale closure)
-  useEffect(() => {
-    if (!showQuoteReveal) return;
-    const timer = setTimeout(() => {
-      if (pendingResultRef.current) {
-        onCompleteRef.current(pendingResultRef.current);
-        pendingResultRef.current = null;
-      }
-    }, QUOTE_REVEAL_DURATION_MS);
-    return () => clearTimeout(timer);
-  }, [showQuoteReveal]);
+  }, [gameOver, gameDuration, lastHintElapsed, reviewingWrong, finishGame]);
 
   // Hint: find encoded letters in quote that are not revealed and not correctly mapped
   const hintCandidates = useMemo(() => {
@@ -301,8 +382,8 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
     return candidates;
   }, [quoteEncodedSet, revealedEncodedSet, userMappings, puzzle.solution]);
 
-  const hintAvailable = hintCooldownLeft <= 0 && hintCandidates.length > 0 && !gameOver && !reviewingWrong;
-  const showHintButton = hintCandidates.length > 0 && !gameOver && !reviewingWrong;
+  const hintAvailable = hintCooldownLeft <= 0 && hintCandidates.length > 0 && !gameOver && !reviewingWrong && hintsUsed < MAX_HINTS;
+  const showHintButton = hintCandidates.length > 0 && !gameOver && !reviewingWrong && hintsUsed < MAX_HINTS;
 
   const handleHint = useCallback(() => {
     if (!hintAvailable || hintCandidates.length === 0) return;
@@ -324,21 +405,7 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
       // Check if this hint completed the puzzle
       const allMapped = Array.from(quoteEncodedSet).every((e) => !!newMappings[e]);
       if (allMapped && checkGuess(puzzle.solution, newMappings)) {
-        if (!completedRef.current) {
-          completedRef.current = true;
-          setGameOver(true);
-          const timeTaken = Math.round(
-            (Date.now() - startTimeRef.current - totalPausedMsRef.current) / 1000,
-          );
-          const completionHash = generateClientCompletionHash(sessionId, 'win', timeTaken);
-          pendingResultRef.current = {
-            result: 'win',
-            timeTaken,
-            completionHash,
-            solutionData: { mappings: newMappings, solved: true },
-          };
-          setShowQuoteReveal(true);
-        }
+        finishGame('win', newMappings);
       }
 
       return newMappings;
@@ -348,9 +415,12 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
     const elapsed = (Date.now() - startTimeRef.current - totalPausedMsRef.current) / 1000;
     setLastHintElapsed(elapsed);
 
+    // Increment hint counter
+    setHintsUsed((prev) => prev + 1);
+
     // Clear selection if it was the hinted letter
     setSelectedEncoded((prev) => (prev === enc ? null : prev));
-  }, [hintAvailable, hintCandidates, puzzle.solution, quoteEncodedSet, sessionId]);
+  }, [hintAvailable, hintCandidates, puzzle.solution, quoteEncodedSet, finishGame]);
 
   // Find the next unsolved, non-revealed encoded letter in quote order after `current`
   const findNextUnsolved = useCallback(
@@ -386,13 +456,12 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
 
       // Resume timer if in review mode
       if (reviewingWrong) {
-        totalPausedMsRef.current += Date.now() - pausedAtMsRef.current;
-        setReviewingWrong(false);
+        resumeFromReview();
       }
 
       setSelectedEncoded(encodedChar);
     },
-    [gameOver, revealedEncodedSet, reviewingWrong],
+    [gameOver, revealedEncodedSet, reviewingWrong, resumeFromReview],
   );
 
   // Keyboard key press handler
@@ -418,6 +487,8 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
         // Check if this decoded letter is already assigned to a different encoded letter
         for (const [enc, dec] of Object.entries(prev)) {
           if (dec === decodedChar && enc !== selectedEncoded) {
+            // Trigger shake feedback for duplicate rejection
+            triggerShake();
             return prev;
           }
         }
@@ -429,27 +500,8 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
           const isCorrect = checkGuess(puzzle.solution, newMappings);
 
           if (isCorrect) {
-            // Win — freeze game and show quote reveal
-            if (!completedRef.current) {
-              completedRef.current = true;
-              setGameOver(true);
-
-              const timeTaken = Math.round(
-                (Date.now() - startTimeRef.current - totalPausedMsRef.current) / 1000,
-              );
-              const completionHash = generateClientCompletionHash(
-                sessionId,
-                'win',
-                timeTaken,
-              );
-              pendingResultRef.current = {
-                result: 'win',
-                timeTaken,
-                completionHash,
-                solutionData: { mappings: newMappings, solved: true },
-              };
-              setShowQuoteReveal(true);
-            }
+            // Win — freeze game and show overlay
+            finishGame('win', newMappings);
             setSelectedEncoded(null);
             return newMappings;
           }
@@ -472,18 +524,41 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
         return newMappings;
       });
     },
-    [gameOver, selectedEncoded, puzzle.solution, findNextUnsolved, allQuoteLettersMapped, sessionId, revealedEncodedSet],
+    [gameOver, selectedEncoded, puzzle.solution, findNextUnsolved, allQuoteLettersMapped, revealedEncodedSet, finishGame, triggerShake],
   );
+
+  // How to Play
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
   const regularKeyWidth = (SCREEN_WIDTH - KB_H_PAD * 2 - KEY_H_GAP * 9) / 10;
   const wideKeyWidth = regularKeyWidth * 1.5;
 
-  const timerFraction = timeLeft / timeLimit;
+  const timerFraction = timeLeft / gameDuration;
   const isTimeLow = timeLeft < 15;
 
   return (
-    <View style={styles.root}>
-      {/* Timer bar */}
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Top bar with help button */}
+      <View style={styles.topBar}>
+        <View />
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Timer text + bar */}
+      <Text style={styles.timerText}>{Math.ceil(timeLeft)}s</Text>
       <View style={styles.timerBarContainer}>
         <View
           style={[
@@ -530,6 +605,7 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
                       isWrong={incorrectEncodedSet.has(ch)}
                       disabled={gameOver || isPreRevealed}
                       onPress={handleTileTap}
+                      shakeTranslateX={shakeAnim}
                     />
                   );
                 })}
@@ -570,8 +646,8 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
           >
             <Text style={[styles.hintButtonText, !hintAvailable && styles.hintButtonTextDisabled]}>
               {hintCooldownLeft > 0
-                ? `Hint (${Math.ceil(hintCooldownLeft)}s)`
-                : 'Hint'}
+                ? `Hint (${Math.ceil(hintCooldownLeft)}s) \u00B7 ${MAX_HINTS - hintsUsed} left`
+                : `Hint (${MAX_HINTS - hintsUsed} left)`}
             </Text>
           </TouchableOpacity>
         </View>
@@ -582,10 +658,10 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
         {reviewingWrong ? 'Tap an incorrect tile to fix it' : 'Tap a letter then type your guess'}
       </Text>
 
-      {/* In-app keyboard (same layout & style as Grove Words) */}
-      {!showQuoteReveal && (
+      {/* In-app keyboard */}
+      {!showCompleteOverlay && (
         <View style={styles.keyboard}>
-          {/* Row 1: Q–P (10 keys, full width) */}
+          {/* Row 1: Q-P (10 keys, full width) */}
           <View style={styles.keyboardRow}>
             {KEYBOARD_ROWS[0].map((key) => (
               <TouchableOpacity
@@ -599,7 +675,7 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
               </TouchableOpacity>
             ))}
           </View>
-          {/* Row 2: A–L (9 keys, centered with half-key offset) */}
+          {/* Row 2: A-L (9 keys, centered with half-key offset) */}
           <View style={[styles.keyboardRow, { paddingHorizontal: (regularKeyWidth + KEY_H_GAP) / 2 }]}>
             {KEYBOARD_ROWS[1].map((key) => (
               <TouchableOpacity
@@ -613,7 +689,7 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
               </TouchableOpacity>
             ))}
           </View>
-          {/* Row 3: Z–M + DEL */}
+          {/* Row 3: Z-M + DEL */}
           <View style={styles.keyboardRow}>
             {KEYBOARD_ROWS[2].map((key) => {
               const isDel = key === 'DEL';
@@ -640,26 +716,96 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
         </View>
       )}
 
-      {/* Quote reveal overlay — shown for 2.5s on both win and lose before exiting */}
-      {showQuoteReveal && (
-        <View style={styles.quoteRevealOverlay}>
-          <View style={styles.quoteRevealCard}>
-            <Text style={styles.quoteRevealLabel}>The quote was:</Text>
-            <Text style={styles.quoteRevealText}>{decodedQuote}</Text>
-          </View>
-        </View>
+      {/* Game complete overlay */}
+      {showCompleteOverlay && (
+        <GameCompleteOverlay
+          result={overlayResult}
+          xpEarned={overlayResult === 'win' ? 25 : 0}
+          practiceMode={practiceMode}
+          revealQuote={decodedQuote}
+          onContinue={handleContinue}
+        />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Cipher</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} A short quote has been scrambled {'\u2014'} every letter replaced with a different one.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a scrambled letter tile above, then tap the real letter you think it stands for below.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} When you map a letter, every copy of it in the quote fills in automatically.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Spaces and punctuation are not scrambled {'\u2014'} use them as clues.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Some letters are already revealed to help you start.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tap a filled tile to change your guess. Tap the hint button for a free reveal (cooldown applies).
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Single-letter words can only be A or I. Look for short words like THE, AND, or IN to get started fast.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: UI.background,
   },
 
-  // Timer bar
+  // Top bar
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingTop: 4,
+    paddingBottom: 2,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+  },
+
+  // Timer
+  timerText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+    color: UI.text,
+    alignSelf: 'flex-start',
+    marginLeft: '5%',
+    marginBottom: 2,
+  },
   timerBarContainer: {
     width: '100%',
     height: 6,
@@ -739,12 +885,10 @@ const styles = StyleSheet.create({
     borderColor: WRONG_TILE_BG,
   },
   tileEncodedText: {
-    fontFamily: FONTS.bodySemiBold,
     fontSize: 10,
     color: PALETTE.stoneGrey,
   },
   tileDecodedText: {
-    fontFamily: FONTS.bodyBold,
     fontSize: 16,
     color: PALETTE.darkBrown,
     minHeight: 20,
@@ -808,7 +952,7 @@ const styles = StyleSheet.create({
     color: UI.text,
   },
 
-  // Keyboard (same as Grove Words)
+  // Keyboard
   keyboard: {
     width: '100%',
     paddingHorizontal: KB_H_PAD,
@@ -825,48 +969,66 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: KEY_DEFAULT_BG,
+    backgroundColor: KEYBOARD.defaultBg,
   },
   keyText: {
-    fontFamily: FONTS.bodyBold,
     fontSize: 13,
-    color: KEY_DEFAULT_TEXT,
+    color: KEYBOARD.textDark,
   },
   keyDel: {
-    backgroundColor: KEY_DEL_BG,
+    backgroundColor: KEYBOARD.absentGray,
   },
   keyTextDel: {
-    fontFamily: FONTS.bodyBold,
     fontSize: 13,
-    color: KEY_DEL_TEXT,
+    color: KEYBOARD.textLight,
   },
 
-  // Quote reveal overlay
-  quoteRevealOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: UI.overlay,
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
     padding: 24,
+    paddingBottom: 40,
   },
-  quoteRevealCard: {
-    backgroundColor: PALETTE.cream,
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
     borderRadius: 16,
-    padding: 28,
+    backgroundColor: PALETTE.parchmentDark,
     alignItems: 'center',
-    maxWidth: '90%',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
   },
-  quoteRevealLabel: {
-    fontFamily: FONTS.bodyRegular,
-    fontSize: 14,
-    color: PALETTE.stoneGrey,
-    marginBottom: 12,
-  },
-  quoteRevealText: {
+  modalCloseBtnText: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 18,
     color: PALETTE.darkBrown,
-    textAlign: 'center',
-    lineHeight: 26,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

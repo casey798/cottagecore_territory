@@ -10,7 +10,7 @@ export type ShapeKind = 'circle' | 'square';
 export type SizeKind = 'small' | 'medium' | 'large';
 
 export interface SequenceItem {
-  kind: 'number' | 'color' | 'shape' | 'dots' | 'compound';
+  kind: 'number' | 'color' | 'shape' | 'dots' | 'compound' | 'size';
   value: number | null;
   color: string | null;
   shape: ShapeKind | null;
@@ -30,8 +30,15 @@ export interface BloomSequenceGame {
 }
 
 // ── Colors for visual patterns ─────────────────────────────────────────
+import { PALETTE } from '@/constants/colors';
 
-const SEQUENCE_COLORS = ['#C0392B', '#2980B9', '#27AE60', '#F1C40F', '#7D3C98'];
+const SEQUENCE_COLORS = [
+  PALETTE.errorRed,       // #C0392B
+  PALETTE.playerBlue,     // #2980B9
+  PALETTE.successGreen,   // #27AE60
+  '#F1C40F',              // Sunflower yellow — no PALETTE alias
+  '#7D3C98',              // Hearth purple — no PALETTE alias
+];
 
 // ── Helpers ────────────────────────────────────────────────────────────
 
@@ -69,7 +76,7 @@ function dotItem(count: number): SequenceItem {
 }
 
 function sizeItem(sz: SizeKind, c: string): SequenceItem {
-  return { kind: 'color', value: null, color: c, shape: 'circle', size: sz, dotCount: null };
+  return { kind: 'size', value: null, color: c, shape: 'circle', size: sz, dotCount: null };
 }
 
 function compoundItem(s: ShapeKind, c: string, sz: SizeKind): SequenceItem {

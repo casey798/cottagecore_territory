@@ -1,3 +1,11 @@
+// ── Loss Lock Constants ──────────────────────────────────────────────
+
+/** Duration of per-location loss lock in milliseconds (1 hour) */
+export const LOCK_DURATION_MS = 60 * 60 * 1000;
+
+/** Duration of per-location loss lock in seconds (1 hour) */
+export const LOCK_DURATION_SECONDS = 3600;
+
 // ── Weighted Assignment Constants ────────────────────────────────────
 
 /** Radius in meters for spatial adjacency exclusion between locations */

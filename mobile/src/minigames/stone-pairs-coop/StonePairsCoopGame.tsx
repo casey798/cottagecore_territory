@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Animated,
   Dimensions,
+  ImageBackground,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -29,6 +32,8 @@ const CARDS_PER_HALF = 12;
 const FLIP_BACK_DELAY = 800;
 const SYNC_TIMEOUT_MS = 2000;
 const CARD_GAP = 6;
+
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 // ── Helpers ───────────────────────────────────────────────────────
 
@@ -148,7 +153,7 @@ export function isCrossBoundary(cardA: CoopCardData, cardB: CoopCardData): boole
 // ── Component ─────────────────────────────────────────────────────
 
 export default function StonePairsCoopGame(props: MinigamePlayProps) {
-  const { sessionId, timeLimit, onComplete, puzzleData } = props;
+  const { sessionId, timeLimit, onComplete, puzzleData, practiceMode } = props;
 
   const p1Name = (puzzleData?.p1Name as string | undefined) ?? 'Player 1';
   const p1Clan = (puzzleData?.p1Clan as string | undefined) ?? 'ember';
@@ -170,11 +175,13 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
   const [flippingBack, setFlippingBack] = useState<Set<number>>(() => new Set());
   const [pendingSync, setPendingSync] = useState<number | null>(null);
   const [syncSecondsLeft, setSyncSecondsLeft] = useState<number | null>(null);
-  const [totalFlips, setTotalFlips] = useState(0);
+  const totalFlipsRef = useRef(0);
+  const [flipsDisplay, setFlipsDisplay] = useState(0);
   const [timeLeft, setTimeLeft] = useState(timeLimit > 0 ? timeLimit : 60);
   const [gameOver, setGameOver] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
@@ -184,6 +191,12 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
   const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pendingSyncCardRef = useRef<number | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+  const p1FlippingBackRef = useRef(false);
+  const p2FlippingBackRef = useRef(false);
+
+  const flipBackTimeoutRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   // Sync animation
   const pulseAnim = useRef(new Animated.Value(0.4)).current;
@@ -201,20 +214,24 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
   // ── Timer ───────────────────────────────────────────────────────
   const effectiveTimeLimit = timeLimit > 0 ? timeLimit : 60;
 
+  // Stable ref so the timer interval always calls the latest finishGame
+  const finishGameRef = useRef<((result: 'win' | 'lose' | 'timeout') => void) | null>(null);
+  useEffect(() => { finishGameRef.current = finishGame; }, [finishGame]);
+
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, effectiveTimeLimit - elapsed);
       setTimeLeft(remaining);
 
       if (remaining <= 0) {
         clearInterval(interval);
-        finishGame('timeout');
+        finishGameRef.current?.('timeout');
       }
     }, 250);
     return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gameOver, effectiveTimeLimit]);
 
   // ── Finish game ─────────────────────────────────────────────────
@@ -236,7 +253,7 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
         timeTaken,
         completionHash,
         solutionData: {
-          totalFlips,
+          totalFlips: totalFlipsRef.current,
           matchedPairs: matchedPairsRef.current,
           crossBoundaryMatches: crossMatchedRef.current,
           solved: result === 'win',
@@ -245,7 +262,7 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
       setOverlayResult(result === 'win' ? 'win' : 'lose');
       setOverlayVisible(true);
     },
-    [sessionId, totalFlips],
+    [sessionId],
   );
 
   const handleContinue = useCallback(() => {
@@ -254,6 +271,21 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
       pendingResultRef.current = null;
     }
   }, [onComplete]);
+
+  // ── How to Play pause/resume ──────────────────────────────────
+  const openHowToPlay = useCallback(() => {
+    if (gameOver) return;
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, [gameOver]);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
   // ── Start sync countdown ────────────────────────────────────────
   const startSyncTimer = useCallback(
@@ -321,6 +353,7 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
       if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
       if (syncIntervalRef.current) clearInterval(syncIntervalRef.current);
       if (pulseAnimRef.current) pulseAnimRef.current.stop();
+      flipBackTimeoutRef.current.forEach(clearTimeout);
     };
   }, []);
 
@@ -359,7 +392,10 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
       return next;
     });
 
-    setTimeout(() => {
+    if (isP1Card(id1)) p1FlippingBackRef.current = true;
+    else p2FlippingBackRef.current = true;
+
+    flipBackTimeoutRef.current.push(setTimeout(() => {
       setRevealed((prev) => {
         const next = new Set(prev);
         next.delete(id1);
@@ -372,9 +408,14 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
         next.delete(id2);
         return next;
       });
-      if (isP1Card(id1)) setSelectedP1(null);
-      else setSelectedP2(null);
-    }, FLIP_BACK_DELAY);
+      if (isP1Card(id1)) {
+        setSelectedP1(null);
+        p1FlippingBackRef.current = false;
+      } else {
+        setSelectedP2(null);
+        p2FlippingBackRef.current = false;
+      }
+    }, FLIP_BACK_DELAY));
   }, []);
 
   // ── Card tap handler ────────────────────────────────────────────
@@ -383,6 +424,10 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
       if (gameOver) return;
       if (matched.has(cardId) || revealed.has(cardId)) return;
       if (flippingBack.has(cardId)) return;
+
+      // Guard: block taps while this player's mismatch is flipping back
+      if (player === 'p1' && p1FlippingBackRef.current) return;
+      if (player === 'p2' && p2FlippingBackRef.current) return;
 
       // Enforce zone ownership
       if (player === 'p1' && !isP1Card(cardId)) return;
@@ -394,7 +439,8 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
         next.add(cardId);
         return next;
       });
-      setTotalFlips((prev) => prev + 1);
+      totalFlipsRef.current += 1;
+      setFlipsDisplay(totalFlipsRef.current);
 
       const card = cards[cardId];
 
@@ -540,36 +586,86 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
   };
 
   return (
-    <View style={styles.root}>
-      {/* P1 Zone */}
-      <View style={[styles.playerZone, { backgroundColor: withAlpha(clanColor(p1Clan), 0.1) }]}>
-        {renderGrid(p1Cards, 'p1')}
+    <ImageBackground source={plainBg} style={StyleSheet.absoluteFill} resizeMode="cover">
+      <View style={styles.root}>
+        {/* Top bar: help button */}
+        <View style={styles.topBar}>
+          <Text style={styles.flipText}>Flips: {flipsDisplay}</Text>
+          <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+            <Text style={styles.helpBtnText}>?</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* P1 Zone */}
+        <View style={[styles.playerZone, { backgroundColor: withAlpha(clanColor(p1Clan), 0.1) }]}>
+          {renderGrid(p1Cards, 'p1')}
+        </View>
+
+        {/* Divider */}
+        <CoopDivider
+          p1Name={p1Name}
+          p1Clan={p1Clan}
+          p2Name={p2Name}
+          p2Clan={p2Clan}
+          timeLeft={timeLeft}
+          totalTime={effectiveTimeLimit}
+        >
+          <Text style={styles.matchCount}>
+            Matched: {matchedPairCount} / {TOTAL_PAIRS}
+          </Text>
+        </CoopDivider>
+
+        {/* P2 Zone */}
+        <View style={[styles.playerZone, { backgroundColor: withAlpha(clanColor(p2Clan), 0.1) }]}>
+          {renderGrid(p2Cards, 'p2')}
+        </View>
+
+        {/* Game complete overlay */}
+        {overlayVisible && (
+          <GameCompleteOverlay
+            result={overlayResult}
+            xpEarned={overlayResult === 'win' ? 25 : 0}
+            onContinue={handleContinue}
+            practiceMode={practiceMode}
+          />
+        )}
+
+        {/* How to Play modal */}
+        <Modal
+          animationType="slide"
+          transparent
+          visible={isHowToPlayVisible}
+          onRequestClose={closeHowToPlay}
+        >
+          <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+            <Pressable style={styles.modalPanel} onPress={() => {}}>
+              <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+                <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>How to Play {'\u2014'} Flip &amp; Match Co-op</Text>
+              <Text style={styles.modalRule}>
+                {'\u2022'} A 4{'\u00D7'}4 grid of face-down stone tablets is shown on a shared board.
+              </Text>
+              <Text style={styles.modalRule}>
+                {'\u2022'} Players take turns flipping cards {'\u2014'} Player 1 flips first, then Player 2, alternating.
+              </Text>
+              <Text style={styles.modalRule}>
+                {'\u2022'} If your flip reveals a matching pair, they stay face-up and you get another turn.
+              </Text>
+              <Text style={styles.modalRule}>
+                {'\u2022'} If they don{'\u2019'}t match, both cards flip back face-down and it{'\u2019'}s your partner{'\u2019'}s turn.
+              </Text>
+              <Text style={styles.modalRule}>
+                {'\u2022'} Find all 8 matching pairs before time runs out to win together.
+              </Text>
+              <Text style={styles.modalTip}>
+                Tip: Remember the cards your partner flips {'\u2014'} telling each other what you saw helps you both find matches faster.
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Modal>
       </View>
-
-      {/* Divider */}
-      <CoopDivider
-        p1Name={p1Name}
-        p1Clan={p1Clan}
-        p2Name={p2Name}
-        p2Clan={p2Clan}
-        timeLeft={timeLeft}
-        totalTime={effectiveTimeLimit}
-      >
-        <Text style={styles.matchCount}>
-          Matched: {matchedPairCount} / {TOTAL_PAIRS}
-        </Text>
-      </CoopDivider>
-
-      {/* P2 Zone */}
-      <View style={[styles.playerZone, { backgroundColor: withAlpha(clanColor(p2Clan), 0.1) }]}>
-        {renderGrid(p2Cards, 'p2')}
-      </View>
-
-      {/* Game complete overlay */}
-      {overlayVisible && (
-        <GameCompleteOverlay result={overlayResult} onContinue={handleContinue} />
-      )}
-    </View>
+    </ImageBackground>
   );
 }
 
@@ -578,7 +674,32 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: UI.background,
+  },
+  topBar: {
+    width: '100%',
+    height: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+  },
+  flipText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: UI.textMuted,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
   playerZone: {
     flex: 1,
@@ -623,5 +744,54 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     fontSize: 13,
     color: UI.text,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

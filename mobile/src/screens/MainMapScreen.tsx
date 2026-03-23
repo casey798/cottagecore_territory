@@ -6,17 +6,16 @@ import {
   Pressable,
   Linking,
   Animated,
-  Alert,
   Image,
   ImageBackground,
   useWindowDimensions,
   BackHandler,
 } from 'react-native';
-import { useNavigation, useFocusEffect } from '@react-navigation/native';
+import { useNavigation, useFocusEffect, useRoute, RouteProp } from '@react-navigation/native';
 
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
-import { PALETTE, CLAN_COLORS } from '@/constants/colors';
+import { PALETTE, CLAN_COLORS, CLAN_LABELS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { GAME_START_HOUR, DAILY_XP_CAP } from '@/constants/config';
 import { useAuthStore } from '@/store/useAuthStore';
@@ -37,7 +36,6 @@ import * as mapApi from '@/api/map';
 import * as playerApi from '@/api/player';
 import { ClanId, CapturedSpace, Location, ClanScore } from '@/types';
 import { useAssetStore } from '@/store/useAssetStore';
-import { useCheckin } from '@/hooks/useCheckin';
 import { useDwellTracking } from '@/hooks/useDwellTracking';
 import { PLAYER_DOT_IMAGES } from '@/constants/playerAssets';
 
@@ -57,6 +55,7 @@ const NAMEPLATE = require('../assets/ui/frames/dialogue_nameplate.png');
 
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
+type MapRoute = RouteProp<MainModalParamList, 'Map'>;
 
 interface LocationProximity {
   locationId: string;
@@ -68,6 +67,9 @@ export default function MainMapScreen() {
   const { width: screenW, height: screenH } = useWindowDimensions();
 
   const navigation = useNavigation<Nav>();
+  const route = useRoute<MapRoute>();
+  const selectSpaceMode = route.params?.mode === 'selectSpace';
+  const selectSpaceAssetId = route.params?.userAssetId;
   useDwellTracking();
   const { clans: scores } = useClanScores();
   const gps = useGPS();
@@ -79,6 +81,7 @@ export default function MainMapScreen() {
   const loadCapturedSpaces = useMapStore((s) => s.loadCapturedSpaces);
   const updatePlayerPosition = useMapStore((s) => s.updatePlayerPosition);
   const todayLocations = useMapStore((s) => s.todayLocations ?? []);
+  const lockedUntilMap = useMapStore((s) => s.lockedLocationIds);
   const mapConfig = useMapStore((s) => s.mapConfig);
   const setTodayLocations = useGameStore((s) => s.setTodayLocations);
   const setDailyInfo = useGameStore((s) => s.setDailyInfo);
@@ -88,7 +91,7 @@ export default function MainMapScreen() {
   const captureResult = useGameStore((s) => s.captureResult);
   const quietMode = useGameStore((s) => s.quietMode);
   const setQuietMode = useGameStore((s) => s.setQuietMode);
-  const { checkinStatus, nearbyLocationName, triggerCheckin } = useCheckin();
+  const dailyInfo = useGameStore((s) => s.dailyInfo);
   const unplacedCount = useAssetStore((s) => s.unplacedCount);
 
   const [selectedPin, setSelectedPin] = useState<Location | null>(null);
@@ -97,6 +100,8 @@ export default function MainMapScreen() {
 
   const [selectedSpace, setSelectedSpace] = useState<CapturedSpace | null>(null);
   const [decorateBtnPos, setDecorateBtnPos] = useState<{ x: number; y: number } | null>(null);
+  const [enemyToast, setEnemyToast] = useState<{ label: string; color: string } | null>(null);
+  const enemyToastOpacity = useRef(new Animated.Value(0)).current;
 
   const [followPlayer, setFollowPlayer] = useState(true);
 
@@ -151,6 +156,15 @@ export default function MainMapScreen() {
         useAssetStore.getState().setUnplacedCount(
           active.filter((a) => !a.placed).length,
         );
+        // Build userAssetId→category and userAssetId→assetId lookups for decoration overlays
+        const catMap: Record<string, import('@/types').AssetCategory> = {};
+        const idMap: Record<string, string> = {};
+        for (const a of result.data.assets) {
+          catMap[a.userAssetId] = a.category;
+          idMap[a.userAssetId] = a.assetId;
+        }
+        useMapStore.getState().setAssetCategories(catMap);
+        useMapStore.getState().setAssetIdMap(idMap);
       }
     }).catch(() => {});
   }, [loadMapConfig, loadTodayLocations, loadCapturedSpaces]);
@@ -164,20 +178,29 @@ export default function MainMapScreen() {
     }
   }, [captureResult, navigation]);
 
-  useEffect(() => {
-    async function loadDailyData() {
-      try {
-        const result = await mapApi.getDailyInfo();
-        if (result.success && result.data) {
-          setDailyInfo(result.data);
-          setQuietMode(result.data.quietMode ?? false);
+  // Fetch dailyInfo on focus with 60s stale-time so quiet mode updates propagate quickly
+  const dailyInfoFetchedAt = useRef<number>(0);
+  const DAILY_INFO_STALE_MS = 60_000;
+
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (now - dailyInfoFetchedAt.current < DAILY_INFO_STALE_MS) return;
+
+      (async () => {
+        try {
+          const result = await mapApi.getDailyInfo();
+          if (result.success && result.data) {
+            setDailyInfo(result.data);
+            setQuietMode(result.data.quietMode ?? false);
+            dailyInfoFetchedAt.current = Date.now();
+          }
+        } catch (err) {
+          if (__DEV__) console.warn('[daily/info] exception:', err);
         }
-      } catch (err) {
-        if (__DEV__) console.warn('[daily/info] exception:', err);
-      }
-    }
-    loadDailyData();
-  }, [setDailyInfo, setQuietMode]);
+      })();
+    }, [setDailyInfo, setQuietMode]),
+  );
 
   useEffect(() => {
     if (todayLocations.length > 0) {
@@ -228,6 +251,17 @@ export default function MainMapScreen() {
     [xpEarnedAtLocations],
   );
 
+  const pinProximities = useMemo(() => {
+    const map = new Map<string, { distance: number; geofenceRadius: number }>();
+    for (const loc of todayLocations) {
+      const prox = proximities.find((p) => p.locationId === loc.locationId);
+      if (prox) {
+        map.set(loc.locationId, { distance: prox.distance, geofenceRadius: loc.geofenceRadius });
+      }
+    }
+    return map;
+  }, [proximities, todayLocations]);
+
   const playerPixel = useMemo(() => {
     if (
       gps.latitude === null ||
@@ -276,6 +310,18 @@ export default function MainMapScreen() {
     }, [selectedPin, closeSheet]),
   );
 
+  // Reload own-clan space decorations on focus (e.g. returning from SpaceDecorationScreen)
+  const loadSpaceDecoration = useMapStore((s) => s.loadSpaceDecoration);
+  useFocusEffect(
+    useCallback(() => {
+      if (!capturedSpaces || !clan) return;
+      const ownSpaces = capturedSpaces.filter((s) => s.clan === clan);
+      for (const space of ownSpaces) {
+        loadSpaceDecoration(space.spaceId, true);
+      }
+    }, [capturedSpaces, clan, loadSpaceDecoration]),
+  );
+
   const handlePinPress = useCallback(
     (location: Location) => {
       setSelectedSpace(null);
@@ -302,8 +348,22 @@ export default function MainMapScreen() {
     } else {
       setSelectedSpace(null);
       setDecorateBtnPos(null);
+      // Show brief enemy territory toast
+      if (space && space.clan !== clan) {
+        const enemyClan = space.clan as ClanId;
+        setEnemyToast({
+          label: `${CLAN_LABELS[enemyClan]} territory`,
+          color: CLAN_COLORS[enemyClan],
+        });
+        enemyToastOpacity.setValue(0);
+        Animated.sequence([
+          Animated.timing(enemyToastOpacity, { toValue: 1, duration: 200, useNativeDriver: true }),
+          Animated.delay(1600),
+          Animated.timing(enemyToastOpacity, { toValue: 0, duration: 200, useNativeDriver: true }),
+        ]).start(() => setEnemyToast(null));
+      }
     }
-  }, [clan]);
+  }, [clan, enemyToastOpacity]);
 
   const handleDecorate = useCallback(() => {
     if (!selectedSpace) return;
@@ -311,28 +371,22 @@ export default function MainMapScreen() {
       spaceId: selectedSpace.spaceId,
       spaceName: selectedSpace.spaceName,
       clan: selectedSpace.clan as ClanId,
-      gridCells: selectedSpace.gridCells ?? [],
+      gridCells: (selectedSpace.gridCells ?? []).map((c) => ({ x: c.col ?? c.x, y: c.row ?? c.y })),
       polygonPoints: selectedSpace.polygonPoints ?? [],
+      userAssetId: selectSpaceAssetId,
     };
     setSelectedSpace(null);
     setDecorateBtnPos(null);
     navigation.navigate('SpaceDecoration', navParams);
-  }, [selectedSpace, navigation]);
+  }, [selectedSpace, navigation, selectSpaceAssetId]);
 
   const handleOpenSettings = () => {
     Linking.openSettings();
   };
 
   const handleShowInfo = useCallback(() => {
-    const locationCount = todayLocations.length;
-    const timeInfo = gameActive
-      ? `Scoring in ${countdown.formatted}`
-      : `Game starts at ${GAME_START_HOUR}:00 AM`;
-    Alert.alert(
-      'Game Status',
-      `${timeInfo}\n${locationCount} locations active today\nYour XP: ${todayXp}/${DAILY_XP_CAP}`,
-    );
-  }, [todayLocations.length, gameActive, countdown.formatted, todayXp]);
+    navigation.navigate('Journal');
+  }, [navigation]);
 
   const selectedProximity = useMemo(() => {
     if (!selectedPin) return null;
@@ -359,12 +413,14 @@ export default function MainMapScreen() {
           onPinPress={handlePinPress}
           inRangeIds={inRangeIds}
           xpExhaustedIds={xpExhaustedIds}
+          lockedUntilMap={lockedUntilMap}
           onViewportChange={handleViewportChange}
           registerNavigate={handleRegisterNavigate}
           followPlayer={followPlayer}
           onFollowChange={handleFollowChange}
           selectedSpaceId={selectedSpace?.spaceId ?? null}
           onSpaceTap={handleSpaceTap}
+          pinProximities={quietMode ? undefined : pinProximities}
         />
 
         {/* ── HUD: Clan Badge Button (left) ── */}
@@ -398,6 +454,16 @@ export default function MainMapScreen() {
           </ImageBackground>
         )}
 
+        {/* ── HUD: Target Space Pill (below timer nameplate) ── */}
+        {!quietMode && clan && dailyInfo?.targetSpace && (
+          <View style={styles.targetSpaceRow}>
+            <Text style={styles.targetSpaceLabel}>Today's prize</Text>
+            <Text style={styles.targetSpaceName} numberOfLines={1}>
+              {dailyInfo.targetSpace.name}
+            </Text>
+          </View>
+        )}
+
         {/* ── HUD: Info Bar (right of badge) ── */}
         {!quietMode && (
           <Pressable
@@ -420,30 +486,33 @@ export default function MainMapScreen() {
                 <View style={styles.hudInfoDivider} />
 
                 <View style={styles.hudInfoClans}>
-                  {scores.map((cs: ClanScore) => (
-                    <View
-                      key={cs.clanId}
-                      style={[
-                        styles.hudInfoClanChip,
-                        cs.clanId === clan && styles.hudInfoClanChipOwn,
-                      ]}
-                    >
+                  {scores.map((cs: ClanScore) => {
+                    const displayXp = cs.todayXp ?? 0;
+                    return (
                       <View
+                        key={cs.clanId}
                         style={[
-                          styles.hudInfoClanDot,
-                          { backgroundColor: CLAN_COLORS[cs.clanId] },
-                        ]}
-                      />
-                      <Text
-                        style={[
-                          styles.hudInfoClanScore,
-                          cs.clanId === clan && { color: CLAN_COLORS[cs.clanId] },
+                          styles.hudInfoClanChip,
+                          cs.clanId === clan && styles.hudInfoClanChipOwn,
                         ]}
                       >
-                        {cs.todayXp}
-                      </Text>
-                    </View>
-                  ))}
+                        <View
+                          style={[
+                            styles.hudInfoClanDot,
+                            { backgroundColor: CLAN_COLORS[cs.clanId] },
+                          ]}
+                        />
+                        <Text
+                          style={[
+                            styles.hudInfoClanScore,
+                            cs.clanId === clan && { color: CLAN_COLORS[cs.clanId] },
+                          ]}
+                        >
+                          {displayXp}
+                        </Text>
+                      </View>
+                    );
+                  })}
                 </View>
               </ImageBackground>
             )}
@@ -459,6 +528,15 @@ export default function MainMapScreen() {
           </View>
         )}
 
+        {/* Select-space mode banner */}
+        {selectSpaceMode && (
+          <View style={styles.selectSpaceBanner}>
+            <Text style={styles.selectSpaceBannerText}>
+              Tap one of your clan's spaces to place the item
+            </Text>
+          </View>
+        )}
+
         {/* ── Circular Minimap (top-right) ── */}
         {mapConfig && (
           <MapMinimap
@@ -466,7 +544,7 @@ export default function MainMapScreen() {
             playerX={showPlayer && playerPixel ? playerPixel.x : null}
             playerY={showPlayer && playerPixel ? playerPixel.y : null}
             clan={clan ?? null}
-            locations={todayLocations}
+            locations={quietMode ? [] : todayLocations}
             capturedSpaces={capturedSpaces}
             transformMatrix={mapConfig.transformMatrix}
             onNavigate={handleMinimapNavigate}
@@ -590,7 +668,7 @@ export default function MainMapScreen() {
           </View>
         )}
 
-        {/* ── Check-In button — normal mode only ── */}
+        {/* ── Check-In button — normal mode (secondary button asset) ── */}
         {!quietMode && (
           <Pressable
             onPress={() => navigation.navigate('FreeRoamCheckIn')}
@@ -618,53 +696,53 @@ export default function MainMapScreen() {
           </Pressable>
         )}
 
-        {/* ── Quiet mode: checkin card ── */}
-        {quietMode && checkinStatus === 'in_range' && nearbyLocationName && (
-          <View style={styles.quietCheckinCard}>
-            <Text style={styles.quietCheckinText}>
-              You're near {nearbyLocationName}
-            </Text>
+        {/* ── Quiet mode: Check-In (nameplate) + Play a minigame (secondary) ── */}
+        {quietMode && (
+          <View style={styles.quietButtonStack}>
             <Pressable
               style={({ pressed }) => [
-                styles.quietCheckinBtn,
-                pressed && styles.quietCheckinBtnPressed,
+                styles.quietNameplateBtn,
+                pressed && styles.quietNameplateBtnPressed,
               ]}
-              onPress={triggerCheckin}
+              onPress={() => navigation.navigate('FreeRoamCheckIn')}
             >
-              <Text style={styles.quietCheckinBtnText}>Check in</Text>
+              <Image
+                source={NAMEPLATE}
+                style={styles.quietNameplateImage}
+                resizeMode="stretch"
+              />
+              <View style={styles.quietNameplateLabelWrap}>
+                <Text style={styles.quietNameplateLabel}>Check In</Text>
+              </View>
+            </Pressable>
+
+            <Pressable
+              onPress={() =>
+                navigation.navigate('MinigameSelect', {
+                  locationId: 'practice',
+                  locationName: 'Practice mode',
+                  practiceMode: true,
+                })
+              }
+              style={({ pressed }) => [
+                styles.quietSecondaryBtn,
+                pressed && styles.quietSecondaryBtnPressed,
+              ]}
+            >
+              {({ pressed }) => (
+                <>
+                  <Image
+                    source={pressed ? BTN_SECONDARY_PRESSED : BTN_SECONDARY_NORMAL}
+                    style={styles.quietSecondaryImage}
+                    resizeMode="stretch"
+                  />
+                  <View style={styles.quietSecondaryLabelWrap}>
+                    <Text style={styles.quietSecondaryLabel}>Play a minigame</Text>
+                  </View>
+                </>
+              )}
             </Pressable>
           </View>
-        )}
-        {quietMode && checkinStatus === 'checking_in' && (
-          <View style={styles.quietCheckinCard}>
-            <Text style={styles.quietCheckinText}>Checking in...</Text>
-          </View>
-        )}
-        {quietMode && checkinStatus === 'done' && nearbyLocationName && (
-          <View style={styles.quietCheckinCardDone}>
-            <Text style={styles.quietCheckinDoneText}>
-              Checked in to {nearbyLocationName} {'\u2713'}
-            </Text>
-          </View>
-        )}
-
-        {/* ── Quiet mode: play minigame button ── */}
-        {quietMode && (
-          <Pressable
-            style={({ pressed }) => [
-              styles.quietPlayBtn,
-              pressed && styles.quietPlayBtnPressed,
-            ]}
-            onPress={() =>
-              navigation.navigate('MinigameSelect', {
-                locationId: 'practice',
-                locationName: 'Practice mode',
-                practiceMode: true,
-              })
-            }
-          >
-            <Text style={styles.quietPlayBtnText}>Play a minigame</Text>
-          </Pressable>
         )}
 
         {/* ── Decorate button for selected captured space ── */}
@@ -690,6 +768,18 @@ export default function MainMapScreen() {
               </ImageBackground>
             )}
           </Pressable>
+        )}
+
+        {/* ── Enemy territory toast ── */}
+        {enemyToast && (
+          <Animated.View
+            style={[styles.enemyToast, { opacity: enemyToastOpacity }]}
+            pointerEvents="none"
+          >
+            <Text style={[styles.enemyToastText, { color: enemyToast.color }]}>
+              {enemyToast.label}
+            </Text>
+          </Animated.View>
         )}
 
         {/* ── Screen-level vignette ── */}
@@ -810,7 +900,7 @@ const styles = StyleSheet.create({
   },
   mapContainer: {
     flex: 1,
-    backgroundColor: PALETTE.deepGreen,
+    backgroundColor: '#000000',
   },
 
   // ── HUD: Clan Badge Button (1.2x: 64→77) ──
@@ -852,6 +942,35 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: PALETTE.darkBrown,
     textAlign: 'center',
+  },
+  // timerNameplate is top:68, left:100, width:90, height:28
+  // Center this pill under it: center at x=145, maxWidth=200 → left=45, top=102
+  targetSpaceRow: {
+    position: 'absolute',
+    top: 102,
+    left: 45,
+    zIndex: 20,
+    backgroundColor: 'rgba(30, 20, 10, 0.72)',
+    borderRadius: 12,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: 200,
+  },
+  targetSpaceLabel: {
+    fontFamily: FONTS.pixel,
+    fontSize: 10,
+    color: '#BDB49A',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  targetSpaceName: {
+    fontFamily: FONTS.heading,
+    fontSize: 14,
+    color: '#F5EACB',
+    flexShrink: 1,
   },
 
   // ── HUD: Info Bar ──
@@ -964,7 +1083,7 @@ const styles = StyleSheet.create({
   fabBadgeText: {
     fontSize: 9,
     fontFamily: FONTS.pixel,
-    color: '#FFFFFF',
+    color: PALETTE.cream,
     lineHeight: 11,
   },
 
@@ -999,7 +1118,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   permissionBannerText: {
-    color: '#FFFFFF',
+    color: PALETTE.cream,
     fontSize: 13,
     fontFamily: FONTS.pixel,
     textAlign: 'center',
@@ -1043,7 +1162,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   errorBannerText: {
-    color: '#FFFFFF',
+    color: PALETTE.cream,
     fontSize: 12,
     fontFamily: FONTS.pixel,
   },
@@ -1075,7 +1194,7 @@ const styles = StyleSheet.create({
   checkInBtnLabel: {
     fontFamily: FONTS.pixel,
     fontSize: 20,
-    color: '#3B1E08',
+    color: PALETTE.darkBrown, // closest to original #3B1E08
   },
 
   // ── Screen vignette ──
@@ -1204,12 +1323,12 @@ const styles = StyleSheet.create({
   sheetScanBtnText: {
     fontFamily: FONTS.pixel,
     fontSize: 15,
-    color: '#FFFFFF',
+    color: PALETTE.cream,
   },
   sheetScanBtnTextDisabled: {
     fontFamily: FONTS.pixel,
     fontSize: 15,
-    color: '#FFFFFF80',
+    color: PALETTE.cream + '80', // semi-transparent cream
   },
 
   // ── Decorate button ──
@@ -1231,9 +1350,25 @@ const styles = StyleSheet.create({
   decorateBtnText: {
     fontFamily: FONTS.pixel,
     fontSize: 20,
-    color: '#3D3D3D',
+    color: PALETTE.darkBrown, // closest to original #3D3D3D
     textAlign: 'center',
     marginTop: -5,
+  },
+
+  // ── Enemy territory toast ──
+  enemyToast: {
+    position: 'absolute',
+    bottom: 80,
+    alignSelf: 'center',
+    backgroundColor: PALETTE.darkBrown + 'CC',
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: 8,
+    zIndex: 25,
+  },
+  enemyToastText: {
+    fontFamily: FONTS.pixel,
+    fontSize: 13,
   },
 
   // ── Debug elements ──
@@ -1265,7 +1400,7 @@ const styles = StyleSheet.create({
     zIndex: 999,
   },
   devBadgeText: {
-    color: '#FFFFFF',
+    color: PALETTE.cream,
     fontSize: 10,
     fontFamily: FONTS.pixel,
     letterSpacing: 1,
@@ -1287,95 +1422,89 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.15,
     shadowRadius: 3,
     borderWidth: 1,
-    borderColor: PALETTE.warmBrown + '30',
+    borderColor: PALETTE.warmBrownMild,
   },
   quietBannerText: {
     fontSize: 13,
-    fontFamily: FONTS.pixel,
+    fontFamily: FONTS.heading,
     color: PALETTE.warmBrown,
   },
-  quietPlayBtn: {
+  selectSpaceBanner: {
+    position: 'absolute',
+    top: 12,
+    alignSelf: 'center',
+    backgroundColor: PALETTE.honeyGold,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 10,
+    zIndex: 30,
+    elevation: 10,
+  },
+  selectSpaceBannerText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.cream,
+  },
+  quietButtonStack: {
     position: 'absolute',
     bottom: 20,
     alignSelf: 'center',
-    backgroundColor: PALETTE.honeyGold,
-    paddingHorizontal: 28,
-    paddingVertical: 14,
-    borderRadius: 14,
-    zIndex: 18,
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    borderBottomWidth: 2,
-    borderBottomColor: PALETTE.warmBrown,
-  },
-  quietPlayBtnPressed: {
-    borderBottomWidth: 0,
-    transform: [{ translateY: 2 }],
-  },
-  quietPlayBtnText: {
-    fontSize: 16,
-    fontFamily: FONTS.pixel,
-    color: PALETTE.darkBrown,
-  },
-  quietCheckinCard: {
-    position: 'absolute',
-    bottom: 72,
-    alignSelf: 'center',
-    backgroundColor: PALETTE.cream,
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 14,
-    zIndex: 18,
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    borderWidth: 1,
-    borderColor: PALETTE.softGreen + '50',
-    flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
+    zIndex: 18,
   },
-  quietCheckinText: {
-    fontSize: 13,
-    fontFamily: FONTS.pixel,
-    color: PALETTE.darkBrown,
-    flexShrink: 1,
+  quietNameplateBtn: {
+    width: 192,
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  quietCheckinBtn: {
-    backgroundColor: PALETTE.softGreen,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  quietCheckinBtnPressed: {
+  quietNameplateBtnPressed: {
     opacity: 0.8,
   },
-  quietCheckinBtnText: {
-    fontSize: 13,
-    fontFamily: FONTS.pixel,
-    color: PALETTE.cream,
+  quietNameplateImage: {
+    width: 192,
+    height: 42,
   },
-  quietCheckinCardDone: {
+  quietNameplateLabelWrap: {
     position: 'absolute',
-    bottom: 72,
-    alignSelf: 'center',
-    backgroundColor: PALETTE.softGreen + '20',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderRadius: 14,
-    zIndex: 18,
-    elevation: 4,
-    borderWidth: 1,
-    borderColor: PALETTE.softGreen + '40',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  quietCheckinDoneText: {
-    fontSize: 13,
-    fontFamily: FONTS.pixel,
-    color: PALETTE.softGreen,
+  quietNameplateLabel: {
+    fontFamily: FONTS.heading,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+  },
+  quietSecondaryBtn: {
+    width: 160,
+    height: 50,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quietSecondaryBtnPressed: {
+    opacity: 0.9,
+  },
+  quietSecondaryImage: {
+    width: 160,
+    height: 50,
+  },
+  quietSecondaryLabelWrap: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  quietSecondaryLabel: {
+    fontFamily: FONTS.heading,
+    fontSize: 12,
+    color: PALETTE.darkBrown,
   },
 });

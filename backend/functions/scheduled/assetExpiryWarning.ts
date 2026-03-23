@@ -2,20 +2,24 @@ import { ScheduledEvent } from 'aws-lambda';
 import { scan, getItem } from '../../shared/db';
 import { sendToTokens } from '../../shared/notifications';
 import { PlayerAsset, User } from '../../shared/types';
+import { getMidnightISTAsISO } from '../../shared/time';
 
 export const handler = async (_event: ScheduledEvent): Promise<void> => {
   try {
   console.log('Asset expiry warning check running');
 
-  // Scan player-assets where placed = false AND expired = false AND expiresAt exists
+  const nextMidnight = getMidnightISTAsISO();
+
+  // Scan player-assets where placed = false AND expired = false AND expiresAt <= next midnight
   const unplacedAssets: PlayerAsset[] = [];
   let lastKey: Record<string, unknown> | undefined;
 
   do {
     const result = await scan<PlayerAsset>('player-assets', {
-      filterExpression: 'placed = :false AND expired = :false AND attribute_exists(expiresAt)',
+      filterExpression: 'placed = :false AND expired = :false AND expiresAt <= :nextMidnight',
       expressionValues: {
         ':false': false,
+        ':nextMidnight': nextMidnight,
       },
       exclusiveStartKey: lastKey,
     });
@@ -23,7 +27,7 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     lastKey = result.lastEvaluatedKey;
   } while (lastKey);
 
-  console.log(`Found ${unplacedAssets.length} unplaced assets with expiry`);
+  console.log(`Found ${unplacedAssets.length} unplaced assets expiring tonight`);
 
   // Group by userId
   const userAssetCounts = new Map<string, number>();

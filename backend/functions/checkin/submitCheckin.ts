@@ -53,7 +53,7 @@ export async function handler(
 
     // Cumulative duration cap: 10 hours (600 minutes) per day
     const totalExistingMinutes = todayCheckins.reduce((sum, c) => {
-      const mins = (c as Record<string, unknown>).durationMinutes;
+      const mins = (c as unknown as Record<string, unknown>).durationMinutes;
       return sum + (typeof mins === 'number' ? mins : 0);
     }, 0);
     if (totalExistingMinutes + durationMinutes > CAP_MINUTES) {

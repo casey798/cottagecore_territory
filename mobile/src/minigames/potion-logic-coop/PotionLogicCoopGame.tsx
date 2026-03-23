@@ -1,5 +1,5 @@
 /**
- * Potion Logic Co-op — split-screen variant of Potion Logic.
+ * Logic Grid Co-op — split-screen variant of Logic Grid.
  * P1 sees ONLY the clue list. P2 sees ONLY the deduction grid.
  * Players must verbally communicate to solve the puzzle together.
  */
@@ -12,9 +12,13 @@ import {
   StyleSheet,
   Dimensions,
   Animated,
+  ImageBackground,
+  Modal,
+  Pressable,
 } from 'react-native';
 import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { LOGIC_GRID_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import type { ClanId } from '@/types';
@@ -29,38 +33,31 @@ import {
   POTIONS,
   INGREDIENTS,
   EFFECTS,
-  type CellState,
   type GridId,
+  type GridState,
   type Puzzle,
   type Potion,
   type Ingredient,
   type Effect,
   type ManualMarks,
-  type CellOrigin,
   type ComputedGridState,
 } from '../potion-logic/PotionLogicLogic';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import { CoopDivider } from '@/components/minigames/CoopDivider';
 
-// ── Display constants ──────────────────────────────────────────────
+import {
+  POTION_DISPLAY,
+  INGREDIENT_LABELS,
+  EFFECT_LABELS,
+  cellBg,
+  cellSymbol,
+} from '../potion-logic/potionLogicShared';
 
-const POTION_DISPLAY: Record<Potion, { color: string; label: string }> = {
-  red: { color: '#C0392B', label: 'Red' },
-  blue: { color: '#2980B9', label: 'Blue' },
-  green: { color: '#27AE60', label: 'Green' },
-};
+// ── Constants ────────────────────────────────────────────────────────
 
-const INGREDIENT_LABELS: Record<Ingredient, string> = {
-  herb: '\u{1F33F}Herb',
-  crystal: '\u{1F48E}Crys',
-  mushroom: '\u{1F344}Mush',
-};
+const MAX_WRONG = 3;
 
-const EFFECT_LABELS: Record<Effect, string> = {
-  healing: '\u{1F49A}Heal',
-  speed: '\u26A1Spd',
-  shield: '\u{1F6E1}Shld',
-};
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 const POTION_NAMES: Record<string, Potion> = { Red: 'red', Blue: 'blue', Green: 'green' };
 const INGREDIENT_NAMES: Record<string, Ingredient> = { Herb: 'herb', Crystal: 'crystal', Mushroom: 'mushroom' };
@@ -77,21 +74,6 @@ function withAlpha(hex: string, alpha: number): string {
     .toString(16)
     .padStart(2, '0');
   return hex + a;
-}
-
-function cellBg(origin: CellOrigin, state: CellState): string {
-  if (state === 'empty') return PALETTE.cream;
-  if (origin === 'auto_eliminated') return '#EAE4DA';
-  if (origin === 'manual_eliminated') return '#E0D8CC';
-  if (origin === 'auto_confirmed') return '#C4E0B0';
-  if (origin === 'manual_confirmed') return '#B8D9A0';
-  return PALETTE.cream;
-}
-
-function cellSymbol(state: CellState): string {
-  if (state === 'confirmed') return '\u2713';
-  if (state === 'eliminated') return '\u2717';
-  return '';
 }
 
 /**
@@ -129,7 +111,7 @@ export function parseClueReferences(text: string): {
 // ── Component ──────────────────────────────────────────────────────
 
 export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX.Element {
-  const { sessionId, timeLimit, onComplete, puzzleData } = props;
+  const { sessionId, timeLimit, onComplete, puzzleData, practiceMode, coopPartnerId } = props;
 
   const p1Name = (puzzleData?.p1Name as string) ?? 'Player 1';
   const p1Clan = (puzzleData?.p1Clan as string) ?? 'ember';
@@ -138,10 +120,27 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
 
   const puzzleRef = useRef<Puzzle | null>(null);
   if (puzzleRef.current === null) {
-    puzzleRef.current = generatePuzzle();
+    // Use server-generated puzzle when available; fall back to client generation
+    if (puzzleData?.clueTexts && puzzleData?.solution) {
+      const serverSolution = puzzleData.solution as { ingredients: Record<string, string>; effects: Record<string, string> };
+      const serverClueTexts = puzzleData.clueTexts as string[];
+      puzzleRef.current = {
+        solution: {
+          ingredients: serverSolution.ingredients as Puzzle['solution']['ingredients'],
+          effects: serverSolution.effects as Puzzle['solution']['effects'],
+        },
+        clues: serverClueTexts.map(text => ({
+          type: 'direct_positive' as const,
+          text,
+          apply: (grid: GridState) => grid,
+        })),
+      };
+    } else {
+      puzzleRef.current = generatePuzzle();
+    }
   }
   const puzzle = puzzleRef.current;
-  const gameDuration = timeLimit > 0 ? timeLimit : 120;
+  const gameDuration = timeLimit > 0 ? timeLimit : LOGIC_GRID_TIME_LIMIT;
 
   // ── State ────────────────────────────────────────────────────────
 
@@ -149,14 +148,19 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
   const [highlightedClue, setHighlightedClue] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [wrongFlash, setWrongFlash] = useState(false);
+  const [wrongCount, setWrongCount] = useState(0);
   const [gameOver, setGameOver] = useState(false);
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [timeLeft, setTimeLeft] = useState(gameDuration);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   const startTimeRef = useRef(Date.now());
   const completedRef = useRef(false);
   const pendingCompleteRef = useRef<MinigameResult | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+  const wrongCountRef = useRef(0);
 
   // ── Derived grid state ───────────────────────────────────────────
 
@@ -224,6 +228,7 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
@@ -248,17 +253,20 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
       const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
       const completionHash = generateClientCompletionHash(sessionId, outcome, timeTaken);
 
+      const assignments = extractAssignments(computedRef.current.grid);
       pendingCompleteRef.current = {
         result: outcome,
         timeTaken,
         completionHash,
         solutionData: {
-          manualMarks,
+          playerIngredients: assignments.ingredients,
+          playerEffects: assignments.effects,
           solved: outcome === 'win',
+          ...(coopPartnerId ? { coopPartnerId } : {}),
         },
       };
     },
-    [sessionId, manualMarks],
+    [sessionId, coopPartnerId],
   );
 
   const handleContinue = useCallback(() => {
@@ -267,6 +275,42 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
       pendingCompleteRef.current = null;
     }
   }, [onComplete]);
+
+  // ── How to Play ──────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
+
+  // ── Wrong-answer handler ─────────────────────────────────────────
+
+  const handleWrongAnswer = useCallback(() => {
+    const newCount = wrongCountRef.current + 1;
+    wrongCountRef.current = newCount;
+    setWrongCount(newCount);
+
+    if (newCount >= MAX_WRONG) {
+      finishGame('lose');
+      return;
+    }
+
+    setWrongFlash(true);
+    const remaining = MAX_WRONG - newCount;
+    setMessage(`Wrong! ${remaining} attempt${remaining === 1 ? '' : 's'} remaining`);
+    setTimeout(() => {
+      setWrongFlash(false);
+      setMessage(null);
+    }, 1200);
+  }, [finishGame]);
 
   // ── Auto-win check ──────────────────────────────────────────────
 
@@ -285,8 +329,10 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
     if (correct) {
       const timer = setTimeout(() => finishGame('win'), 350);
       return () => clearTimeout(timer);
+    } else {
+      handleWrongAnswer();
     }
-  }, [grid, gameOver, puzzle.solution, finishGame]);
+  }, [grid, gameOver, puzzle.solution, finishGame, handleWrongAnswer]);
 
   // ── Cell tap handler (P2 only) ──────────────────────────────────
 
@@ -302,45 +348,49 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
         return;
       }
 
-      setManualMarks(prev => {
-        if (origin === 'empty') {
-          return {
-            ...prev,
-            eliminations: [...prev.eliminations, { grid: gridType, row, col }],
-          };
+      // manual ✗ → try manual ✓: validate BEFORE calling setManualMarks
+      if (origin === 'manual_eliminated') {
+        const prev = manualMarks;
+        const newElims = prev.eliminations.filter(
+          e => !(e.grid === gridType && e.row === row && e.col === col),
+        );
+        const newConfirms = [...prev.confirms, { grid: gridType, row, col }];
+        const testComputed = computeGridState({ confirms: newConfirms, eliminations: newElims });
+
+        if (!isValidGridState(testComputed.grid[gridType])) {
+          setMessage('Only one per row and column');
+          setTimeout(() => setMessage(null), 1500);
+          return;
         }
 
-        if (origin === 'manual_eliminated') {
-          const newElims = prev.eliminations.filter(
-            e => !(e.grid === gridType && e.row === row && e.col === col),
-          );
-          const newConfirms = [...prev.confirms, { grid: gridType, row, col }];
-          const testComputed = computeGridState({ confirms: newConfirms, eliminations: newElims });
+        setManualMarks({ confirms: newConfirms, eliminations: newElims });
+        setMessage(null);
+        return;
+      }
 
-          if (!isValidGridState(testComputed.grid[gridType])) {
-            setMessage('Only one per row and column');
-            setTimeout(() => setMessage(null), 1500);
-            return prev;
-          }
+      // empty → manual ✗
+      if (origin === 'empty') {
+        setManualMarks(prev => ({
+          ...prev,
+          eliminations: [...prev.eliminations, { grid: gridType, row, col }],
+        }));
+        setMessage(null);
+        return;
+      }
 
-          return { confirms: newConfirms, eliminations: newElims };
-        }
-
-        if (origin === 'manual_confirmed') {
-          return {
-            ...prev,
-            confirms: prev.confirms.filter(
-              co => !(co.grid === gridType && co.row === row && co.col === col),
-            ),
-          };
-        }
-
-        return prev;
-      });
-
-      setMessage(null);
+      // manual ✓ → empty
+      if (origin === 'manual_confirmed') {
+        setManualMarks(prev => ({
+          ...prev,
+          confirms: prev.confirms.filter(
+            co => !(co.grid === gridType && co.row === row && co.col === col),
+          ),
+        }));
+        setMessage(null);
+        return;
+      }
     },
-    [gameOver, origins],
+    [gameOver, origins, manualMarks],
   );
 
   // ── Submit handler ──────────────────────────────────────────────
@@ -361,14 +411,9 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
     if (isCorrect) {
       finishGame('win');
     } else {
-      setWrongFlash(true);
-      setMessage('Not quite \u2014 keep talking!');
-      setTimeout(() => {
-        setWrongFlash(false);
-        setMessage(null);
-      }, 1200);
+      handleWrongAnswer();
     }
-  }, [gameOver, puzzle.solution, finishGame]);
+  }, [gameOver, puzzle.solution, finishGame, handleWrongAnswer]);
 
   // ── Layout calculations ──────────────────────────────────────────
 
@@ -513,13 +558,25 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
   // ── Render ──────────────────────────────────────────────────────
 
   return (
-    <View style={styles.root}>
+    <ImageBackground source={plainBg} style={coopStyles.root} resizeMode="cover">
+      {/* Top bar with help button */}
+      <View style={coopStyles.topBar}>
+        <View />
+        <TouchableOpacity style={coopStyles.helpBtn} onPress={openHowToPlay}>
+          <Text style={coopStyles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* P1 Zone — clue list only */}
-      <View style={[styles.zone, { backgroundColor: p1BgColor }]}>
+      <View style={[coopStyles.zone, { backgroundColor: p1BgColor }]}>
+        <View style={coopStyles.zoneLabel}>
+          <Text style={coopStyles.zoneLabelRole}>Clue Reader</Text>
+          <Text style={coopStyles.zoneLabelName}>{p1Name}</Text>
+        </View>
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={styles.clueScrollContent}
-          style={styles.clueScroll}
+          contentContainerStyle={coopStyles.clueScrollContent}
+          style={coopStyles.clueScroll}
         >
           {puzzle.clues.map((clue, i) => {
             const isHighlighted = highlightedClue === i;
@@ -528,18 +585,18 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
               <TouchableOpacity
                 key={i}
                 style={[
-                  styles.clueCard,
+                  coopStyles.clueCard,
                   isHighlighted && [
-                    styles.clueCardHighlighted,
+                    coopStyles.clueCardHighlighted,
                     { borderLeftColor: p1HighlightColor, borderLeftWidth: 4 },
                   ],
-                  isDimmed && styles.clueCardDimmed,
+                  isDimmed && coopStyles.clueCardDimmed,
                 ]}
                 onPress={() => setHighlightedClue(prev => prev === i ? null : i)}
                 activeOpacity={0.8}
               >
-                <Text style={styles.clueNumber}>{i + 1}.</Text>
-                <Text style={styles.clueText}>{clue.text}</Text>
+                <Text style={coopStyles.clueNumber}>{i + 1}.</Text>
+                <Text style={coopStyles.clueText}>{clue.text}</Text>
               </TouchableOpacity>
             );
           })}
@@ -555,17 +612,22 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
         timeLeft={timeLeft}
         totalTime={gameDuration}
       >
+        {!gameOver && (
+          <Text style={coopStyles.attemptsText}>
+            Attempts left: {MAX_WRONG - wrongCount}
+          </Text>
+        )}
         {message !== null && (
-          <Text style={styles.message}>{message}</Text>
+          <Text style={coopStyles.message}>{message}</Text>
         )}
         {!gameOver && (
           <TouchableOpacity
-            style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
+            style={[coopStyles.submitBtn, !canSubmit && coopStyles.submitBtnDisabled]}
             onPress={handleSubmit}
             disabled={!canSubmit}
             activeOpacity={0.7}
           >
-            <Text style={[styles.submitBtnText, !canSubmit && styles.submitBtnTextDisabled]}>
+            <Text style={[coopStyles.submitBtnText, !canSubmit && coopStyles.submitBtnTextDisabled]}>
               Submit Answer
             </Text>
           </TouchableOpacity>
@@ -573,7 +635,11 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
       </CoopDivider>
 
       {/* P2 Zone — grid only */}
-      <View style={[styles.zone, { backgroundColor: p2BgColor }]}>
+      <View style={[coopStyles.zone, { backgroundColor: p2BgColor }]}>
+        <View style={coopStyles.zoneLabel}>
+          <Text style={coopStyles.zoneLabelRole}>Grid Solver</Text>
+          <Text style={coopStyles.zoneLabelName}>{p2Name}</Text>
+        </View>
         {/* Potion bottles strip */}
         <View style={gridStyles.potionStrip}>
           {POTIONS.map(p => (
@@ -608,24 +674,102 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
+          xpEarned={overlayResult === 'win' && !practiceMode ? 25 : 0}
           onContinue={handleContinue}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={coopStyles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={coopStyles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={coopStyles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={coopStyles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={coopStyles.modalTitle}>How to Play {'\u2014'} Logic Grid Co-op</Text>
+            <Text style={coopStyles.modalRule}>
+              {'\u2022'} A logic grid is shown on a shared board with clues listed beside it.
+            </Text>
+            <Text style={coopStyles.modalRule}>
+              {'\u2022'} Player 1 reads the clues aloud; Player 2 fills in the grid based on the deductions.
+            </Text>
+            <Text style={coopStyles.modalRule}>
+              {'\u2022'} Use process of elimination to work out which ingredient and effect belongs to each potion.
+            </Text>
+            <Text style={coopStyles.modalRule}>
+              {'\u2022'} The grid auto-fills forced deductions as you go.
+            </Text>
+            <Text style={coopStyles.modalRule}>
+              {'\u2022'} Complete the grid correctly before time runs out to win together.
+            </Text>
+            <Text style={coopStyles.modalTip}>
+              Tip: Player 1 should read every clue before Player 2 touches the grid {'\u2014'} the full picture is always clearer than one clue at a time.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
-// ── Styles ────────────────────────────────────────────────────────
+// ── Co-op layout styles ──────────────────────────────────────────────
 
-const styles = StyleSheet.create({
+const coopStyles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: UI.background,
+  },
+
+  // Top bar
+  topBar: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingVertical: 4,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
 
   zone: {
     flex: 1,
     paddingVertical: 6,
+  },
+
+  // Zone labels
+  zoneLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingBottom: 2,
+    gap: 6,
+  },
+  zoneLabelRole: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 11,
+    color: PALETTE.warmBrown,
+  },
+  zoneLabelName: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 11,
+    color: PALETTE.stoneGrey,
   },
 
   // Clue list (P1)
@@ -650,7 +794,7 @@ const styles = StyleSheet.create({
   clueCardHighlighted: {
     borderColor: PALETTE.honeyGold,
     borderWidth: 2,
-    backgroundColor: '#FFF8E7',
+    backgroundColor: PALETTE.clueHighlight,
   },
   clueCardDimmed: {
     opacity: 0.5,
@@ -670,12 +814,20 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
 
-  // Message
+  // Message & attempts
+  attemptsText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 12,
+    color: PALETTE.darkBrown,
+    marginBottom: 2,
+    left: -20,
+  },
   message: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 13,
     color: PALETTE.mutedRose,
     marginBottom: 2,
+    left: -20,
   },
 
   // Submit
@@ -685,7 +837,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 10,
     borderBottomWidth: 3,
-    borderBottomColor: '#A0784C',
+    borderBottomColor: PALETTE.midBrown,
     minWidth: 160,
     alignItems: 'center',
   },
@@ -701,6 +853,55 @@ const styles = StyleSheet.create({
   submitBtnTextDisabled: {
     color: PALETTE.stoneGrey,
   },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: UI.overlay,
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
+  },
 });
 
 // Grid styles (P2 zone) — mirrors PotionLogicGame.tsx
@@ -710,6 +911,7 @@ const gridStyles = StyleSheet.create({
     justifyContent: 'center',
     gap: 24,
     marginBottom: 4,
+    left: -20,
   },
   potionBottle: {
     alignItems: 'center',
@@ -725,7 +927,7 @@ const gridStyles = StyleSheet.create({
   bottleNeck: {
     width: 12,
     height: 8,
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: PALETTE.glassWhite30,
     borderTopLeftRadius: 4,
     borderTopRightRadius: 4,
     marginTop: -4,
@@ -750,7 +952,7 @@ const gridStyles = StyleSheet.create({
     alignItems: 'center',
   },
   gridTitle: {
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.title,
     fontSize: 18,
     color: PALETTE.darkBrown,
     marginBottom: 4,
@@ -760,6 +962,7 @@ const gridStyles = StyleSheet.create({
     alignItems: 'flex-end',
     marginBottom: 2,
     gap: 2,
+    left: -20,
   },
   colHeader: {
     alignItems: 'center',
@@ -777,6 +980,7 @@ const gridStyles = StyleSheet.create({
     alignItems: 'center',
     gap: 2,
     marginBottom: 2,
+    left: -20,
   },
   rowHeader: {
     flexDirection: 'row',
@@ -788,7 +992,7 @@ const gridStyles = StyleSheet.create({
     height: 16,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(0,0,0,0.15)',
+    borderColor: PALETTE.borderBlack15,
   },
   cell: {
     borderWidth: 1,
@@ -802,7 +1006,6 @@ const gridStyles = StyleSheet.create({
   },
   cellSymbol: {
     fontSize: 20,
-    fontFamily: FONTS.bodyBold,
   },
   cellSymbolConfirmed: {
     color: PALETTE.deepGreen,

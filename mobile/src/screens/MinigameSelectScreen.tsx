@@ -1,3 +1,4 @@
+// Fixes applied: 1, 2, 3, 4, 5, 6, 9, coop-fix-1, coop-fix-3, coop-fix-4
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -7,20 +8,24 @@ import {
   TouchableOpacity,
   Alert,
   Modal,
+  ActivityIndicator,
+  ImageBackground,
 } from 'react-native';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { DAILY_XP_CAP } from '@/constants/config';
+import { DAILY_XP_CAP, COLOR_SORT_TIME_LIMIT } from '@/constants/config';
 import { useGameStore } from '@/store/useGameStore';
 import { useDebugStore } from '@/store/useDebugStore';
 import * as gameApi from '@/api/game';
 import { MinigameInfo } from '@/types';
 
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
+
 const COOP_MINIGAME_IDS: readonly string[] = [
-  'kindred-coop',
+  'word-clusters-coop',
   'cipher-stones-coop',
   'pips-coop',
   'stone-pairs-coop',
@@ -28,30 +33,39 @@ const COOP_MINIGAME_IDS: readonly string[] = [
   'vine-trail-coop',
 ];
 
+const COOP_DEFAULTS: Record<string, { name: string; description: string; timeLimit: number }> = {
+  'word-clusters-coop': { name: 'Word Clusters', description: 'Sort 16 words into 4 groups. 8 mistakes allowed.', timeLimit: 180 },
+  'pips-coop': { name: 'Snuff Out', description: 'Turn all the cells dark. Tap to toggle a cell and its neighbours.', timeLimit: 75 },
+  'stone-pairs-coop': { name: 'Flip & Match', description: 'Flip cards to find matching pairs. Remember what you saw \u2014 every flip counts.', timeLimit: 90 },
+  'vine-trail-coop': { name: 'Word Hunt', description: 'Find all the hidden words in the letter grid \u2014 split-screen team challenge', timeLimit: 180 },
+  'cipher-stones-coop': { name: 'Cipher', description: 'A famous quote has been scrambled \u2014 every letter replaced with another. Decode it letter by letter before time runs out.', timeLimit: 150 },
+  'potion-logic-coop': { name: 'Logic Grid', description: 'Read the clues. Deduce which ingredient and effect belongs to each potion. Process of elimination.', timeLimit: 150 },
+};
+
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type SelectRoute = RouteProp<MainModalParamList, 'MinigameSelect'>;
 
 const ALL_MINIGAMES: MinigameInfo[] = [
-  { minigameId: 'grove-words', name: 'Grove Words', timeLimit: 180, description: 'Word puzzle', completed: false },
-  { minigameId: 'kindred', name: 'Kindred', timeLimit: 150, description: 'Pattern matching', completed: false },
-  { minigameId: 'pips', name: 'Pips', timeLimit: 90, description: 'Dice puzzle', completed: false },
-  { minigameId: 'vine-trail', name: 'Vine Trail', timeLimit: 180, description: 'Path tracing', completed: false },
-  { minigameId: 'mosaic', name: 'Mosaic', timeLimit: 90, description: 'Tile assembly', completed: false },
-  { minigameId: 'number-grove', name: 'Number Grove', timeLimit: 120, description: 'Number puzzle', completed: false },
-  { minigameId: 'stone-pairs', name: 'Stone Pairs', timeLimit: 60, description: 'Memory matching', completed: false },
-  { minigameId: 'potion-logic', name: 'Potion Logic', timeLimit: 120, description: 'Logic puzzle', completed: false },
-  { minigameId: 'leaf-sort', name: 'Leaf Sort', timeLimit: 90, description: 'Sort colored beads into jars', completed: false },
-  { minigameId: 'cipher-stones', name: 'Cipher Stones', timeLimit: 120, description: 'Decryption puzzle', completed: false },
-  { minigameId: 'path-weaver', name: 'Path Weaver', timeLimit: 150, description: 'Fill the grid to reveal a hidden image', completed: false },
-  { minigameId: 'firefly-flow', name: 'Firefly Flow', timeLimit: 90, description: 'Connect the pairs and light every tile', completed: false },
-  { minigameId: 'grove-equations', name: 'Grove Equations', timeLimit: 120, description: 'Use 4 numbers and operators to reach the target', completed: false },
-  { minigameId: 'bloom-sequence', name: 'Bloom Sequence', timeLimit: 90, description: 'Find the pattern, complete the sequence', completed: false },
-  { minigameId: 'shift-slide', name: 'Shift & Slide', timeLimit: 90, description: 'Slide the tiles to restore the hidden image', completed: false },
+  { minigameId: 'grove-words', name: 'Wordle', timeLimit: 180, description: 'Guess the word in 6 tries', completed: false },
+  { minigameId: 'word-clusters', name: 'Word Clusters', timeLimit: 180, description: 'Sort 16 words into 4 groups. 8 mistakes allowed.', completed: false },
+  { minigameId: 'pips', name: 'Snuff Out', timeLimit: 75, description: 'Turn all the cells dark. Tap to toggle a cell and its neighbours.', completed: false },
+  { minigameId: 'vine-trail', name: 'Word Hunt', timeLimit: 180, description: 'Find all the hidden words in the letter grid. Every letter belongs to a word \u2014 trace your path and hunt them down.', completed: false },
+  { minigameId: 'mosaic', name: 'Tile Fit', timeLimit: 120, description: 'Fit all the colored pieces into the grid. No gaps, no overlaps.', completed: false },
+  { minigameId: 'number-grove', name: 'Mini Sudoku', timeLimit: 90, description: 'Fill the 6\u00D76 grid so every row, column, and box contains each number from 1 to 6 exactly once.', completed: false },
+  { minigameId: 'stone-pairs', name: 'Flip & Match', timeLimit: 90, description: 'Flip cards to find matching pairs. Remember what you saw \u2014 every flip counts.', completed: false },
+  { minigameId: 'potion-logic', name: 'Logic Grid', timeLimit: 150, description: 'Read the clues. Deduce which ingredient and effect belongs to each potion. Process of elimination.', completed: false },
+  { minigameId: 'leaf-sort', name: 'Color Sort', timeLimit: COLOR_SORT_TIME_LIMIT, description: 'Sort colored beads into jars. Move one bead at a time — each jar must hold only one color.', completed: false },
+  { minigameId: 'cipher-stones', name: 'Cipher', timeLimit: 150, description: 'A famous quote has been scrambled \u2014 every letter replaced with another. Decode it letter by letter before time runs out.', completed: false },
+  { minigameId: 'path-weaver', name: 'Nonogram', timeLimit: 180, description: 'Use number clues to fill a pixel grid and reveal a hidden image.', completed: false },
+  { minigameId: 'firefly-flow', name: 'Connect the Dots', timeLimit: 90, description: 'Connect matching colour pairs with paths. Fill every tile on the grid \u2014 no gaps, no crossings.', completed: false },
+  { minigameId: 'grove-equations', name: 'Number Crunch', timeLimit: 90, description: 'Tap the operators between four numbers to make them equal the target.', completed: false },
+  { minigameId: 'bloom-sequence', name: 'Spot the Pattern', timeLimit: 60, description: 'A sequence of 5 items follows a pattern. Pick the correct 6th item \u2014 3 rounds, no mistakes allowed.', completed: false },
+  { minigameId: 'shift-slide', name: 'Tile Slide', timeLimit: 120, description: 'Slide the tiles to piece together a hidden picture.', completed: false },
 ];
 
 const MINIGAME_ICONS: Record<string, string> = {
   'grove-words': '📝',
-  'kindred': '🔗',
+  'word-clusters': '🔗',
   'pips': '🧩',
   'vine-trail': '🌿',
   'mosaic': '🪟',
@@ -64,15 +78,13 @@ const MINIGAME_ICONS: Record<string, string> = {
   'firefly-flow': '🪲',
   'grove-equations': '🧮',
   'bloom-sequence': '🌸',
-  'shift-slide': '🧩',
-};
-
-type MinigameDifficulty = 'easy' | 'medium' | 'hard';
-
-const DIFFICULTY_BADGE: Record<MinigameDifficulty, { label: string; bg: string; text: string }> = {
-  easy:   { label: 'Easy',   bg: PALETTE.softGreen, text: PALETTE.cream },
-  medium: { label: 'Medium', bg: PALETTE.honeyGold, text: PALETTE.darkBrown },
-  hard:   { label: 'Hard',   bg: PALETTE.mutedRose,  text: PALETTE.cream },
+  'shift-slide': '🖼️',
+  'word-clusters-coop': '🔗',
+  'pips-coop': '🧩',
+  'stone-pairs-coop': '🪨',
+  'vine-trail-coop': '🌿',
+  'cipher-stones-coop': '🔮',
+  'potion-logic-coop': '⚗️',
 };
 
 export default function MinigameSelectScreen() {
@@ -132,9 +144,28 @@ export default function MinigameSelectScreen() {
     isCoopOnly ? coopSet.has(m.minigameId) : !coopSet.has(m.minigameId),
   );
 
-  // Server sends pre-bucketed minigames; use them directly (practice shows all)
-  const minigames = practiceMode ? ALL_MINIGAMES : filteredPool;
-  const allExhausted = minigames.length > 0 && minigames.every((m) => m.completed);
+  // Always show all 6 co-op variants, merging completed state from server
+  const coopMinigames: MinigameInfo[] =
+    COOP_MINIGAME_IDS.map((id) => {
+      const serverEntry = fullPool.find((m) => m.minigameId === id);
+      const defaults = COOP_DEFAULTS[id];
+      return {
+        minigameId: id,
+        name: serverEntry?.name ?? defaults?.name ?? id,
+        description: serverEntry?.description ?? defaults?.description ?? '',
+        timeLimit: serverEntry?.timeLimit ?? defaults?.timeLimit ?? 120,
+        completed: serverEntry?.completed ?? false,
+      };
+    });
+
+  // Solo minigames: practice shows all, otherwise use server-filtered pool (co-op IDs already excluded)
+  const soloMinigames: MinigameInfo[] =
+    practiceMode
+      ? ALL_MINIGAMES
+      : __DEV__ && showAllMinigames
+        ? ALL_MINIGAMES
+        : filteredPool;
+  const allExhausted = soloMinigames.length > 0 && soloMinigames.every((m) => m.completed);
 
   const handleSelect = async (minigame: MinigameInfo) => {
     if (loading) return;
@@ -151,7 +182,7 @@ export default function MinigameSelectScreen() {
             minigameId: minigame.minigameId,
             timeLimit: result.data.timeLimit,
             salt: result.data.salt,
-            locationId,
+            locationId: 'practice',
             locationName,
             puzzleData: result.data.puzzleData,
             xpAvailable: false,
@@ -160,7 +191,22 @@ export default function MinigameSelectScreen() {
           Alert.alert('Error', result.error?.message || 'Failed to start practice.');
         }
       } else {
-        const partnerIdToSend = isCoopSession && coopPartnerId ? coopPartnerId : null;
+        const partnerIdToSend = isCoopSession ? (coopPartnerId ?? null) : null;
+        if (__DEV__ && (coopPartnerId === 'dev-partner' || locationId === '00000000-0000-0000-0000-000000000001')) {
+          navigatedForwardRef.current = true;
+          navigation.replace('MinigamePlay', {
+            sessionId: 'dev-session-' + minigame.minigameId,
+            minigameId: minigame.minigameId,
+            timeLimit: minigame.timeLimit,
+            salt: 'dev-salt',
+            locationId,
+            locationName,
+            puzzleData: {},
+            xpAvailable: false,
+          });
+          setLoading(false);
+          return;
+        }
         const result = await gameApi.startMinigame(
           locationId,
           minigame.minigameId,
@@ -198,7 +244,7 @@ export default function MinigameSelectScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <ImageBackground source={plainBg} style={styles.container} resizeMode="cover">
       <View style={styles.header}>
         <Text style={styles.headerTitle}>
           {practiceMode ? 'Practice mode' : locationName}
@@ -239,7 +285,7 @@ export default function MinigameSelectScreen() {
                 style={styles.overlayButton}
                 onPress={() => setSpaceFactDismissed(true)}
               >
-                <Text style={styles.overlayButtonText}>Got it &rarr;</Text>
+                <Text style={styles.overlayButtonText}>Got it →</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -263,8 +309,16 @@ export default function MinigameSelectScreen() {
             <Text style={styles.coopOnlyText}>Co-op only at this location</Text>
           </View>
         )}
+        {soloMinigames.length === 0 && !loading && (
+          <View style={styles.emptyState}>
+            <Text style={styles.emptyStateText}>No minigames available here right now.</Text>
+          </View>
+        )}
+
+        {/* Solo minigames section */}
+        <Text style={styles.sectionHeader}>Solo</Text>
         <View style={styles.grid}>
-          {minigames.map((item) => (
+          {soloMinigames.map((item) => (
             <TouchableOpacity
               key={item.minigameId}
               style={[styles.card, item.completed && styles.cardDone, !xpAvailable && !item.completed && styles.cardNoXp]}
@@ -291,19 +345,53 @@ export default function MinigameSelectScreen() {
               ) : (
                 <Text style={styles.cardTime}>⏱ {item.timeLimit}s</Text>
               )}
-              {(() => {
-                const diff = item.difficulty;
-                if (!diff) return null;
-                const badge = DIFFICULTY_BADGE[diff];
-                return (
-                  <View style={[styles.diffBadge, { backgroundColor: badge.bg }]}>
-                    <Text style={[styles.diffBadgeText, { color: badge.text }]}>{badge.label}</Text>
-                  </View>
-                );
-              })()}
             </TouchableOpacity>
           ))}
         </View>
+
+        {(isCoopOnly || practiceMode) && (
+          <>
+            {/* Divider */}
+            <View style={styles.sectionDivider}>
+              <View style={styles.dividerLine} />
+              <Text style={styles.dividerLabel}>Co-op</Text>
+              <View style={styles.dividerLine} />
+            </View>
+
+            {/* Co-op minigames section */}
+            <View style={styles.grid}>
+              {coopMinigames.map((item) => (
+                <TouchableOpacity
+                  key={item.minigameId}
+                  style={[styles.card, item.completed && styles.cardDone, !xpAvailable && !item.completed && styles.cardNoXp]}
+                  onPress={() => handleSelect(item)}
+                  disabled={loading || item.completed}
+                  activeOpacity={item.completed ? 1 : 0.7}
+                >
+                  <Text style={[styles.cardEmoji, !xpAvailable && !item.completed && styles.cardEmojiMuted]}>
+                    {MINIGAME_ICONS[item.minigameId] || '🎮'}
+                  </Text>
+                  <Text style={[styles.cardName, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text
+                    style={[styles.cardDesc, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}
+                    numberOfLines={2}
+                  >
+                    {item.description}
+                  </Text>
+                  {item.completed ? (
+                    <Text style={styles.cardCompleted}>✓ Done</Text>
+                  ) : !xpAvailable ? (
+                    <Text style={styles.cardNoXpBadge}>0 XP</Text>
+                  ) : (
+                    <Text style={styles.cardTime}>⏱ {item.timeLimit}s</Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
         {allExhausted && (
           <View style={styles.exhaustedBanner}>
             <Text style={styles.exhaustedText}>
@@ -313,6 +401,11 @@ export default function MinigameSelectScreen() {
           </View>
         )}
       </ScrollView>
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color={PALETTE.warmBrown} />
+        </View>
+      )}
       <View style={styles.bottomBar}>
         <TouchableOpacity
           style={allExhausted ? styles.backBtnFull : styles.backBtn}
@@ -323,14 +416,14 @@ export default function MinigameSelectScreen() {
           </Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: UI.background,
+    backgroundColor: 'transparent',
     paddingHorizontal: 20,
     paddingTop: 24,
   },
@@ -378,7 +471,7 @@ const styles = StyleSheet.create({
   practiceBadgeText: {
     fontSize: 12,
     fontFamily: FONTS.bodyBold,
-    color: '#FFFFFF',
+    color: PALETTE.cream,
     letterSpacing: 1.5,
   },
   practiceSubtitle: {
@@ -431,12 +524,12 @@ const styles = StyleSheet.create({
     borderColor: PALETTE.stoneGrey,
   },
   cardNoXp: {
-    opacity: 0.5,
+    opacity: 0.8,
     borderColor: PALETTE.stoneGrey,
-    backgroundColor: '#E8E0D4',
+    backgroundColor: '#E8E0D4', // TODO: no close PALETTE match for this muted parchment
   },
   cardEmojiMuted: {
-    opacity: 0.4,
+    opacity: 0.7,
   },
   cardTextMuted: {
     color: PALETTE.stoneGrey,
@@ -459,19 +552,21 @@ const styles = StyleSheet.create({
     color: PALETTE.warmBrown,
     fontFamily: FONTS.bodyBold,
   },
-  diffBadge: {
-    position: 'absolute',
-    bottom: 4,
-    right: 4,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
-    opacity: 0.85,
+  emptyState: {
+    paddingVertical: 40,
+    alignItems: 'center',
   },
-  diffBadgeText: {
-    fontSize: 9,
-    fontFamily: FONTS.bodyBold,
-    letterSpacing: 0.3,
+  emptyStateText: {
+    fontSize: 14,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
+  },
+  loadingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   exhaustedBanner: {
     backgroundColor: PALETTE.cream,
@@ -594,4 +689,30 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.cream,
   },
+
+  // ── Section headers & divider ──
+  sectionHeader: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 8,
+    marginTop: 4,
+  },
+  sectionDivider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 16,
+    gap: 10,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: PALETTE.darkBrown + '40',
+  },
+  dividerLabel: {
+    fontFamily: FONTS.title,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+  },
+
 });

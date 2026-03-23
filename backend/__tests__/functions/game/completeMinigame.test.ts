@@ -319,11 +319,13 @@ describe('completeMinigame handler', () => {
       expect(responseBody.data.result).toBe('lose');
       expect(responseBody.data.xpEarned).toBe(0);
       expect(responseBody.data.locationLocked).toBe(true);
+      expect(responseBody.data.lockedUntil).toBeDefined();
 
       expect(mockPutItem).toHaveBeenCalledWith(
         'player-locks',
         expect.objectContaining({
           dateUserLocation: `${TODAY}#${USER_ID}#${LOCATION_ID}`,
+          lockedUntil: expect.any(String),
         })
       );
     });

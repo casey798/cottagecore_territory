@@ -1,29 +1,45 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
+  Image,
   StyleSheet,
   TouchableOpacity,
   Animated,
+  ImageBackground,
+  ViewStyle,
 } from 'react-native';
+import Reanimated, {
+  useSharedValue,
+  useAnimatedStyle,
+  useDerivedValue,
+  withTiming,
+  withSequence,
+  Easing,
+} from 'react-native-reanimated';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
-import { PALETTE, UI, CLAN_COLORS } from '@/constants/colors';
+import { PALETTE, CLAN_COLORS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { ASSET_MAP } from '@/constants/assets';
 import { useClanStore } from '@/store/useClanStore';
 import { useGameStore } from '@/store/useGameStore';
 import { useMapStore } from '@/store/useMapStore';
 import { AssetRarity } from '@/types';
+import { useLocationLockTimer } from '@/hooks/useLocationLockTimer';
+
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
+const chestSprite = require('../assets/ui/chest_open.png');
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type ResultRoute = RouteProp<MainModalParamList, 'Result'>;
 
 const RARITY_COLORS: Record<AssetRarity, string> = {
-  common: PALETTE.stoneGrey,
-  uncommon: PALETTE.softGreen,
-  rare: PALETTE.honeyGold,
-  legendary: PALETTE.mutedRose,
+  common: PALETTE.warmBrown,
+  uncommon: CLAN_COLORS.gale,
+  rare: CLAN_COLORS.tide,
+  legendary: PALETTE.honeyGold,
 };
 
 const RARITY_LABELS: Record<AssetRarity, string> = {
@@ -33,7 +49,62 @@ const RARITY_LABELS: Record<AssetRarity, string> = {
   legendary: 'Legendary',
 };
 
-type ChestPhase = 'none' | 'chest' | 'reveal';
+type ChestPhase = 'none' | 'chest' | 'opening' | 'reveal';
+
+// ── Chest open spritesheet animation ──────────────────────────────────
+
+const SPRITE_FRAMES = 8;
+const FRAME_W = 150; // 250 × 0.6
+const FRAME_H = 174; // 290 × 0.6
+const SPRITE_TOTAL_W = FRAME_W * SPRITE_FRAMES; // 1200
+
+interface ChestOpenAnimationProps {
+  onComplete: () => void;
+}
+
+function ChestOpenAnimation({ onComplete }: ChestOpenAnimationProps) {
+  const frameIndex = useSharedValue(0);
+  const timerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    frameIndex.value = withSequence(
+      withTiming(1, { duration: 80, easing: Easing.linear }),
+      withTiming(2, { duration: 80, easing: Easing.linear }),
+      withTiming(3, { duration: 80, easing: Easing.linear }),
+      withTiming(4, { duration: 80, easing: Easing.linear }),
+      withTiming(5, { duration: 80, easing: Easing.linear }),
+      withTiming(6, { duration: 80, easing: Easing.linear }),
+      withTiming(7, { duration: 80, easing: Easing.linear }),
+    );
+    // 7 transitions × 80ms = 560ms animation, then 300ms hold on final frame
+    timerRef.current = setTimeout(onComplete, 860);
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, [frameIndex, onComplete]);
+
+  const translateX = useDerivedValue(() => {
+    return Math.floor(frameIndex.value) * -FRAME_W;
+  });
+
+  const spriteStyle = useAnimatedStyle(() => ({
+    width: SPRITE_TOTAL_W,
+    height: FRAME_H,
+    transform: [{ translateX: translateX.value }],
+  }));
+
+  return (
+    <View style={styles.chestFrameContainer}>
+      <Reanimated.Image
+        source={chestSprite}
+        style={spriteStyle}
+        resizeMode="cover"
+      />
+    </View>
+  );
+}
+
+// ── ResultScreen ──────────────────────────────────────────────────────
 
 export default function ResultScreen() {
   const navigation = useNavigation<Nav>();
@@ -45,15 +116,16 @@ export default function ResultScreen() {
     clanTodayXp,
     chestDrop,
     locationLocked,
+    lockedUntil,
     locationId,
     locationName,
     minigameId,
     xpAwarded,
     sessionId,
     practiceMode,
-    bonusXpTriggered,
-    linkedLocation,
   } = route.params;
+
+  const lockTimer = useLocationLockTimer(locationLocked ? lockedUntil : undefined);
 
   const clans = useClanStore((s) => s.clans);
   const lockLocation = useMapStore((s) => s.lockLocation);
@@ -69,6 +141,22 @@ export default function ResultScreen() {
   const [showContinueBtn, setShowContinueBtn] = useState(false);
   const [navigating, setNavigating] = useState(false);
 
+  // ISSUE 7 — Ref-guarded setTimeout for continue button
+  const continueTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    return () => {
+      if (continueTimerRef.current) clearTimeout(continueTimerRef.current);
+    };
+  }, []);
+
+  // ISSUE 6 — Memoized rarity badge style
+  const rarityBadgeStyle = useMemo<ViewStyle>(() => ({
+    ...styles.revealRarityBadge,
+    backgroundColor: chestDrop?.asset
+      ? RARITY_COLORS[chestDrop.asset.rarity]
+      : PALETTE.warmBrown,
+  }), [chestDrop]);
+
   // Mark XP earned or lock location on lose, then refresh map locations
   // Skip all side effects in practice mode
   useEffect(() => {
@@ -82,15 +170,15 @@ export default function ResultScreen() {
         patchLastScanResult({ xpAvailable: false });
       }
 
-      if (minigameId && lastScanResult?.availableMinigames) {
+      if (minigameId && lastScanResult && 'availableMinigames' in lastScanResult && lastScanResult.availableMinigames) {
         const patched = lastScanResult.availableMinigames.map((m) =>
           m.minigameId === minigameId ? { ...m, completed: true } : m,
         );
         patchLastScanResult({ availableMinigames: patched, xpAvailable: false });
       }
     }
-    if (!isWin && locationLocked && locationId) {
-      lockLocation(locationId);
+    if (!isWin && locationLocked && locationId && lockedUntil) {
+      lockLocation(locationId, lockedUntil);
       loadTodayLocations();
       patchLastScanResult({ xpAvailable: false });
     }
@@ -102,14 +190,10 @@ export default function ResultScreen() {
   const scaleAnim = useRef(new Animated.Value(0)).current;
 
   // Phase 1: chest slide up
-  const chestSlideAnim = useRef(new Animated.Value(200)).current; // start off-screen below
+  const chestSlideAnim = useRef(new Animated.Value(200)).current;
   const chestOpacityAnim = useRef(new Animated.Value(0)).current;
 
-  // Phase 2: chest open (scale up then vanish)
-  const chestOpenScale = useRef(new Animated.Value(1)).current;
-  const chestOpenOpacity = useRef(new Animated.Value(1)).current;
-
-  // Phase 2: item reveal
+  // Phase 3: item reveal
   const itemScale = useRef(new Animated.Value(0.5)).current;
   const itemOpacity = useRef(new Animated.Value(0)).current;
 
@@ -123,7 +207,6 @@ export default function ResultScreen() {
         useNativeDriver: true,
       }).start(() => {
         if (hasChest) {
-          // After XP animation completes, show chest
           setChestPhase('chest');
           Animated.parallel([
             Animated.spring(chestSlideAnim, {
@@ -143,55 +226,36 @@ export default function ResultScreen() {
     }
   }, [isWin]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Phase 2: open chest → reveal item
+  // Tap "Open Chest" → start spritesheet animation
   const handleOpenChest = useCallback(() => {
-    setChestPhase('reveal');
+    setChestPhase('opening');
+  }, []);
 
-    // Chest: scale up to 1.3 then shrink to 0
-    Animated.sequence([
-      Animated.timing(chestOpenScale, {
-        toValue: 1.3,
-        duration: 250,
+  // Spritesheet complete → reveal item
+  const handleChestComplete = useCallback(() => {
+    setChestPhase('reveal');
+    Animated.parallel([
+      Animated.timing(itemOpacity, {
+        toValue: 1,
+        duration: 400,
         useNativeDriver: true,
       }),
-      Animated.parallel([
-        Animated.timing(chestOpenScale, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-        Animated.timing(chestOpenOpacity, {
-          toValue: 0,
-          duration: 200,
-          useNativeDriver: true,
-        }),
-      ]),
+      Animated.spring(itemScale, {
+        toValue: 1,
+        friction: 5,
+        tension: 60,
+        useNativeDriver: true,
+      }),
     ]).start(() => {
-      // Item: fade + spring scale in
-      Animated.parallel([
-        Animated.timing(itemOpacity, {
-          toValue: 1,
-          duration: 400,
-          useNativeDriver: true,
-        }),
-        Animated.spring(itemScale, {
-          toValue: 1,
-          friction: 5,
-          tension: 60,
-          useNativeDriver: true,
-        }),
-      ]).start(() => {
-        // Show Continue button after 800ms delay
-        setTimeout(() => setShowContinueBtn(true), 800);
-      });
+      continueTimerRef.current = setTimeout(() => setShowContinueBtn(true), 800);
     });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleBackToMap = () => {
     if (navigating) return;
     setNavigating(true);
-    if (sessionId && locationName) {
-      navigation.replace('SpaceSentiment', { sessionId, locationName });
+    if (sessionId && locationName && locationId) {
+      navigation.replace('SpaceSentiment', { sessionId, locationId, locationName });
     } else {
       navigation.popToTop();
     }
@@ -207,13 +271,25 @@ export default function ResultScreen() {
     }
   };
 
+  // ISSUE 8 — Navigate to asset inventory to decorate
+  const handleDecorateSpace = () => {
+    if (navigating) return;
+    setNavigating(true);
+    navigation.replace('AssetInventory', { fromSpaceId: undefined });
+  };
+
   const sortedClans = [...clans].sort((a, b) => b.todayXp - a.todayXp);
 
   // When in chest reveal flow, hide the normal buttons until Continue appears
   const showNormalButtons = !hasChest || chestPhase === 'none';
 
+  // ISSUE 5 — Look up asset def for image
+  const assetDef = chestDrop?.asset
+    ? ASSET_MAP[chestDrop.asset.assetId]
+    : undefined;
+
   return (
-    <View style={[styles.container, isWin ? styles.bgWin : styles.bgLose]}>
+    <ImageBackground source={plainBg} style={styles.container} resizeMode="cover">
       <View style={styles.content}>
         {isWin ? (
           <>
@@ -240,14 +316,6 @@ export default function ResultScreen() {
                 <Text style={styles.playerXpText}>
                   Your XP: {newTodayXp ?? 0}/100
                 </Text>
-                {bonusXpTriggered && (
-                  <View style={styles.bonusXpBadge}>
-                    <Text style={styles.bonusXpText}>
-                      {/* Server returns firstVisitBonus or bonusXP — both use bonusXpTriggered */}
-                      First Visit Bonus! ⭐
-                    </Text>
-                  </View>
-                )}
               </>
             ) : (
               <>
@@ -255,42 +323,47 @@ export default function ResultScreen() {
                 <Text style={styles.practiceWinSubtitle}>
                   No XP earned — you've already harvested this grove today.
                 </Text>
+                {/* ISSUE 9 — Sync notice for API failure / offline */}
+                <Text style={styles.syncNotice}>
+                  XP will sync when you're back online
+                </Text>
               </>
             )}
 
             {/* ── Chest reveal sequence ── */}
             {hasChest && chestPhase !== 'none' && chestDrop?.asset && (
               <View style={styles.chestRevealArea}>
-                {/* Phase 1 & 2: Chest placeholder (visible until opened) */}
-                {chestPhase === 'chest' || chestPhase === 'reveal' ? (
+                {/* Phase 1: Static chest + "Open" button */}
+                {chestPhase === 'chest' && (
                   <Animated.View
                     style={[
                       styles.chestAnimWrapper,
                       {
-                        opacity: chestPhase === 'reveal' ? chestOpenOpacity : chestOpacityAnim,
-                        transform: [
-                          { translateY: chestPhase === 'reveal' ? 0 : chestSlideAnim },
-                          { scale: chestPhase === 'reveal' ? chestOpenScale : 1 },
-                        ],
+                        opacity: chestOpacityAnim,
+                        transform: [{ translateY: chestSlideAnim }],
                       },
                     ]}
                   >
-                    {/* Chest placeholder — swap for <Image source={require('...')} /> when chest art is ready */}
-                    <View style={styles.chestPlaceholder}>
-                      <Text style={styles.chestPlaceholderEmoji}>🎁</Text>
+                    <View style={styles.chestFrameContainer}>
+                      <Image
+                        source={chestSprite}
+                        style={styles.chestSpriteStatic}
+                        resizeMode="cover"
+                      />
                     </View>
-                    {chestPhase === 'chest' && (
-                      <>
-                        <Text style={styles.chestAppearedText}>A chest appeared!</Text>
-                        <TouchableOpacity style={styles.openChestBtn} onPress={handleOpenChest}>
-                          <Text style={styles.openChestBtnText}>Open Chest</Text>
-                        </TouchableOpacity>
-                      </>
-                    )}
+                    <Text style={styles.chestAppearedText}>A chest appeared!</Text>
+                    <TouchableOpacity style={styles.openChestBtn} onPress={handleOpenChest}>
+                      <Text style={styles.openChestBtnText}>Open Chest</Text>
+                    </TouchableOpacity>
                   </Animated.View>
-                ) : null}
+                )}
 
-                {/* Phase 2: Item reveal (rendered on top after chest shrinks) */}
+                {/* Phase 2: Spritesheet animation */}
+                {chestPhase === 'opening' && (
+                  <ChestOpenAnimation onComplete={handleChestComplete} />
+                )}
+
+                {/* Phase 3: Item reveal */}
                 {chestPhase === 'reveal' && (
                   <Animated.View
                     style={[
@@ -301,26 +374,23 @@ export default function ResultScreen() {
                       },
                     ]}
                   >
-                    {/* Item placeholder — swap for <Image source={{ uri: assetImageUrl }} /> when CDN is ready */}
-                    <View
-                      style={[
-                        styles.itemPlaceholder,
-                        { backgroundColor: RARITY_COLORS[chestDrop.asset.rarity] + '50' },
-                      ]}
-                    >
-                      <Text style={styles.itemPlaceholderLetter}>
-                        {chestDrop.asset.category.charAt(0).toUpperCase()}
-                      </Text>
-                    </View>
+                    {assetDef ? (
+                      <Image
+                        source={assetDef.image}
+                        style={styles.assetRevealImage}
+                        resizeMode="contain"
+                      />
+                    ) : (
+                      <View style={styles.itemPlaceholder}>
+                        <Text style={styles.itemPlaceholderLetter}>
+                          {chestDrop.asset.category.charAt(0).toUpperCase()}
+                        </Text>
+                      </View>
+                    )}
 
                     <Text style={styles.revealAssetName}>{chestDrop.asset.name}</Text>
 
-                    <View
-                      style={[
-                        styles.revealRarityBadge,
-                        { backgroundColor: RARITY_COLORS[chestDrop.asset.rarity] },
-                      ]}
-                    >
+                    <View style={rarityBadgeStyle}>
                       <Text style={styles.revealRarityText}>
                         {RARITY_LABELS[chestDrop.asset.rarity]}
                       </Text>
@@ -351,9 +421,18 @@ export default function ResultScreen() {
           <>
             <Text style={styles.loseTitle}>Not this time...</Text>
             {locationLocked && (
-              <Text style={styles.lockText}>
-                This location is locked for today. Try a different spot!
-              </Text>
+              <View style={styles.lockNotice}>
+                {lockTimer.isLocked ? (
+                  <>
+                    <Text style={styles.lockHeader}>This grove is sealed for now.</Text>
+                    <Text style={styles.lockCountdown}>
+                      Reopens in {lockTimer.formattedTime}
+                    </Text>
+                  </>
+                ) : (
+                  <Text style={styles.lockHeader}>This grove is now open again.</Text>
+                )}
+              </View>
             )}
           </>
         )}
@@ -361,44 +440,27 @@ export default function ResultScreen() {
         {/* Mini clan scoreboard — hidden in practice mode */}
         {!practiceMode && (
           <View style={styles.miniScoreboard}>
-            {sortedClans.slice(0, 4).map((clan) => (
-              <View key={clan.clanId} style={styles.miniClanRow}>
-                <View
-                  style={[
-                    styles.miniClanDot,
-                    { backgroundColor: CLAN_COLORS[clan.clanId] },
-                  ]}
-                />
-                <Text style={styles.miniClanName}>
-                  {clan.clanId.charAt(0).toUpperCase() + clan.clanId.slice(1)}
-                </Text>
-                <Text style={styles.miniClanXp}>{clan.todayXp}</Text>
-              </View>
-            ))}
+            {sortedClans.length === 0 ? (
+              <Text style={styles.scoreboardLoading}>Loading scores...</Text>
+            ) : (
+              sortedClans.slice(0, 4).map((clan) => (
+                <View key={clan.clanId} style={styles.miniClanRow}>
+                  <View
+                    style={[
+                      styles.miniClanDot,
+                      { backgroundColor: CLAN_COLORS[clan.clanId] },
+                    ]}
+                  />
+                  <Text style={styles.miniClanName}>
+                    {clan.clanId.charAt(0).toUpperCase() + clan.clanId.slice(1)}
+                  </Text>
+                  <Text style={styles.miniClanXp}>{clan.todayXp}</Text>
+                </View>
+              ))
+            )}
           </View>
         )}
       </View>
-
-      {/* Linked location nudge — only on win */}
-      {isWin && !practiceMode && linkedLocation && (
-        <View style={styles.linkedCard}>
-          <Text style={styles.linkedText}>
-            Bonus challenge nearby! → {linkedLocation.name}
-          </Text>
-          <TouchableOpacity
-            style={styles.linkedBtn}
-            onPress={() => {
-              if (navigating) return;
-              setNavigating(true);
-              // TODO: MainMapScreen does not yet support highlighting a pin via selectedLocationId param.
-              // For now, just navigate to the map.
-              navigation.popToTop();
-            }}
-          >
-            <Text style={styles.linkedBtnText}>Show on map</Text>
-          </TouchableOpacity>
-        </View>
-      )}
 
       <View style={styles.buttonRow}>
         {practiceMode ? (
@@ -415,6 +477,10 @@ export default function ResultScreen() {
                 <Text style={styles.secondaryBtnText}>Play Again Here</Text>
               </TouchableOpacity>
             )}
+            {/* ISSUE 8 — Decorate button after chest drop */}
+            <TouchableOpacity onPress={handleDecorateSpace}>
+              <Text style={styles.decorateLinkText}>Decorate a Space</Text>
+            </TouchableOpacity>
           </>
         ) : showNormalButtons ? (
           <>
@@ -444,7 +510,7 @@ export default function ResultScreen() {
           </>
         ) : null}
       </View>
-    </View>
+    </ImageBackground>
   );
 }
 
@@ -453,12 +519,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     paddingTop: 40,
-  },
-  bgWin: {
-    backgroundColor: PALETTE.parchmentBg,
-  },
-  bgLose: {
-    backgroundColor: '#E8DCC8',
   },
   content: {
     flex: 1,
@@ -496,18 +556,39 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginBottom: 20,
   },
+  syncNotice: {
+    fontSize: 11,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
   loseTitle: {
     fontSize: 28,
     fontFamily: FONTS.headerBold,
     color: PALETTE.warmBrown,
     marginBottom: 12,
   },
-  lockText: {
-    fontSize: 15,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.darkBrown,
-    textAlign: 'center',
+  lockNotice: {
+    alignItems: 'center',
+    backgroundColor: PALETTE.warmBrownFaint,
+    borderRadius: 10,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
     marginBottom: 20,
+  },
+  lockHeader: {
+    fontSize: 15,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.warmBrown,
+    textAlign: 'center',
+  },
+  lockCountdown: {
+    fontSize: 22,
+    fontFamily: FONTS.bodyBold,
+    color: PALETTE.amberStrong,
+    textAlign: 'center',
+    marginTop: 6,
   },
   noChest: {
     fontSize: 13,
@@ -527,17 +608,14 @@ const styles = StyleSheet.create({
   chestAnimWrapper: {
     alignItems: 'center',
   },
-  // Chest placeholder — swap for <Image> when chest art is ready
-  chestPlaceholder: {
-    width: 120,
-    height: 120,
-    backgroundColor: PALETTE.warmBrown,
-    borderRadius: 16,
-    alignItems: 'center',
-    justifyContent: 'center',
+  chestFrameContainer: {
+    width: FRAME_W,
+    height: FRAME_H,
+    overflow: 'hidden',
   },
-  chestPlaceholderEmoji: {
-    fontSize: 48,
+  chestSpriteStatic: {
+    width: SPRITE_TOTAL_W,
+    height: FRAME_H,
   },
   chestAppearedText: {
     fontSize: 15,
@@ -561,10 +639,13 @@ const styles = StyleSheet.create({
   // ── Item reveal ──
 
   itemRevealWrapper: {
-    position: 'absolute',
     alignItems: 'center',
   },
-  // Item placeholder — swap for <Image source={{ uri: assetImageUrl }} /> when CDN is ready
+  assetRevealImage: {
+    width: 64,
+    height: 64,
+    marginBottom: 12,
+  },
   itemPlaceholder: {
     width: 100,
     height: 100,
@@ -572,6 +653,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 12,
+    backgroundColor: PALETTE.warmBrownMild,
   },
   itemPlaceholderLetter: {
     fontSize: 36,
@@ -634,6 +716,12 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodyBold,
     color: PALETTE.stoneGrey,
   },
+  scoreboardLoading: {
+    fontSize: 12,
+    fontFamily: FONTS.bodyRegular,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
+  },
 
   // ── Buttons ──
 
@@ -682,47 +770,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
   },
-
-  // ── Bonus XP badge ──
-  bonusXpBadge: {
-    backgroundColor: PALETTE.honeyGold,
-    paddingHorizontal: 14,
-    paddingVertical: 5,
-    borderRadius: 10,
-    marginBottom: 16,
-  },
-  bonusXpText: {
-    fontSize: 13,
-    fontFamily: FONTS.bodyBold,
-    color: PALETTE.cream,
-  },
-
-  // ── Linked location nudge ──
-  linkedCard: {
-    backgroundColor: PALETTE.cream,
-    borderWidth: 1,
-    borderColor: PALETTE.warmBrown + '40',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  linkedText: {
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-    color: PALETTE.darkBrown,
-    textAlign: 'center',
-    marginBottom: 10,
-  },
-  linkedBtn: {
-    backgroundColor: PALETTE.warmBrown,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  linkedBtnText: {
+  decorateLinkText: {
     fontSize: 13,
     fontFamily: FONTS.bodySemiBold,
-    color: PALETTE.cream,
+    color: PALETTE.stoneGrey,
+    paddingVertical: 4,
   },
 });

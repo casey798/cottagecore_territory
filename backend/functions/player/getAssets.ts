@@ -29,13 +29,14 @@ export const handler = async (
           userAssetId: playerAsset.userAssetId,
           assetId: playerAsset.assetId,
           name: catalog?.name ?? 'Unknown',
-          category: catalog?.category ?? 'unknown',
-          rarity: catalog?.rarity ?? 'unknown',
+          category: catalog?.category ?? 'special',
+          rarity: catalog?.rarity ?? 'common',
           imageKey: catalog?.imageKey ?? '',
           obtainedAt: playerAsset.obtainedAt,
           obtainedFrom: playerAsset.obtainedFrom,
           placed: playerAsset.placed,
           expiresAt: playerAsset.expiresAt,
+          permanent: playerAsset.permanent ?? false,
         };
       })
     );

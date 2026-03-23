@@ -87,6 +87,7 @@ export async function handler(
         lastActiveDate: '',
         tutorialDone: false,
         fcmToken: '',
+        playerCode: '',
         createdAt: now,
       };
 

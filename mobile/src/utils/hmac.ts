@@ -14,8 +14,8 @@ export function generateCompletionHash(
 export function generateClientCompletionHash(
   sessionId: string,
   result: string,
-  timeTaken: number,
+  saltOrTimeTaken: string | number,
 ): string {
-  const data = `${sessionId}:${result}:${timeTaken}`;
+  const data = `${sessionId}:${result}:${saltOrTimeTaken}`;
   return CryptoJS.HmacSHA256(data, COMPLETION_SALT).toString(CryptoJS.enc.Hex);
 }

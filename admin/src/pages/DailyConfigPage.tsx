@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getLocations, getMasterLocations, suggestDailyPool, deployAssignments, getSeasonSchedule, saveSeasonSchedule, runClustering, getClusteringRun } from '@/api/locations';
 import { getMapConfig } from '@/api/map';
-import { getDailyConfig, setDailyConfig, sendTestNotification, triggerScheduledJob, getUserByEmail, resetPlayerState, getPlayerAssignment } from '@/api/daily';
+import { getDailyConfig, setDailyConfig, setQuietMode as apiSetQuietMode, sendTestNotification, triggerScheduledJob, getUserByEmail, resetPlayerState, getPlayerAssignment } from '@/api/daily';
 import type { PlayerAssignmentDebug } from '@/api/daily';
 import { useAuthStore } from '@/store/useAuthStore';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
@@ -460,6 +460,18 @@ export function DailyConfigPage() {
   // Resolve quietMode for rendering — undefined means still loading
   const quietModeResolved = quietMode ?? false;
 
+  // Auto-save quiet mode toggle
+  const quietModeMut = useMutation({
+    mutationFn: (newValue: boolean) => apiSetQuietMode(today, newValue),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['daily-config', today] });
+    },
+    onError: () => {
+      // Revert toggle on failure
+      setQuietMode((v) => !(v ?? false));
+    },
+  });
+
   // FIX 3: Close deploy dialog if save starts
   useEffect(() => {
     if (anySavePending && deployConfirmOpen) {
@@ -539,7 +551,7 @@ export function DailyConfigPage() {
       {isLoading && <LoadingSpinner />}
       {error && <ErrorAlert message={(error as Error).message} />}
 
-      {/* FIX 11: Only render quiet mode toggle after config query resolves */}
+      {/* Quiet mode toggle — auto-saves on click */}
       {quietMode !== undefined && (
         <div className={`mb-4 rounded-lg border bg-white p-4 ${quietModeResolved ? 'border-[#C0392B]/40 bg-[#C0392B]/5' : 'border-[#8B6914]/20'}`}>
           <div className="flex items-center justify-between">
@@ -551,24 +563,44 @@ export function DailyConfigPage() {
                 Suspends all competitive gameplay server-side.
               </p>
             </div>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={quietModeResolved}
-              onClick={() => setQuietMode((v) => !(v ?? false))}
-              className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ${
-                quietModeResolved ? 'bg-[#C0392B]' : 'bg-[#A0937D]/40'
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
-                  quietModeResolved ? 'translate-x-5' : 'translate-x-0'
+            <div className="flex items-center gap-2">
+              {quietModeMut.isPending && (
+                <span className="text-xs text-[#8B6914]">Saving…</span>
+              )}
+              <button
+                type="button"
+                role="switch"
+                aria-checked={quietModeResolved}
+                disabled={quietModeMut.isPending}
+                onClick={() => {
+                  const newValue = !(quietMode ?? false);
+                  setQuietMode(newValue);
+                  quietModeMut.mutate(newValue);
+                }}
+                className={`relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 disabled:opacity-50 ${
+                  quietModeResolved ? 'bg-[#C0392B]' : 'bg-[#A0937D]/40'
                 }`}
-              />
-            </button>
+              >
+                <span
+                  className={`pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ${
+                    quietModeResolved ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
           </div>
+          {quietModeMut.isError && (
+            <div className="mt-2 rounded border border-red-300 bg-red-50 px-3 py-1.5 text-sm text-red-800">
+              Failed to save — try again
+            </div>
+          )}
+          <p className={`mt-2 text-sm ${quietModeResolved ? 'text-[#C0392B]' : 'text-[#3D2B1F]/60'}`}>
+            {quietModeResolved
+              ? 'Quiet mode ON — players cannot scan or play'
+              : 'Quiet mode OFF — game is active'}
+          </p>
           {quietModeResolved && (
-            <div className="mt-3 rounded border border-[#C0392B]/30 bg-[#C0392B]/10 px-3 py-2 text-sm text-[#C0392B]">
+            <div className="mt-2 rounded border border-[#C0392B]/30 bg-[#C0392B]/10 px-3 py-2 text-sm text-[#C0392B]">
               Quiet mode will block all new QR scans and award no XP. Any sessions currently in progress will be cancelled with no XP on completion. Daily reset will be skipped.
             </div>
           )}

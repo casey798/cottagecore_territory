@@ -1,14 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Dimensions,
-  ScrollView,
+  ImageBackground,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
+import Orientation from 'react-native-orientation-locker';
+import { CLAN_COLORS, KEYBOARD, PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { CIPHER_STONES_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import type { ClanId } from '@/types';
@@ -17,32 +19,31 @@ import type { CipherPuzzle } from '../cipher-stones/CipherStonesLogic';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import { CoopDivider } from '@/components/minigames/CoopDivider';
 
-// ── Keyboard split ────────────────────────────────────────────────
-export const P1_KEYS = ['A','B','C','D','E','F','G','H','I','J','K','L','M'] as const;
-export const P2_KEYS = ['N','O','P','Q','R','S','T','U','V','W','X','Y','Z'] as const;
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
+
+// ── Keyboard split: vowels vs consonants ─────────────────────────
+export const VOWEL_KEYS = ['A', 'E', 'I', 'O', 'U'] as const;
+export const CONSONANT_KEYS = ['B','C','D','F','G','H','J','K','L','M','N','P','Q','R','S','T','V','W','X','Y','Z'] as const;
 
 const P1_ROWS: string[][] = [
-  ['A', 'B', 'C', 'D', 'E', 'F', 'G'],
-  ['H', 'I', 'J', 'K', 'L', 'M', 'DEL'],
+  ['A', 'E', 'I'],
+  ['O', 'U', 'DEL'],
 ];
 const P2_ROWS: string[][] = [
-  ['N', 'O', 'P', 'Q', 'R', 'S', 'T'],
-  ['U', 'V', 'W', 'X', 'Y', 'Z', 'DEL'],
+  ['B', 'C', 'D', 'F', 'G', 'H', 'J'],
+  ['K', 'L', 'M', 'N', 'P', 'Q', 'R'],
+  ['S', 'T', 'V', 'W', 'X', 'Y', 'Z', 'DEL'],
 ];
 
-// ── Keyboard styling constants (mirrored from CipherStonesGame) ──
-const KEY_DEFAULT_BG = '#D3D6DA';
-const KEY_DEFAULT_TEXT = '#1A1A1B';
-const KEY_DEL_BG = '#3A3A3C';
-const KEY_DEL_TEXT = '#FFFFFF';
+// ── Keyboard styling constants ───────────────────────────────────
 const KEY_H_GAP = 4;
 const KEY_V_GAP = 6;
 const KEY_HEIGHT = 48;
 const KB_H_PAD = 12;
 
-// ── Tile constants (mirrored from CipherStonesGame) ──────────────
+// ── Tile constants ───────────────────────────────────────────────
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
-const TILE_SIZE = Math.floor((SCREEN_WIDTH - 48) / 14);
+const TILE_SIZE = Math.floor((SCREEN_WIDTH - 32) / 16);
 const TILE_GAP = 3;
 
 const QUOTE_REVEAL_DURATION_MS = 2500;
@@ -67,7 +68,7 @@ function withAlpha(hex: string, alpha: number): string {
  * (or the same object reference if nothing changed).
  * Exported for unit testing.
  */
-export function applyKeyToMappings(
+function applyKeyToMappings(
   mappings: Record<string, string>,
   selectedEncoded: string | null,
   key: string,
@@ -95,7 +96,7 @@ export function applyKeyToMappings(
  * Check if every encoded letter that appears in the quote has a mapping.
  * Exported for unit testing.
  */
-export function allQuoteLettersMapped(
+function allQuoteLettersMapped(
   quoteEncodedSet: ReadonlySet<string>,
   mappings: Record<string, string>,
 ): boolean {
@@ -152,12 +153,21 @@ const CoopTile = React.memo(function CoopTile({
 // ── Main component ────────────────────────────────────────────────
 
 export default function CipherStonesCoopGame(props: MinigamePlayProps) {
-  const { sessionId, timeLimit, onComplete, puzzleData } = props;
+  const { sessionId, timeLimit, onComplete, puzzleData, practiceMode } = props;
+  const gameDuration = timeLimit > 0 ? timeLimit : CIPHER_STONES_TIME_LIMIT;
 
   const p1Name = (puzzleData?.p1Name as string | undefined) ?? 'Player 1';
   const p1Clan = (puzzleData?.p1Clan as string | undefined) ?? 'ember';
   const p2Name = (puzzleData?.p2Name as string | undefined) ?? 'Player 2';
   const p2Clan = (puzzleData?.p2Clan as string | undefined) ?? 'tide';
+
+  // ── Portrait lock ──────────────────────────────────────────────
+  useEffect(() => {
+    Orientation.lockToPortrait();
+    return () => {
+      Orientation.unlockAllOrientations();
+    };
+  }, []);
 
   // ── Puzzle (once on mount) ──────────────────────────────────────
   const puzzleRef = useRef<CipherPuzzle | null>(null);
@@ -224,7 +234,7 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
     () => ({ ...puzzle.revealedLetters }),
   );
   const [selectedEncoded, setSelectedEncoded] = useState<string | null>(null);
-  const [timeLeft, setTimeLeft] = useState(timeLimit);
+  const [timeLeft, setTimeLeft] = useState(gameDuration);
   const [gameOver, setGameOver] = useState(false);
   const [showQuoteReveal, setShowQuoteReveal] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(false);
@@ -239,14 +249,14 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
   useEffect(() => { userMappingsRef.current = userMappings; }, [userMappings]);
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
 
-  const progress = getProgress(puzzle.solution, userMappings);
+  const progress = getProgress(puzzle.solution, userMappings, quoteEncodedSet);
 
   // ── Timer ───────────────────────────────────────────────────────
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
-      const remaining = Math.max(0, timeLimit - elapsed);
+      const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
 
       if (remaining <= 0) {
@@ -260,16 +270,16 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
             result: 'lose',
             timeTaken,
             completionHash,
-            solutionData: { mappings: userMappingsRef.current, completed: false },
+            solutionData: { mappings: userMappingsRef.current, solved: false },
           };
           setShowQuoteReveal(true);
         }
       }
     }, 100);
     return () => clearInterval(interval);
-  }, [gameOver, timeLimit, sessionId]);
+  }, [gameOver, gameDuration, sessionId]);
 
-  // Quote reveal → auto-complete after 2.5s
+  // Quote reveal -> auto-complete after 2.5s
   useEffect(() => {
     if (!showQuoteReveal) return;
     const timer = setTimeout(() => {
@@ -345,7 +355,7 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
                 result: 'win',
                 timeTaken,
                 completionHash,
-                solutionData: { mappings: newMappings, completed: true },
+                solutionData: { mappings: newMappings, solved: true },
               };
               setShowQuoteReveal(true);
             }
@@ -366,10 +376,12 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
   );
 
   // ── Key width computation ───────────────────────────────────────
-  const keyWidth = (SCREEN_WIDTH - KB_H_PAD * 2 - KEY_H_GAP * 6) / 7;
+  // P1 has 3 keys per row, P2 has up to 8 keys per row
+  const p1KeyWidth = (SCREEN_WIDTH - KB_H_PAD * 2 - KEY_H_GAP * 2) / 3;
+  const p2KeyWidth = (SCREEN_WIDTH - KB_H_PAD * 2 - KEY_H_GAP * 7) / 8;
 
   // ── Render keyboard zone ────────────────────────────────────────
-  const renderKeyboard = (rows: string[][]) => (
+  const renderKeyboard = (rows: string[][], keyWidth: number) => (
     <View style={styles.keyboard}>
       {rows.map((row, ri) => (
         <View key={ri} style={styles.keyboardRow}>
@@ -397,14 +409,24 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
     </View>
   );
 
+  // ── Progress bar JSX ────────────────────────────────────────────
+  const progressBar = (
+    <View style={styles.progressSection}>
+      <View style={styles.progressBarContainer}>
+        <View
+          style={[
+            styles.progressBarFill,
+            { width: progress.total > 0 ? `${(progress.decoded / progress.total) * 100}%` : '0%' },
+          ]}
+        />
+      </View>
+      <Text style={styles.progressText}>{progress.decoded}/{progress.total}</Text>
+    </View>
+  );
+
   // ── Cipher tiles (rendered inside CoopDivider children) ─────────
   const cipherTiles = (
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.cipherScrollContent}
-      style={styles.cipherScroll}
-    >
+    <View style={styles.cipherWrap}>
       {words.map((word, wi) => {
         if (word.length === 1 && word[0] === ' ') {
           return <View key={`sp-${wi}`} style={styles.wordSpace} />;
@@ -433,26 +455,16 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
           </View>
         );
       })}
-    </ScrollView>
+    </View>
   );
 
   return (
-    <View style={styles.root}>
-      {/* P1 Zone — top */}
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* P1 Zone — top (Vowels) */}
       <View style={[styles.playerZone, { backgroundColor: withAlpha(clanColor(p1Clan), 0.1) }]}>
-        {renderKeyboard(P1_ROWS)}
-        {/* Progress bar */}
-        <View style={styles.progressSection}>
-          <View style={styles.progressBarContainer}>
-            <View
-              style={[
-                styles.progressBarFill,
-                { width: progress.total > 0 ? `${(progress.decoded / progress.total) * 100}%` : '0%' },
-              ]}
-            />
-          </View>
-          <Text style={styles.progressText}>{progress.decoded}/{progress.total}</Text>
-        </View>
+        <Text style={styles.zoneLabel}>Vowels</Text>
+        {renderKeyboard(P1_ROWS, p1KeyWidth)}
+        {progressBar}
       </View>
 
       {/* CoopDivider with cipher tiles */}
@@ -462,14 +474,16 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
         p2Name={p2Name}
         p2Clan={p2Clan}
         timeLeft={timeLeft}
-        totalTime={timeLimit}
+        totalTime={gameDuration}
       >
         {cipherTiles}
       </CoopDivider>
 
-      {/* P2 Zone — bottom */}
+      {/* P2 Zone — bottom (Consonants) */}
       <View style={[styles.playerZone, { backgroundColor: withAlpha(clanColor(p2Clan), 0.1) }]}>
-        {renderKeyboard(P2_ROWS)}
+        <Text style={styles.zoneLabel}>Consonants</Text>
+        {renderKeyboard(P2_ROWS, p2KeyWidth)}
+        {progressBar}
       </View>
 
       {/* Quote reveal overlay */}
@@ -484,9 +498,14 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
 
       {/* Game complete overlay */}
       {overlayVisible && (
-        <GameCompleteOverlay result={overlayResult} onContinue={handleContinue} />
+        <GameCompleteOverlay
+          result={overlayResult}
+          onContinue={handleContinue}
+          practiceMode={practiceMode}
+          revealQuote={decodedQuote}
+        />
       )}
-    </View>
+    </ImageBackground>
   );
 }
 
@@ -495,7 +514,6 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: UI.background,
   },
 
   // Player zones
@@ -503,6 +521,13 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     paddingVertical: 4,
+  },
+  zoneLabel: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 11,
+    color: PALETTE.stoneGrey,
+    textAlign: 'center',
+    paddingVertical: 2,
   },
 
   // Keyboard
@@ -522,33 +547,30 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: KEY_DEFAULT_BG,
+    backgroundColor: KEYBOARD.defaultBg,
   },
   keyText: {
-    fontFamily: FONTS.bodyBold,
     fontSize: 13,
-    color: KEY_DEFAULT_TEXT,
+    color: KEYBOARD.textDark,
   },
   keyDel: {
-    backgroundColor: KEY_DEL_BG,
+    backgroundColor: KEYBOARD.absentGray,
   },
   keyTextDel: {
-    fontFamily: FONTS.bodyBold,
     fontSize: 13,
-    color: KEY_DEL_TEXT,
+    color: KEYBOARD.textLight,
   },
 
-  // Cipher scroll (inside CoopDivider children)
-  cipherScroll: {
-    maxHeight: 60,
-  },
-  cipherScrollContent: {
+  // Cipher tiles (vertical wrap layout)
+  cipherWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'center',
     alignItems: 'center',
     paddingHorizontal: 8,
-    gap: 2,
   },
 
-  // Tiles (mirrored from CipherStonesGame)
+  // Tiles
   tile: {
     width: TILE_SIZE,
     height: TILE_SIZE + 12,
@@ -571,12 +593,10 @@ const styles = StyleSheet.create({
     borderColor: PALETTE.softGreen,
   },
   tileEncodedText: {
-    fontFamily: FONTS.bodySemiBold,
     fontSize: 10,
     color: PALETTE.stoneGrey,
   },
   tileDecodedText: {
-    fontFamily: FONTS.bodyBold,
     fontSize: 16,
     color: PALETTE.darkBrown,
     minHeight: 20,
@@ -588,9 +608,11 @@ const styles = StyleSheet.create({
   // Word layout
   word: {
     flexDirection: 'row',
+    marginBottom: 2,
   },
   wordSpace: {
     width: TILE_SIZE * 0.6,
+    marginBottom: 2,
   },
   punctuation: {
     fontFamily: FONTS.bodySemiBold,
@@ -630,7 +652,7 @@ const styles = StyleSheet.create({
   // Quote reveal overlay
   quoteRevealOverlay: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: UI.overlay,
     justifyContent: 'center',
     alignItems: 'center',
     padding: 24,

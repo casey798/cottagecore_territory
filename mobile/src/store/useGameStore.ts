@@ -43,6 +43,8 @@ interface GameState {
   clearCelebration: () => void;
   quietMode: boolean;
   setQuietMode: (v: boolean) => void;
+  notificationsMuted: boolean;
+  setNotificationsMuted: (v: boolean) => void;
   activeLocationSessionId: string | null;
   activeLocationSessionStart: string | null;
   setActiveLocationSession: (sessionId: string) => void;
@@ -70,6 +72,7 @@ export const useGameStore = create<GameState>()(
       pendingCelebrationSpace: null,
       lastSeenCelebrationDate: null,
       quietMode: false,
+      notificationsMuted: false,
       activeLocationSessionId: null,
       activeLocationSessionStart: null,
 
@@ -139,6 +142,8 @@ export const useGameStore = create<GameState>()(
 
       setQuietMode: (v: boolean) => set({ quietMode: v }),
 
+      setNotificationsMuted: (v: boolean) => set({ notificationsMuted: v }),
+
       setActiveLocationSession: (sessionId: string) =>
         set({
           activeLocationSessionId: sessionId,
@@ -183,6 +188,7 @@ export const useGameStore = create<GameState>()(
           pendingCelebrationSpace: null,
           lastSeenCelebrationDate: null,
           quietMode: false,
+          notificationsMuted: false,
           activeLocationSessionId: null,
           activeLocationSessionStart: null,
         });
@@ -202,10 +208,13 @@ export const useGameStore = create<GameState>()(
         pendingCelebrationClan: state.pendingCelebrationClan,
         pendingCelebrationSpace: state.pendingCelebrationSpace,
         lastSeenCelebrationDate: state.lastSeenCelebrationDate,
+        notificationsMuted: state.notificationsMuted,
       }),
       onRehydrateStorage: () => {
         return (state) => {
           if (!state) return;
+          // Always reset quietMode — it must come fresh from the server
+          state.quietMode = false;
           const today = getTodayISTString();
           // Wipe stale xpEarnedAtLocations from a previous day
           if (state.xpEarnedDate && state.xpEarnedDate !== today) {

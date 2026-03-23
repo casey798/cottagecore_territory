@@ -1,44 +1,51 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
   Dimensions,
+  ImageBackground,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from 'react-native';
+import Orientation from 'react-native-orientation-locker';
 import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { PIPS_TIME_LIMIT } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
+import { withAlpha } from '@/utils/colorUtils';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import { CoopDivider } from '@/components/minigames/CoopDivider';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import type { ClanId } from '@/types';
 import {
   applyTap,
+  createEmptyGrid,
   isSolved,
   generatePuzzle,
+  GRID_SIZE,
   type Grid,
 } from '../pips/PipsLogic';
 
-const GRID_SIZE = 5;
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const TILE_SIZE = (SCREEN_WIDTH - 64) / GRID_SIZE;
 const TILE_GAP = 4;
+
+const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
 const P1_ROWS = [0, 1] as const;
 const P2_ROWS = [3, 4] as const;
 const SHARED_ROW = 2;
 
+type PuzzleLoadState =
+  | { status: 'loading' }
+  | { status: 'ready'; puzzle: ReturnType<typeof generatePuzzle> }
+  | { status: 'error' };
+
 function clanColor(clan: string): string {
   return CLAN_COLORS[clan as ClanId] ?? PALETTE.stoneGrey;
-}
-
-function withAlpha(hex: string, alpha: number): string {
-  const a = Math.round(alpha * 255)
-    .toString(16)
-    .padStart(2, '0');
-  return hex + a;
 }
 
 function canP1Tap(row: number): boolean {
@@ -49,32 +56,36 @@ function canP2Tap(row: number): boolean {
   return row >= SHARED_ROW;
 }
 
+// Puzzle is generated client-side for Pips. puzzleData from server is not used for puzzle content.
 export default function PipsCoopGame(props: MinigamePlayProps) {
-  const { sessionId, timeLimit, onComplete, puzzleData } = props;
+  const { sessionId, onComplete, puzzleData, practiceMode, salt } = props;
 
   const p1Name = (puzzleData?.p1Name as string) ?? 'Player 1';
   const p1Clan = (puzzleData?.p1Clan as string) ?? 'ember';
   const p2Name = (puzzleData?.p2Name as string) ?? 'Player 2';
   const p2Clan = (puzzleData?.p2Clan as string) ?? 'tide';
+  const coopPartnerId = (puzzleData?.coopPartnerId as string) ?? undefined;
 
-  const puzzleRef = useRef(generatePuzzle());
-  const puzzle = puzzleRef.current;
-  const moveLimit = puzzle.moveLimit;
-
-  const [grid, setGrid] = useState<Grid>(() =>
-    puzzle.startGrid.map((r) => [...r]),
-  );
+  const [puzzleState, setPuzzleState] = useState<PuzzleLoadState>({ status: 'loading' });
+  const [grid, setGrid] = useState<Grid>(createEmptyGrid);
   const [movesUsed, setMovesUsed] = useState(0);
-  const [timeLeft, setTimeLeft] = useState(timeLimit);
+  const [timeLeft, setTimeLeft] = useState(PIPS_TIME_LIMIT);
   const [gameOver, setGameOver] = useState(false);
   const [showCompleteOverlay, setShowCompleteOverlay] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
   const [lastTapRow, setLastTapRow] = useState<number | null>(null);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
+  const [activeTurn, setActiveTurn] = useState<'p1' | 'p2'>('p1');
 
-  const startTimeRef = useRef(Date.now());
+  const startTimeRef = useRef(0);
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
   const tapsRef = useRef<Array<{ row: number; col: number; player: string }>>([]);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
+  const loseReasonRef = useRef<string | undefined>(undefined);
+
+  const moveLimit = puzzleState.status === 'ready' ? puzzleState.puzzle.moveLimit : 0;
 
   const scaleAnims = useRef<Animated.Value[][]>(
     Array.from({ length: GRID_SIZE }, () =>
@@ -82,21 +93,77 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
     ),
   ).current;
 
+  const spinAnim = useRef(new Animated.Value(0)).current;
+  const timerBarAnim = useRef(new Animated.Value(1)).current;
+
+  // Portrait lock
+  useEffect(() => {
+    Orientation.lockToPortrait();
+    return () => {
+      Orientation.unlockAllOrientations();
+    };
+  }, []);
+
+  // Spinner loop
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(spinAnim, {
+        toValue: 1,
+        duration: 1200,
+        useNativeDriver: true,
+      }),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [spinAnim]);
+
+  // Load puzzle
+  const loadPuzzle = useCallback(() => {
+    setPuzzleState({ status: 'loading' });
+    try {
+      const puzzle = generatePuzzle();
+      setPuzzleState({ status: 'ready', puzzle });
+      setGrid(puzzle.startGrid.map((r) => [...r]));
+      setMovesUsed(0);
+      setTimeLeft(PIPS_TIME_LIMIT);
+      setGameOver(false);
+      completedRef.current = false;
+      tapsRef.current = [];
+      timerBarAnim.setValue(1);
+      startTimeRef.current = Date.now();
+    } catch {
+      setPuzzleState({ status: 'error' });
+    }
+  }, [timerBarAnim]);
+
+  useEffect(() => {
+    loadPuzzle();
+  }, [loadPuzzle]);
+
   // Timer
   useEffect(() => {
-    if (gameOver) return;
+    if (puzzleState.status !== 'ready' || gameOver) return;
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
-      const remaining = Math.max(0, timeLimit - elapsed);
+      const remaining = Math.max(0, PIPS_TIME_LIMIT - elapsed);
       setTimeLeft(remaining);
+
+      Animated.timing(timerBarAnim, {
+        toValue: remaining / PIPS_TIME_LIMIT,
+        duration: 90,
+        useNativeDriver: false,
+      }).start();
+
       if (remaining <= 0) {
         clearInterval(interval);
+        loseReasonRef.current = "Time's up!";
         finishGame('lose');
       }
     }, 100);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gameOver, timeLimit]);
+  }, [puzzleState.status, gameOver]);
 
   // Clear last tap flash
   useEffect(() => {
@@ -105,6 +172,28 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
     return () => clearTimeout(timeout);
   }, [lastTapRow]);
 
+  // Win detection — driven by grid state changes (Fix 2)
+  useEffect(() => {
+    if (gameOver || puzzleState.status !== 'ready') return;
+    if (isSolved(grid)) {
+      setGameOver(true);
+      playWinAnimation();
+      setTimeout(() => finishGame('win'), 800);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grid, gameOver, puzzleState.status]);
+
+  // Move limit detection — driven by movesUsed state changes (Fix 1)
+  useEffect(() => {
+    if (gameOver || moveLimit === 0) return;
+    if (movesUsed >= moveLimit) {
+      setGameOver(true);
+      loseReasonRef.current = 'Out of moves';
+      setTimeout(() => finishGame('lose'), 400);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [movesUsed, gameOver, moveLimit]);
+
   const finishGame = useCallback(
     (result: 'win' | 'lose') => {
       if (completedRef.current) return;
@@ -112,20 +201,20 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
       setGameOver(true);
 
       const timeTaken = Math.round((Date.now() - startTimeRef.current) / 1000);
-      const completionHash = generateClientCompletionHash(sessionId, result, timeTaken);
+      const completionHash = generateClientCompletionHash(sessionId, result, salt ?? '');
 
       const solutionData: Record<string, unknown> = {
         taps: tapsRef.current,
-        finalGrid: grid,
         movesUsed: tapsRef.current.length,
         solved: result === 'win',
+        ...(coopPartnerId ? { coopPartnerId } : {}),
       };
 
       pendingResultRef.current = { result, timeTaken, completionHash, solutionData };
       setOverlayResult(result);
       setShowCompleteOverlay(true);
     },
-    [sessionId, grid],
+    [sessionId, salt, coopPartnerId],
   );
 
   const handleContinue = useCallback(() => {
@@ -202,39 +291,71 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
       if (player === 'p1' && !canP1Tap(row)) return;
       if (player === 'p2' && !canP2Tap(row)) return;
 
-      const newGrid = applyTap(grid, row, col);
-      const newMoves = movesUsed + 1;
-
       tapsRef.current.push({ row, col, player });
-      setGrid(newGrid);
-      setMovesUsed(newMoves);
       setLastTapRow(row);
-
       animateTap(row, col);
 
-      if (isSolved(newGrid)) {
-        setGameOver(true);
-        playWinAnimation();
-        setTimeout(() => finishGame('win'), 800);
-        return;
-      }
+      setGrid((prevGrid) => applyTap(prevGrid, row, col));
+      setMovesUsed((prev) => prev + 1);
 
-      if (newMoves >= moveLimit) {
-        setGameOver(true);
-        setTimeout(() => finishGame('lose'), 400);
-      }
+      // Soft turn toggle
+      setActiveTurn((prev) => (prev === 'p1' ? 'p2' : 'p1'));
     },
-    [gameOver, grid, movesUsed, moveLimit, finishGame, animateTap, playWinAnimation],
+    [gameOver, animateTap],
   );
 
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
+
+  const spinInterpolated = spinAnim.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['0deg', '360deg'],
+  });
+
+  // Loading screen
+  if (puzzleState.status === 'loading') {
+    return (
+      <ImageBackground source={plainBg} style={styles.loadingRoot} resizeMode="cover">
+        <Animated.Text
+          style={[styles.spinnerEmoji, { transform: [{ rotate: spinInterpolated }] }]}
+        >
+          {'\uD83C\uDF43'}
+        </Animated.Text>
+        <Text style={styles.loadingText}>Preparing puzzle...</Text>
+      </ImageBackground>
+    );
+  }
+
+  // Error screen
+  if (puzzleState.status === 'error') {
+    return (
+      <ImageBackground source={plainBg} style={styles.loadingRoot} resizeMode="cover">
+        <Text style={styles.errorText}>Could not generate puzzle.</Text>
+        <TouchableOpacity style={styles.retryBtn} onPress={loadPuzzle}>
+          <Text style={styles.retryBtnText}>Try Again</Text>
+        </TouchableOpacity>
+      </ImageBackground>
+    );
+  }
+
   const isMovesLow = movesUsed >= moveLimit - 1;
+  const timeRatio = timeLeft / PIPS_TIME_LIMIT;
+  const barColor =
+    timeRatio > 0.5 ? PALETTE.softGreen : timeRatio > 0.25 ? PALETTE.honeyGold : PALETTE.errorRed;
 
   const renderCell = (row: number, col: number, player: 'p1' | 'p2' | 'shared') => {
     const isOn = grid[row][col] === 1;
     const disabled = gameOver || (player === 'p1' ? !canP1Tap(row) : player === 'p2' ? !canP2Tap(row) : false);
-
-    // For shared row cells, tapping is handled by whichever zone — but since shared row
-    // is rendered once in the divider, we allow both players. We pick a neutral tap handler.
     const tapPlayer = player === 'shared' ? 'p1' : player;
 
     return (
@@ -314,12 +435,44 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
 
   const p1BgColor = withAlpha(clanColor(p1Clan), 0.1);
   const p2BgColor = withAlpha(clanColor(p2Clan), 0.1);
+  const p1ZoneStyle = useMemo(() => ({ backgroundColor: p1BgColor }), [p1BgColor]);
+  const p2ZoneStyle = useMemo(() => ({ backgroundColor: p2BgColor }), [p2BgColor]);
+
+  const turnName = activeTurn === 'p1' ? p1Name : p2Name;
 
   return (
-    <View style={styles.root}>
+    <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Time bar */}
+      <View style={styles.timerBarContainer}>
+        <Animated.View
+          style={[
+            styles.timerBarFill,
+            {
+              width: timerBarAnim.interpolate({
+                inputRange: [0, 1],
+                outputRange: ['0%', '100%'],
+              }),
+              backgroundColor: barColor,
+            },
+          ]}
+        />
+      </View>
+
+      {/* Help button */}
+      <View style={styles.helpRow}>
+        <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+          <Text style={styles.helpBtnText}>?</Text>
+        </TouchableOpacity>
+      </View>
+
       {/* P1 Zone */}
-      <View style={[styles.zone, { backgroundColor: p1BgColor }]}>
+      <View style={[styles.zone, p1ZoneStyle]}>
         {renderZoneRows(P1_ROWS, 'p1')}
+      </View>
+
+      {/* Turn indicator */}
+      <View style={styles.turnBanner}>
+        <Text style={styles.turnBannerText}>{turnName}&apos;s Turn</Text>
       </View>
 
       {/* CoopDivider with shared row + move counter */}
@@ -329,7 +482,7 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
         p2Name={p2Name}
         p2Clan={p2Clan}
         timeLeft={timeLeft}
-        totalTime={timeLimit}
+        totalTime={PIPS_TIME_LIMIT}
       >
         {renderSharedRow()}
         <Text style={[styles.movesText, isMovesLow && styles.textDanger]}>
@@ -338,7 +491,7 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
       </CoopDivider>
 
       {/* P2 Zone */}
-      <View style={[styles.zone, { backgroundColor: p2BgColor }]}>
+      <View style={[styles.zone, p2ZoneStyle]}>
         {renderZoneRows(P2_ROWS, 'p2')}
       </View>
 
@@ -347,16 +500,121 @@ export default function PipsCoopGame(props: MinigamePlayProps) {
         <GameCompleteOverlay
           result={overlayResult}
           onContinue={handleContinue}
+          loseTitle={loseReasonRef.current}
+          practiceMode={practiceMode}
         />
       )}
-    </View>
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Snuff Out Co-op</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} A grid of lit and dark cells is shown on a shared board.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Tapping a cell toggles it and its neighbours. Turn all cells to the target state.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Players alternate turns {'\u2014'} Player 1 taps first, then Player 2, then Player 1, and so on.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Plan your taps together {'\u2014'} every tap affects your partner{'\u2019'}s next turn too.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Solve the grid before time runs out to win together.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Talk through your next move before tapping {'\u2014'} a single misplaced tap can make the board much harder to solve.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: UI.background,
+  },
+
+  loadingRoot: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  spinnerEmoji: {
+    fontFamily: FONTS.body,
+    fontSize: 32,
+    marginBottom: 12,
+  },
+  loadingText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+  },
+  errorText: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.errorRed,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  retryBtn: {
+    backgroundColor: PALETTE.parchmentDark,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+  },
+  retryBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+  },
+
+  timerBarContainer: {
+    width: '90%',
+    height: 14,
+    backgroundColor: PALETTE.parchmentDark,
+    borderRadius: 7,
+    overflow: 'hidden',
+    marginTop: 8,
+    alignSelf: 'center',
+  },
+  timerBarFill: {
+    height: '100%',
+    borderRadius: 7,
+  },
+
+  helpRow: {
+    width: '100%',
+    alignItems: 'flex-end',
+    paddingHorizontal: 20,
+    marginTop: 4,
+    marginBottom: 2,
+  },
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
 
   zone: {
@@ -386,7 +644,7 @@ const styles = StyleSheet.create({
   },
   tileOn: {
     backgroundColor: PALETTE.deepGreen,
-    borderColor: '#1a3a18',
+    borderColor: PALETTE.tileOnBorder,
   },
   tileGlow: {
     ...StyleSheet.absoluteFillObject,
@@ -399,7 +657,6 @@ const styles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     paddingVertical: 4,
-    backgroundColor: withAlpha(PALETTE.cream, 0.5),
   },
   sharedRowInner: {
     flexDirection: 'row',
@@ -427,6 +684,20 @@ const styles = StyleSheet.create({
     left: 0,
   },
 
+  turnBanner: {
+    alignSelf: 'center',
+    backgroundColor: PALETTE.honeyGold,
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginVertical: 2,
+  },
+  turnBannerText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 13,
+    color: PALETTE.darkBrown,
+  },
+
   movesText: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 14,
@@ -435,5 +706,54 @@ const styles = StyleSheet.create({
   },
   textDanger: {
     color: PALETTE.errorRed,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

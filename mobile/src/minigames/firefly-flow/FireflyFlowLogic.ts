@@ -6,6 +6,8 @@
  * connected by non-overlapping paths that cover every cell.
  */
 
+import { CLAN_COLORS } from '@/constants/colors';
+
 // ─── Types ──────────────────────────────────────────────────────────────────
 
 export interface Cell {
@@ -13,7 +15,7 @@ export interface Cell {
   col: number;
 }
 
-export type PairColor = 'ember' | 'tide' | 'bloom' | 'gale' | 'lavender';
+export type PairColor = 'ember' | 'tide' | 'bloom' | 'gale' | 'hearth';
 
 export interface Pair {
   color: PairColor;
@@ -33,14 +35,16 @@ export type PlayerPath = Record<PairColor, Cell[]>;
 
 export const GRID_SIZE = 6;
 
-export const PAIR_COLORS: PairColor[] = ['ember', 'tide', 'bloom', 'gale', 'lavender'];
+export const PAIR_COLORS: PairColor[] = ['ember', 'tide', 'bloom', 'gale', 'hearth'];
+
+const HEARTH_COLOR = '#9B59B6';
 
 export const COLOR_HEX: Record<PairColor, string> = {
-  ember: '#C0392B',
-  tide: '#2980B9',
-  bloom: '#F1C40F',
-  gale: '#27AE60',
-  lavender: '#9B59B6',
+  ember: CLAN_COLORS.ember,
+  tide: CLAN_COLORS.tide,
+  bloom: CLAN_COLORS.bloom,
+  gale: CLAN_COLORS.gale,
+  hearth: HEARTH_COLOR,
 };
 
 // ─── Utility helpers ────────────────────────────────────────────────────────
@@ -78,7 +82,7 @@ function cellKey(r: number, c: number): string {
 export function generatePuzzle(): Puzzle {
   const totalCells = GRID_SIZE * GRID_SIZE; // 36
 
-  for (let attempt = 0; attempt < 50; attempt++) {
+  for (let attempt = 0; attempt < 200; attempt++) {
     const numPairs = Math.random() < 0.5 ? 4 : 5;
     const shuffled = [...PAIR_COLORS].sort(() => Math.random() - 0.5);
     const colors = shuffled.slice(0, numPairs);
@@ -130,8 +134,8 @@ export function generatePuzzle(): Puzzle {
 
     for (const color of colors) {
       const path = solution[color];
-      // Path must be at least 3 cells
-      if (path.length < 3) {
+      // Path must be at least 5 cells
+      if (path.length < 5) {
         quality = false;
         break;
       }
@@ -156,8 +160,8 @@ export function generatePuzzle(): Puzzle {
     };
   }
 
-  // Fallback: should rarely happen, but generate a simpler puzzle
-  return generateFallbackPuzzle();
+  // Fallback: pick from hand-authored puzzles
+  return pickFallbackPuzzle();
 }
 
 /**
@@ -266,42 +270,67 @@ function hasEnoughReachable(
   return count >= needed;
 }
 
-/**
- * Fallback puzzle generator: creates a known-good snake pattern.
- */
-function generateFallbackPuzzle(): Puzzle {
-  const colors = [...PAIR_COLORS].sort(() => Math.random() - 0.5);
-  const numPairs = Math.random() < 0.5 ? 4 : 5;
-  const selected = colors.slice(0, numPairs);
+// ─── Hand-authored fallback puzzles ─────────────────────────────────────────
 
-  // Create a Hamiltonian snake path through the grid
-  const snake: Cell[] = [];
-  for (let r = 0; r < GRID_SIZE; r++) {
-    if (r % 2 === 0) {
-      for (let c = 0; c < GRID_SIZE; c++) snake.push({ row: r, col: c });
-    } else {
-      for (let c = GRID_SIZE - 1; c >= 0; c--) snake.push({ row: r, col: c });
-    }
-  }
+interface FallbackDef {
+  paths: Array<{ color: PairColor; cells: Array<[number, number]> }>;
+}
 
-  const totalCells = GRID_SIZE * GRID_SIZE;
-  const baseCells = Math.floor(totalCells / numPairs);
-  const rem = totalCells % numPairs;
+const FALLBACK_PUZZLES: FallbackDef[] = [
+  // Puzzle 1 — 4 pairs, 9 cells each, S-curve quadrants
+  {
+    paths: [
+      { color: 'ember', cells: [[0,0],[0,1],[0,2],[1,2],[1,1],[1,0],[2,0],[2,1],[2,2]] },
+      { color: 'tide',  cells: [[0,3],[0,4],[0,5],[1,5],[1,4],[1,3],[2,3],[2,4],[2,5]] },
+      { color: 'bloom', cells: [[3,5],[3,4],[3,3],[4,3],[4,4],[4,5],[5,5],[5,4],[5,3]] },
+      { color: 'gale',  cells: [[3,2],[3,1],[3,0],[4,0],[4,1],[4,2],[5,2],[5,1],[5,0]] },
+    ],
+  },
+  // Puzzle 2 — 5 pairs, vertical zigzag columns
+  {
+    paths: [
+      { color: 'ember',  cells: [[0,0],[1,0],[2,0],[3,0],[4,0],[5,0],[5,1],[4,1]] },
+      { color: 'tide',   cells: [[3,1],[2,1],[1,1],[0,1],[0,2],[1,2],[2,2]] },
+      { color: 'bloom',  cells: [[3,2],[4,2],[5,2],[5,3],[4,3],[3,3],[2,3]] },
+      { color: 'gale',   cells: [[1,3],[0,3],[0,4],[1,4],[2,4],[3,4],[4,4]] },
+      { color: 'hearth', cells: [[0,5],[1,5],[2,5],[3,5],[4,5],[5,5],[5,4]] },
+    ],
+  },
+  // Puzzle 3 — 4 pairs, interleaved serpentine
+  {
+    paths: [
+      { color: 'ember', cells: [[0,0],[1,0],[2,0],[2,1],[1,1],[0,1],[0,2],[1,2],[2,2]] },
+      { color: 'tide',  cells: [[0,3],[1,3],[2,3],[2,4],[1,4],[0,4],[0,5],[1,5],[2,5]] },
+      { color: 'bloom', cells: [[3,0],[3,1],[3,2],[3,3],[3,4],[3,5],[4,5],[4,4],[4,3]] },
+      { color: 'gale',  cells: [[4,0],[5,0],[5,1],[4,1],[4,2],[5,2],[5,3],[5,4],[5,5]] },
+    ],
+  },
+  // Puzzle 4 — 5 pairs, winding columns with cross-over
+  {
+    paths: [
+      { color: 'ember',  cells: [[0,0],[0,1],[1,1],[1,0],[2,0],[2,1],[3,1],[3,0]] },
+      { color: 'tide',   cells: [[0,2],[0,3],[1,3],[1,2],[2,2],[2,3],[3,3]] },
+      { color: 'bloom',  cells: [[0,4],[0,5],[1,5],[1,4],[2,4],[2,5],[3,5]] },
+      { color: 'gale',   cells: [[3,2],[4,2],[4,1],[4,0],[5,0],[5,1],[5,2]] },
+      { color: 'hearth', cells: [[3,4],[4,4],[4,3],[5,3],[5,4],[5,5],[4,5]] },
+    ],
+  },
+];
 
-  const solution: Record<string, Cell[]> = {};
+function pickFallbackPuzzle(): Puzzle {
+  const def = FALLBACK_PUZZLES[Math.floor(Math.random() * FALLBACK_PUZZLES.length)];
+
   const pairs: Pair[] = [];
-  let offset = 0;
+  const solution: Record<string, Cell[]> = {};
 
-  for (let i = 0; i < numPairs; i++) {
-    const len = baseCells + (i < rem ? 1 : 0);
-    const path = snake.slice(offset, offset + len);
-    solution[selected[i]] = path;
+  for (const p of def.paths) {
+    const cells: Cell[] = p.cells.map(([row, col]) => ({ row, col }));
+    solution[p.color] = cells;
     pairs.push({
-      color: selected[i],
-      start: path[0],
-      end: path[path.length - 1],
+      color: p.color,
+      start: cells[0],
+      end: cells[cells.length - 1],
     });
-    offset += len;
   }
 
   return {

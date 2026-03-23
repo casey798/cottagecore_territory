@@ -10,6 +10,7 @@ interface Props {
   onPinPress: (location: Location) => void;
   inRangeIds?: Set<string>;
   xpExhaustedIds?: Set<string>;
+  lockedUntilMap?: Record<string, string>;
 }
 
 export function MapPinsLayer({
@@ -18,6 +19,7 @@ export function MapPinsLayer({
   onPinPress,
   inRangeIds,
   xpExhaustedIds,
+  lockedUntilMap,
 }: Props) {
   const pinPositions = useMemo(
     () =>
@@ -46,8 +48,9 @@ export function MapPinsLayer({
           onPress={() => handlePress(location)}
           inRange={inRangeIds?.has(location.locationId)}
           xpExhausted={xpExhaustedIds?.has(location.locationId)}
-          bonusXP={location.bonusXP}
+          bonusXP={!!location.bonusXP}
           isCoop={location.isCoop}
+          lockedUntil={lockedUntilMap?.[location.locationId]}
         />
       ))}
     </View>

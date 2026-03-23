@@ -1,5 +1,13 @@
 # CLAUDE.md — GroveWars Project Instructions
 
+## Legacy Status
+
+This file predates `DESIGN_DOCUMENT.md` v2.0 (2026-03-22).
+
+- For current session context, use repo-root `CLAUDE.md`.
+- For source-of-truth product rules, use `DESIGN_DOCUMENT.md`.
+- Known drift includes auth flow, orientation notes, chest drop rules, co-op rules, and some older content assumptions.
+
 ## Project Overview
 
 GroveWars is a clan-based territory capture game for Android (React Native) with an AWS serverless backend and a React web admin dashboard. Four college house clans compete daily to capture campus spaces by solving puzzle minigames at physical locations. Cottagecore/Stardew Valley aesthetic throughout.

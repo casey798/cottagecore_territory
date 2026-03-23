@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet, ActivityIndicator, Text, LayoutChangeEvent } from 'react-native';
 import FastImage from 'react-native-fast-image';
 import {
@@ -8,6 +8,8 @@ import {
   Path as SkiaPath,
   Image as SkiaImage,
   useImage,
+  useFont,
+  BlurMask,
 } from '@shopify/react-native-skia';
 import {
   GestureDetector,
@@ -16,26 +18,30 @@ import {
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
+  useDerivedValue,
+  interpolate,
   withTiming,
   withRepeat,
   Easing,
   runOnJS,
 } from 'react-native-reanimated';
-import { PALETTE } from '@/constants/colors';
+import { PALETTE, CLAN_COLORS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { CLAN_COLORS } from '@/constants/colors';
 import { useMapStore } from '@/store/useMapStore';
+import { useAuthStore } from '@/store/useAuthStore';
 import { useDebugStore } from '@/store/useDebugStore';
-import { ClanId, Location, CapturedSpace } from '@/types';
+import { ClanId, Location, CapturedSpace, SpaceDecoration } from '@/types';
 import { isWithinMapBounds, getEdgeIndicator } from '@/utils/mapBounds';
 import { pixelToGps } from '@/utils/affineTransform';
 import { PLAYER_DOT_IMAGES, GPS_RING_COLORS } from '@/constants/playerAssets';
+import { ASSET_MAP } from '@/constants/assets';
+import { gpsToPixel } from '@/utils/affineTransform';
+import { MAP_TILE_SIZE } from '@/constants/config';
 import { MapPinsLayer } from './MapPinsLayer';
 import { MapOverlay } from './MapOverlay';
+import { DecorationMapItem } from './DecorationMapItem';
 
-const MIN_ZOOM = 0.75;
 const MAX_ZOOM = 4;
-const INITIAL_ZOOM = 1.5;
 
 export interface ViewportRect {
   x: number;
@@ -52,6 +58,7 @@ interface Props {
   onPinPress?: (location: Location) => void;
   inRangeIds?: Set<string>;
   xpExhaustedIds?: Set<string>;
+  lockedUntilMap?: Record<string, string>;
   onViewportChange?: (viewport: ViewportRect) => void;
   registerNavigate?: (fn: (mapX: number, mapY: number) => void) => void;
   capturedSpaces?: CapturedSpace[];
@@ -62,6 +69,7 @@ interface Props {
   onMapTap?: (pixelX: number, pixelY: number) => void;
   pinColor?: string;
   pinRingColor?: string;
+  pinProximities?: Map<string, { distance: number; geofenceRadius: number }>;
 }
 
 function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
@@ -79,10 +87,20 @@ function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: n
   return inside;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor }: Props) {
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, lockedUntilMap, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor, pinProximities }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
+  const spaceDecorations = useMapStore((s) => s.spaceDecorations);
+  const assetCategories = useMapStore((s) => s.assetCategories);
+  const assetIdMap = useMapStore((s) => s.assetIdMap);
+  const loadSpaceDecoration = useMapStore((s) => s.loadSpaceDecoration);
+  const playerClan = useAuthStore((s) => s.clan);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
   const tapToSetMode = useDebugStore((s) => s.tapToSetMode);
+  const INITIAL_ZOOM = 1.5;
+  const MIN_ZOOM = 1;
+
+  // Font for decoration category letters on the Skia canvas
+  const decoFont = useFont(require('../../assets/fonts/PixelifySans-VariableFont_wght.ttf'), 10);
 
   // Load player clan badge as a Skia image (pass require() result directly)
   // PLAYER_DOT_IMAGES values are require() numbers at runtime; cast for Skia's DataSourceParam
@@ -529,6 +547,51 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     }
   }, [inBounds, edgeIndicator, pulseProgress]);
 
+  // Breathing pulse for in-range pin glows
+  const pulseValue = useSharedValue(0);
+
+  // Sonar ripples for player marker
+  const ripple1 = useSharedValue(0);
+  const ripple2 = useSharedValue(0);
+  const ripple2TimerRef = useRef<ReturnType<typeof setTimeout>>();
+
+  useEffect(() => {
+    pulseValue.value = withRepeat(
+      withTiming(1, { duration: 1800, easing: Easing.inOut(Easing.ease) }),
+      -1,
+      true,
+    );
+    ripple1.value = withRepeat(
+      withTiming(1, { duration: 2200, easing: Easing.out(Easing.ease) }),
+      -1,
+      false,
+    );
+    ripple2TimerRef.current = setTimeout(() => {
+      ripple2.value = withRepeat(
+        withTiming(1, { duration: 2200, easing: Easing.out(Easing.ease) }),
+        -1,
+        false,
+      );
+    }, 900);
+    return () => {
+      if (ripple2TimerRef.current) clearTimeout(ripple2TimerRef.current);
+    };
+  }, [pulseValue, ripple1, ripple2]);
+
+  // Derived animated values for in-range pulse ring
+  const animatedPulseRadius = useDerivedValue(() =>
+    interpolate(pulseValue.value, [0, 1], [0, 10]),
+  );
+  const animatedPulseOpacity = useDerivedValue(() =>
+    interpolate(pulseValue.value, [0, 1], [0.0, 0.45]),
+  );
+
+  // Derived animated values for player sonar ripples
+  const ripple1Radius = useDerivedValue(() => interpolate(ripple1.value, [0, 1], [12, 36]));
+  const ripple1Opacity = useDerivedValue(() => interpolate(ripple1.value, [0, 0.3, 1], [0.7, 0.5, 0.0]));
+  const ripple2Radius = useDerivedValue(() => interpolate(ripple2.value, [0, 1], [12, 36]));
+  const ripple2Opacity = useDerivedValue(() => interpolate(ripple2.value, [0, 0.3, 1], [0.7, 0.5, 0.0]));
+
   // Animated style for OOB text label
   const oobLabelStyle = useAnimatedStyle(() => {
     if (!edgeIndicator) return { opacity: 0 };
@@ -543,6 +606,145 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     };
   });
 
+  // Load decorations for own-clan captured spaces
+  useEffect(() => {
+    if (!capturedSpaces || !playerClan) return;
+    const ownSpaces = capturedSpaces.filter((s) => s.clan === playerClan);
+    if (ownSpaces.length === 0) return;
+    Promise.all(
+      ownSpaces.map((s) => loadSpaceDecoration(s.spaceId)),
+    ).catch(() => {});
+  }, [capturedSpaces, playerClan, loadSpaceDecoration]);
+
+  // Compute decoration render data for own-clan spaces
+  const decorationRenderData = useMemo(() => {
+    if (!capturedSpaces || !playerClan) return [];
+    const items: Array<{
+      key: string;
+      pixelX: number;
+      pixelY: number;
+      width: number;
+      height: number;
+      assetId: string;
+      userAssetId: string;
+      category: string;
+      clanColor: string;
+    }> = [];
+    const clanColor = CLAN_COLORS[playerClan] ?? PALETTE.honeyGold;
+
+    for (const space of capturedSpaces) {
+      if (space.clan !== playerClan) continue;
+
+      const deco: SpaceDecoration | undefined = spaceDecorations[space.spaceId];
+      if (!deco?.layout?.placedAssets?.length) continue;
+      if (!space.polygonPoints || space.polygonPoints.length < 3) continue;
+
+      // Polygon bounding box in map pixel space
+      let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
+      for (const p of space.polygonPoints) {
+        if (p.x < bMinX) bMinX = p.x;
+        if (p.y < bMinY) bMinY = p.y;
+        if (p.x > bMaxX) bMaxX = p.x;
+        if (p.y > bMaxY) bMaxY = p.y;
+      }
+      const bboxW = bMaxX - bMinX;
+      const bboxH = bMaxY - bMinY;
+      if (bboxW <= 0 || bboxH <= 0) continue;
+
+      // Determine grid extent from gridCells + placed assets
+      const gridCells = space.gridCells ?? [];
+      let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity;
+      for (const c of gridCells) {
+        const cx = c.col ?? c.x;
+        const cy = c.row ?? c.y;
+        if (cx < gMinX) gMinX = cx;
+        if (cy < gMinY) gMinY = cy;
+        if (cx > gMaxX) gMaxX = cx;
+        if (cy > gMaxY) gMaxY = cy;
+      }
+      for (const a of deco.layout.placedAssets) {
+        if (a.x < gMinX) gMinX = a.x;
+        if (a.y < gMinY) gMinY = a.y;
+        if (a.x > gMaxX) gMaxX = a.x;
+        if (a.y > gMaxY) gMaxY = a.y;
+      }
+      if (!isFinite(gMinX)) continue;
+
+      const gridCols = gMaxX - gMinX + 1;
+      const gridRows = gMaxY - gMinY + 1;
+      if (gridCols <= 0 || gridRows <= 0) continue;
+
+      // Map-pixel size of one grid cell within this space
+      const cellMapW = bboxW / gridCols;
+      const cellMapH = bboxH / gridRows;
+
+      for (const asset of deco.layout.placedAssets) {
+        const assetDef = ASSET_MAP[assetIdMap[asset.userAssetId] ?? ''];
+        const assetGridW = assetDef?.gridW ?? 1;
+        const assetGridH = assetDef?.gridH ?? 1;
+
+        const px = bMinX + (asset.x - gMinX) * cellMapW;
+        const py = bMinY + (asset.y - gMinY) * cellMapH;
+
+        items.push({
+          key: `${space.spaceId}_${asset.userAssetId}_${asset.x}_${asset.y}`,
+          pixelX: px,
+          pixelY: py,
+          width: assetGridW * cellMapW,
+          height: assetGridH * cellMapH,
+          assetId: assetIdMap[asset.userAssetId] ?? '',
+          userAssetId: asset.userAssetId,
+          category: assetCategories[asset.userAssetId] ?? '',
+          clanColor,
+        });
+      }
+    }
+    return items;
+  }, [capturedSpaces, playerClan, spaceDecorations, assetCategories, assetIdMap]);
+
+  // Faint backings for locked pins (visible without glow)
+  const lockedPinBackings = useMemo(() => {
+    if (!locations || !mapConfig?.transformMatrix) return [];
+    return locations
+      .filter((loc) => loc.locked)
+      .map((loc) => {
+        const pixel = gpsToPixel(loc.gpsLat, loc.gpsLng, mapConfig.transformMatrix);
+        const px = Math.round(pixel.x / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+        const py = Math.round(pixel.y / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+        return { px, py, key: loc.locationId };
+      });
+  }, [locations, mapConfig?.transformMatrix]);
+
+  // Compute Skia glow data for each pin — idle glow always visible, intensifies with proximity
+  const pinGlowData = useMemo(() => {
+    if (!locations || !mapConfig?.transformMatrix) return [];
+    return locations
+      .filter((loc) => !loc.locked && !xpExhaustedIds?.has(loc.locationId))
+      .map((loc) => {
+        const prox = pinProximities?.get(loc.locationId);
+        // factor: 0 = far/no GPS (idle glow), 1 = right on top of pin
+        const factor = prox
+          ? Math.max(0, Math.min(1, 1 - prox.distance / (prox.geofenceRadius * 2)))
+          : 0;
+        const pixel = gpsToPixel(loc.gpsLat, loc.gpsLng, mapConfig.transformMatrix);
+        const px = Math.round(pixel.x / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+        const py = Math.round(pixel.y / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+
+        // State-aware glow color
+        const isInRange = inRangeIds?.has(loc.locationId) ?? false;
+        let baseColor: string;
+        if (loc.isCoop) {
+          baseColor = '#A78BFA';
+        } else if (loc.bonusXP) {
+          baseColor = '#E8F4FD';
+        } else {
+          baseColor = isInRange ? '#FFD700' : '#C8A84B';
+        }
+
+        return { px, py, factor, baseColor, key: loc.locationId, isInRange };
+      });
+  }, [locations, mapConfig?.transformMatrix, pinProximities, xpExhaustedIds, inRangeIds]);
+
   // Early returns AFTER all hooks
   if (!mapConfig) {
     return (
@@ -553,9 +755,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     );
   }
 
-  const DEBUG_COLOR = '#FFD700';
-  const dotColor = (__DEV__ && isDebugMode) ? DEBUG_COLOR : (clan ? CLAN_COLORS[clan] : (pinColor ?? null));
-  const ringFill = pinRingColor ? pinRingColor + '2E' : gpsRingColors.fill;
+  const dotColor = (__DEV__ && isDebugMode) ? PALETTE.honeyGold : (clan ? CLAN_COLORS[clan] : (pinColor ?? null));
   const ringStroke = pinRingColor ? pinRingColor + '73' : gpsRingColors.stroke;
 
   return (
@@ -591,10 +791,84 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                 cache: FastImage.cacheControl.immutable,
               }}
               style={{ width: mapConfig.mapWidth, height: mapConfig.mapHeight }}
-              resizeMode={FastImage.resizeMode.contain}
+              resizeMode={FastImage.resizeMode.cover}
               onLoad={handleMapImageLoad}
             />
+            <View style={styles.desatOverlay} pointerEvents="none" />
             <Canvas style={styles.overlayCanvas}>
+              {/* Locked pin backings — faint red circle for visibility */}
+              {lockedPinBackings.map((b) => (
+                <Circle
+                  key={`locked-bg-${b.key}`}
+                  cx={b.px}
+                  cy={b.py}
+                  r={28}
+                  color="rgba(160, 40, 40, 0.25)"
+                  style="fill"
+                >
+                  <BlurMask blur={12} style="normal" />
+                </Circle>
+              ))}
+              {/* Pin proximity glow (Skia) */}
+              {pinGlowData.map((g) => {
+                const glowRadius = 25 + g.factor * 15;
+                const blurAmount = 14 + g.factor * 8;
+                const glowOpacity = 0.6 + g.factor * 0.35;
+                const coreRadius = 6 + g.factor * 4;
+                const coreOpacity = 0.7 + g.factor * 0.3;
+                const ringRadius = glowRadius * 0.7;
+                return (
+                  <Group key={`glow-${g.key}`}>
+                    {/* Dark map-separation backing */}
+                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.6} color="rgba(15, 10, 5, 0.5)" style="fill">
+                      <BlurMask blur={18} style="normal" />
+                    </Circle>
+                    {/* Wide soft outer halo */}
+                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.4} color={g.baseColor} opacity={glowOpacity * 0.35}>
+                      <BlurMask blur={blurAmount + 10} style="normal" />
+                    </Circle>
+                    {/* Main glow blob */}
+                    <Circle cx={g.px} cy={g.py} r={glowRadius} color={g.baseColor} opacity={glowOpacity}>
+                      <BlurMask blur={blurAmount} style="normal" />
+                    </Circle>
+                    {/* Bright core dot */}
+                    <Circle cx={g.px} cy={g.py} r={coreRadius} color="#FFFFFF" opacity={coreOpacity} />
+                    {/* Outline ring */}
+                    <Circle cx={g.px} cy={g.py} r={ringRadius} color={g.baseColor} style="stroke" strokeWidth={2} opacity={0.7} />
+                    {/* In-range breathing pulse ring */}
+                    {g.isInRange && (
+                      <Circle
+                        cx={g.px}
+                        cy={g.py}
+                        r={glowRadius + animatedPulseRadius.value + 8}
+                        color={g.baseColor}
+                        opacity={animatedPulseOpacity.value}
+                        style="stroke"
+                        strokeWidth={2.5}
+                      />
+                    )}
+                  </Group>
+                );
+              })}
+              {/* Decoration assets for own-clan spaces */}
+              {decorationRenderData.length > 0 && (
+                <Group>
+                  {decorationRenderData.map((d) => (
+                    <DecorationMapItem
+                      key={`deco-${d.userAssetId ?? d.key}`}
+                      assetId={d.assetId}
+                      category={d.category}
+                      mapPixelX={d.pixelX}
+                      mapPixelY={d.pixelY}
+                      width={d.width}
+                      height={d.height}
+                      color={d.clanColor}
+                      font={decoFont}
+                    />
+                  ))}
+                </Group>
+              )}
+              {/* Territory overlay — rendered above decorations */}
               {capturedSpaces && capturedSpaces.length > 0 && (
                 <MapOverlay
                   capturedSpaces={capturedSpaces}
@@ -603,32 +877,31 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
               )}
               {playerX != null && playerY != null && dotColor && inBounds && (
                 <Group>
-                  {/* GPS accuracy ring — outer glow (0.8x) */}
+                  {/* Expanding sonar ripple 1 */}
                   <Circle
                     cx={playerX}
                     cy={playerY}
-                    r={29}
-                    color={isDebugMode ? dotColor + '30' : ringFill}
-                    style="fill"
-                  />
-                  <Circle
-                    cx={playerX}
-                    cy={playerY}
-                    r={29}
-                    color={isDebugMode ? dotColor + '60' : ringStroke}
+                    r={ripple1Radius}
+                    color={ringStroke}
                     style="stroke"
                     strokeWidth={1.5}
+                    opacity={ripple1Opacity}
                   />
-                  {/* GPS inner ring — hugs the badge (0.8x) */}
+                  {/* Expanding sonar ripple 2 */}
                   <Circle
                     cx={playerX}
                     cy={playerY}
-                    r={14}
-                    color={isDebugMode ? dotColor + '60' : ringStroke}
+                    r={ripple2Radius}
+                    color={ringStroke}
                     style="stroke"
                     strokeWidth={1.5}
+                    opacity={ripple2Opacity}
                   />
-                  {/* Player clan badge image (0.8x) */}
+                  {/* Dark backing under badge */}
+                  <Circle cx={playerX} cy={playerY} r={16} color="rgba(15, 10, 5, 0.4)" style="fill">
+                    <BlurMask blur={6} style="normal" />
+                  </Circle>
+                  {/* Player clan badge image */}
                   {!isDebugMode && playerBadgeImage ? (
                     <SkiaImage
                       image={playerBadgeImage}
@@ -651,7 +924,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                         cx={playerX}
                         cy={playerY}
                         r={11}
-                        color="rgba(255, 255, 255, 0.6)"
+                        color={PALETTE.whiteStroke60}
                         style="stroke"
                         strokeWidth={1.5}
                       />
@@ -680,7 +953,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                   {/* Arrow chevron pointing toward player */}
                   <SkiaPath
                     path={chevronPath}
-                    color="white"
+                    color={PALETTE.white}
                     style="fill"
                   />
                   <SkiaPath
@@ -699,6 +972,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                 onPinPress={onPinPress}
                 inRangeIds={inRangeIds}
                 xpExhaustedIds={xpExhaustedIds}
+                lockedUntilMap={lockedUntilMap}
               />
             )}
         </Animated.View>
@@ -734,20 +1008,28 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: PALETTE.deepGreen,
+    backgroundColor: '#000000',
     overflow: 'hidden',
   },
   placeholder: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: PALETTE.deepGreen,
+    backgroundColor: '#000000',
   },
   loadingText: {
     color: PALETTE.cream,
     fontSize: 14,
     fontFamily: FONTS.pixel,
     marginTop: 12,
+  },
+  desatOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(128, 128, 128, 0.15)',
   },
   overlayCanvas: {
     position: 'absolute',
@@ -777,14 +1059,14 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 6,
     left: 6,
-    backgroundColor: 'rgba(255, 215, 0, 0.9)',
+    backgroundColor: PALETTE.goldOverlay,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 4,
     zIndex: 10,
   },
   debugBadgeText: {
-    color: '#1E140F',
+    color: PALETTE.debugText,
     fontSize: 10,
     fontFamily: FONTS.pixel,
   },
@@ -793,11 +1075,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   oobLabelText: {
-    color: '#FFFFFF',
+    color: PALETTE.white,
     fontSize: 9,
     fontFamily: FONTS.pixel,
     letterSpacing: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: PALETTE.blackOverlay60,
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: 6,
@@ -811,20 +1093,20 @@ const styles = StyleSheet.create({
     right: 0,
     bottom: 0,
     borderWidth: 2,
-    borderColor: '#FFD700',
+    borderColor: PALETTE.honeyGold,
     borderRadius: 2,
   },
   tapModeBanner: {
     position: 'absolute',
     top: 8,
     alignSelf: 'center',
-    backgroundColor: 'rgba(255, 215, 0, 0.9)',
+    backgroundColor: PALETTE.goldOverlay,
     paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 6,
   },
   tapModeBannerText: {
-    color: '#1E140F',
+    color: PALETTE.debugText,
     fontSize: 10,
     fontFamily: FONTS.pixel,
     letterSpacing: 0.5,
@@ -839,7 +1121,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   crosshairText: {
-    color: 'rgba(255, 215, 0, 0.5)',
+    color: PALETTE.goldHalf,
     fontSize: 48,
     fontWeight: '200',
     fontFamily: FONTS.pixel,
@@ -848,13 +1130,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     bottom: 16,
     alignSelf: 'center',
-    backgroundColor: 'rgba(39, 174, 96, 0.9)',
+    backgroundColor: PALETTE.successToast,
     paddingHorizontal: 14,
     paddingVertical: 6,
     borderRadius: 8,
   },
   tapToastText: {
-    color: '#FFFFFF',
+    color: PALETTE.white,
     fontSize: 11,
     fontFamily: FONTS.pixel,
   },
