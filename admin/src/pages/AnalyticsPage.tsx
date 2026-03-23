@@ -25,24 +25,9 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer,
 } from 'recharts';
 import { MapHeatmap, type HeatmapPoint } from '@/components/MapHeatmap';
+import { CLAN_LABELS, CLAN_COLORS } from '../constants/clans';
 
 // ── Constants ────────────────────────────────────────────────────────
-
-const CLAN_COLORS: Record<ClanId, string> = {
-  ember: '#C0392B',
-  tide: '#2980B9',
-  bloom: '#F1C40F',
-  gale: '#27AE60',
-  hearth: '#7D3C98',
-};
-
-const CLAN_LABELS: Record<ClanId, string> = {
-  ember: 'Ember',
-  tide: 'Tide',
-  bloom: 'Bloom',
-  gale: 'Gale',
-  hearth: 'Hearth',
-};
 
 const CLAN_IDS: ClanId[] = ['ember', 'tide', 'bloom', 'gale', 'hearth'];
 

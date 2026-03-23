@@ -9,10 +9,12 @@ export interface SeasonResetRequest {
 
 export interface SeasonResetResponse {
   message: string;
-  usersReset: number;
-  clansReset: number;
-  territoriesReset: number;
-  newSeasonNumber: number;
+  exportUrls: Record<string, string>;
+  stepErrors: string[];
+}
+
+export interface SeasonExportResponse {
+  exportUrls: Record<string, string>;
 }
 
 export interface HallOfFamePlayer {
@@ -37,6 +39,11 @@ export interface HallOfFameData {
 
 export async function resetSeason(data: SeasonResetRequest): Promise<SeasonResetResponse> {
   const res = await apiClient.post<SeasonResetResponse>('/admin/season/reset', data);
+  return res.data;
+}
+
+export async function exportSeasonData(): Promise<SeasonExportResponse> {
+  const res = await apiClient.get<SeasonExportResponse>('/admin/season/export');
   return res.data;
 }
 

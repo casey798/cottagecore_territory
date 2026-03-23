@@ -1,8 +1,6 @@
 import { create } from 'zustand';
 import { queryClient } from '@/api/queryClient';
 
-const STORAGE_KEY = 'grove-wars-admin-token';
-
 interface AuthState {
   token: string | null;
   email: string | null;
@@ -32,28 +30,10 @@ function isTokenExpired(token: string): boolean {
   }
 }
 
-function loadPersistedAuth(): Pick<AuthState, 'token' | 'email' | 'isAuthenticated'> | null {
-  try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    if (!stored) return null;
-    const { token, email } = JSON.parse(stored);
-    if (!token || isTokenExpired(token)) {
-      localStorage.removeItem(STORAGE_KEY);
-      return null;
-    }
-    return { token, email, isAuthenticated: true };
-  } catch {
-    localStorage.removeItem(STORAGE_KEY);
-    return null;
-  }
-}
-
-const persisted = loadPersistedAuth();
-
 export const useAuthStore = create<AuthState>((set) => ({
-  token: persisted?.token ?? null,
-  email: persisted?.email ?? null,
-  isAuthenticated: persisted?.isAuthenticated ?? false,
+  token: null,
+  email: null,
+  isAuthenticated: false,
   isLoading: false,
   error: null,
 
@@ -62,12 +42,10 @@ export const useAuthStore = create<AuthState>((set) => ({
       set({ token: null, email: null, isAuthenticated: false, isLoading: false, error: 'Session expired — please sign in again' });
       return;
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ token, email }));
     set({ token, email, isAuthenticated: true, isLoading: false, error: null });
   },
 
   logout: () => {
-    localStorage.removeItem(STORAGE_KEY);
     queryClient.clear();
     set({ token: null, email: null, isAuthenticated: false, error: null });
   },

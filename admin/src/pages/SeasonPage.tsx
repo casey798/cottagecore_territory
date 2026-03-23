@@ -1,35 +1,22 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
 import { ErrorAlert } from '@/components/ErrorAlert';
 import {
   resetSeason,
+  exportSeasonData,
   getHallOfFame,
   getSeasonStatus,
   fetchExportCsv,
   type ExportType,
   type HallOfFameData,
+  type SeasonResetResponse,
 } from '@/api/season';
 import { getClanScores } from '@/api/scores';
 import JSZip from 'jszip';
 import { saveAs } from 'file-saver';
 import jsPDF from 'jspdf';
-
-const CLAN_COLORS: Record<string, string> = {
-  ember: '#C0392B',
-  tide: '#2980B9',
-  bloom: '#F1C40F',
-  gale: '#27AE60',
-  hearth: '#7D3C98',
-};
-
-const CLAN_LABELS: Record<string, string> = {
-  ember: 'Ember',
-  tide: 'Tide',
-  bloom: 'Bloom',
-  gale: 'Gale',
-  hearth: 'Hearth',
-};
+import { CLAN_LABELS, CLAN_COLORS } from '../constants/clans';
 
 function getTodayIST(): string {
   const now = new Date();
@@ -80,11 +67,18 @@ export function SeasonPage() {
   // showStartModal state removed — merged into end season flow
   const [confirmText, setConfirmText] = useState('');
   const [resetTerritories, setResetTerritories] = useState(false);
-  const [newSeasonNumber, setNewSeasonNumber] = useState(2);
+  // FIX 1/6: derived from live season status, never hardcoded
+  const [newSeasonNumber, setNewSeasonNumber] = useState<number | undefined>(undefined);
   const [seasonNotification, setSeasonNotification] = useState<{
     type: 'success' | 'error';
     message: string;
   } | null>(null);
+  // FIX 3: store reset result to display export links
+  const [resetResult, setResetResult] = useState<SeasonResetResponse | null>(null);
+  // FIX 2: season data export state
+  const [seasonExporting, setSeasonExporting] = useState(false);
+  const [seasonExportLinks, setSeasonExportLinks] = useState<Record<string, string> | null>(null);
+  const [seasonExportError, setSeasonExportError] = useState<string | null>(null);
 
   // Queries
   const { data: seasonStatus } = useQuery({
@@ -92,6 +86,13 @@ export function SeasonPage() {
     queryFn: getSeasonStatus,
     staleTime: 60_000,
   });
+
+  // FIX 1: auto-populate new season number from live status (only on first load)
+  useEffect(() => {
+    if (seasonStatus !== undefined && newSeasonNumber === undefined) {
+      setNewSeasonNumber(seasonStatus.seasonNumber + 1);
+    }
+  }, [seasonStatus]);
 
   const { data: clanScores, isLoading: scoresLoading } = useQuery({
     queryKey: ['clan-scores'],
@@ -111,9 +112,10 @@ export function SeasonPage() {
   const resetMut = useMutation({
     mutationFn: resetSeason,
     onSuccess: (data) => {
+      setResetResult(data);
       setSeasonNotification({
         type: 'success',
-        message: `Season reset complete: ${data.usersReset} users, ${data.clansReset} clans${data.territoriesReset ? `, ${data.territoriesReset} territories` : ''} reset. New season: ${data.newSeasonNumber}`,
+        message: data.message,
       });
       setShowEndModal(false);
       setConfirmText('');
@@ -127,6 +129,21 @@ export function SeasonPage() {
       setTimeout(() => setSeasonNotification(null), 8000);
     },
   });
+
+  // FIX 2: standalone season data export
+  async function handleSeasonExport() {
+    setSeasonExporting(true);
+    setSeasonExportError(null);
+    setSeasonExportLinks(null);
+    try {
+      const result = await exportSeasonData();
+      setSeasonExportLinks(result.exportUrls);
+    } catch (err) {
+      setSeasonExportError(err instanceof Error ? err.message : 'Export failed');
+    } finally {
+      setSeasonExporting(false);
+    }
+  }
 
   // Export handlers
   async function handleExportSingle(item: ExportItem) {
@@ -194,6 +211,46 @@ export function SeasonPage() {
           }`}
         >
           {seasonNotification.message}
+        </div>
+      )}
+
+      {/* FIX 5: step errors warning */}
+      {resetResult && resetResult.stepErrors.length > 0 && (
+        <div className="mb-4 rounded border border-yellow-400 bg-yellow-50 p-3 text-sm text-yellow-800">
+          <p className="mb-1 font-semibold">Reset completed with warnings:</p>
+          <ul className="list-inside list-disc space-y-0.5">
+            {resetResult.stepErrors.map((e, i) => (
+              <li key={i}>{e}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* FIX 3: export links from last reset */}
+      {resetResult && Object.keys(resetResult.exportUrls).length > 0 && (
+        <div className="mb-4 rounded border border-[#8B6914]/30 bg-[#F5EACB]/60 p-3 text-sm">
+          <p className="mb-2 font-semibold text-[#3D2B1F]">Season archive ready — links expire in 7 days:</p>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: 'players', label: 'Players CSV' },
+              { key: 'clans', label: 'Clans CSV' },
+              { key: 'captures', label: 'Captures CSV' },
+              { key: 'checkins', label: 'Checkins CSV' },
+              { key: 'sessions', label: 'Sessions CSV' },
+            ].map(({ key, label }) =>
+              resetResult.exportUrls[key] ? (
+                <a
+                  key={key}
+                  href={resetResult.exportUrls[key]}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="rounded border border-[#8B6914]/40 bg-white px-3 py-1.5 text-xs font-medium text-[#8B6914] hover:bg-[#F5EACB]"
+                >
+                  {label}
+                </a>
+              ) : null,
+            )}
+          </div>
         </div>
       )}
 
@@ -344,15 +401,55 @@ export function SeasonPage() {
           These actions are irreversible and reset live data. Export your data first.
         </p>
 
+        {/* FIX 2: standalone export button */}
+        <div className="mb-4">
+          <button
+            onClick={handleSeasonExport}
+            disabled={seasonExporting}
+            className="flex items-center gap-2 rounded border border-[#8B6914]/40 bg-white px-4 py-2 text-sm font-semibold text-[#8B6914] hover:bg-[#F5EACB] disabled:opacity-50"
+          >
+            {seasonExporting ? (
+              <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-[#8B6914] border-t-transparent" />
+            ) : null}
+            {seasonExporting ? 'Exporting...' : 'Download Season Data (CSV)'}
+          </button>
+          {seasonExportError && (
+            <p className="mt-1 text-xs text-red-700">{seasonExportError}</p>
+          )}
+          {seasonExportLinks && (
+            <div className="mt-2 flex flex-wrap gap-2">
+              {[
+                { key: 'players', label: 'Players CSV' },
+                { key: 'clans', label: 'Clans CSV' },
+                { key: 'captures', label: 'Captures CSV' },
+                { key: 'checkins', label: 'Checkins CSV' },
+                { key: 'sessions', label: 'Sessions CSV' },
+              ].map(({ key, label }) =>
+                seasonExportLinks[key] ? (
+                  <a
+                    key={key}
+                    href={seasonExportLinks[key]}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="rounded border border-[#8B6914]/40 bg-white px-3 py-1.5 text-xs font-medium text-[#8B6914] hover:bg-[#F5EACB]"
+                  >
+                    {label}
+                  </a>
+                ) : null,
+              )}
+            </div>
+          )}
+        </div>
+
         <div className="flex flex-wrap gap-3">
           <button
             onClick={() => {
               setShowEndModal(true);
               setConfirmText('');
               setResetTerritories(false);
-              setNewSeasonNumber(2);
             }}
-            className="rounded bg-[#C0392B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#A93226]"
+            disabled={newSeasonNumber === undefined}
+            className="rounded bg-[#C0392B] px-4 py-2 text-sm font-semibold text-white hover:bg-[#A93226] disabled:opacity-50"
           >
             End Season & Reset
           </button>
@@ -389,9 +486,11 @@ export function SeasonPage() {
           title="End Season & Reset"
           description="This will reset ALL player XP (seasonXp, todayXp, currentStreak, bestStreak) to 0 and reset all clan stats. This cannot be undone."
           confirmLabel="Reset Season"
-          onConfirm={() =>
-            resetMut.mutate({ resetTerritories, newSeasonNumber })
-          }
+          onConfirm={() => {
+            if (newSeasonNumber !== undefined) {
+              resetMut.mutate({ resetTerritories, newSeasonNumber });
+            }
+          }}
           onCancel={() => {
             setShowEndModal(false);
             setConfirmText('');
@@ -404,15 +503,21 @@ export function SeasonPage() {
             <div>
               <label className="mb-1 block text-xs font-medium text-[#3D2B1F]">
                 New Season Number
+                {seasonStatus && (
+                  <span className="ml-2 font-normal text-[#3D2B1F]/50">
+                    (current: Season {seasonStatus.seasonNumber})
+                  </span>
+                )}
               </label>
               <input
                 type="number"
-                value={newSeasonNumber}
+                value={newSeasonNumber ?? ''}
                 onChange={(e) => setNewSeasonNumber(parseInt(e.target.value) || 1)}
                 min={1}
                 className="w-24 rounded border border-[#8B6914]/30 bg-white px-3 py-2 text-sm text-[#3D2B1F] focus:border-[#D4A843] focus:outline-none"
               />
             </div>
+            {/* FIX 4: accurate checkbox label */}
             <label className="flex items-center gap-2 text-sm text-[#3D2B1F]">
               <input
                 type="checkbox"
@@ -420,7 +525,7 @@ export function SeasonPage() {
                 onChange={(e) => setResetTerritories(e.target.checked)}
                 className="accent-[#8B6914]"
               />
-              Also reset territories (archive current captures)
+              Relabel captures with season {seasonStatus?.seasonNumber ?? '?'} tag (rows remain in database)
             </label>
           </div>
         </ConfirmModal>
