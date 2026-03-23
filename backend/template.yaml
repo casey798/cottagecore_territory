@@ -2681,6 +2681,13 @@ Resources:
             TableName: !Ref SpaceDecorationsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref DailyConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Environment:
+        Variables:
+          ASSETS_BUCKET: !Ref AssetsBucket
       Events:
         Api:
           Type: Api
@@ -2696,6 +2703,49 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - seasonReset.ts
+        External:
+          - '@aws-sdk/*'
+
+  SeasonExportFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-seasonExport
+      CodeUri: functions/admin/
+      Handler: seasonExport.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref CapturedSpacesTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref DailyConfigTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Environment:
+        Variables:
+          ASSETS_BUCKET: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/season/export
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - seasonExport.ts
         External:
           - '@aws-sdk/*'
 
