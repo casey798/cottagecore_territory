@@ -2,6 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { error, ErrorCode } from '../../shared/response';
 import { scan } from '../../shared/db';
 import type { CapturedSpace, User, LocationMasterConfig } from '../../shared/types';
+import { CLAN_LABELS } from '../../shared/clanLabels';
 
 function csvEscape(val: unknown): string {
   if (val === null || val === undefined) return '';
@@ -23,9 +24,7 @@ const CSV_HEADERS = {
   'Content-Type': 'text/csv',
 };
 
-const CLAN_LABELS: Record<string, string> = {
-  ember: 'Ember', tide: 'Tide', bloom: 'Bloom', gale: 'Gale', hearth: 'Hearth',
-};
+
 const CLAN_IDS = ['ember', 'tide', 'bloom', 'gale', 'hearth'] as const;
 
 async function scanAll<T>(table: string, opts?: Parameters<typeof scan>[1]): Promise<T[]> {

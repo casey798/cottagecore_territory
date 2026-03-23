@@ -86,6 +86,8 @@ export async function handler(
         bestStreak: 0,
         lastActiveDate: '',
         tutorialDone: false,
+        tcAcceptedAt: null,
+        tcVersion: null,
         fcmToken: '',
         playerCode: '',
         createdAt: now,

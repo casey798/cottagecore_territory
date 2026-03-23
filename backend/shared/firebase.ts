@@ -14,45 +14,39 @@ export async function ensureFirebaseInitialized(): Promise<boolean> {
     return true;
   }
 
+  let result;
   try {
-    const result = await ssmClient.send(
+    result = await ssmClient.send(
       new GetParameterCommand({
         Name: SSM_PARAM_PATH,
         WithDecryption: true,
       })
     );
-
-    const credentialsJson = result.Parameter?.Value;
-    if (!credentialsJson) {
-      // No service account — init with just projectId (enough for verifyIdToken)
-      console.warn('FCM service account not found in SSM, initializing Firebase with projectId only');
-      admin.initializeApp({ projectId: 'grovewars-b37da' });
-      initialized = true;
-      return true;
-    }
-
-    const serviceAccount = JSON.parse(credentialsJson) as admin.ServiceAccount;
-    admin.initializeApp({
-      credential: admin.credential.cert(serviceAccount),
-      projectId: 'grovewars-b37da',
-    });
-
-    initialized = true;
-    return true;
   } catch (err) {
-    // SSM call failed — still init with just projectId for token verification
-    if (!admin.apps.length) {
-      try {
-        admin.initializeApp({ projectId: 'grovewars-b37da' });
-        initialized = true;
-        return true;
-      } catch {
-        // Already initialized by another path
-      }
-    }
-    console.warn('Failed to initialize Firebase:', err);
-    return initialized;
+    const error = err as Error;
+    throw new Error('Failed to load Firebase service account from SSM: ' + error.message);
   }
+
+  const credentialsJson = result.Parameter?.Value;
+  if (!credentialsJson) {
+    throw new Error('Firebase service account not found in SSM at ' + SSM_PARAM_PATH);
+  }
+
+  let serviceAccount: admin.ServiceAccount;
+  try {
+    serviceAccount = JSON.parse(credentialsJson) as admin.ServiceAccount;
+  } catch (err) {
+    const error = err as Error;
+    throw new Error('Firebase service account JSON in SSM is malformed: ' + error.message);
+  }
+
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+    projectId: 'grovewars-b37da',
+  });
+
+  initialized = true;
+  return true;
 }
 
 export function getFirebaseAdmin(): typeof admin {

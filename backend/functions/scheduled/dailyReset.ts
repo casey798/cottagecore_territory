@@ -62,10 +62,9 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
   }
 
   // Step 2b: Reset streaks for users who missed yesterday
-  const yesterdayIST = new Date(Date.now() + 5.5 * 60 * 60 * 1000 - 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   let streaksReset = 0;
   for (const user of allUsers) {
-    if (user.lastActiveDate && user.lastActiveDate !== yesterdayIST) {
+    if (user.lastActiveDate && user.lastActiveDate !== yesterdayDate) {
       await updateItem(
         'users',
         { userId: user.userId },
@@ -75,7 +74,7 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
       streaksReset++;
     }
   }
-  console.log(`Reset ${streaksReset} user streaks (missed ${yesterdayIST})`);
+  console.log(`Reset ${streaksReset} user streaks (missed ${yesterdayDate})`);
 
   // Step 3: Reset all 5 clans: todayXp = 0, clear todayXpTimestamp
   const clanIds = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];

@@ -2,14 +2,11 @@ import { ScheduledEvent } from 'aws-lambda';
 import { getItem } from '../../shared/db';
 import { sendToAll, sendToClan } from '../../shared/notifications';
 import { Clan, ClanId } from '../../shared/types';
+import { clanDisplayName } from '../../shared/clanLabels';
 
 type Window = 'morning' | 'lunch' | 'final';
 
 const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
-
-function clanDisplayName(clanId: ClanId): string {
-  return clanId.charAt(0).toUpperCase() + clanId.slice(1);
-}
 
 export const handler = async (_event: ScheduledEvent): Promise<void> => {
   const window = (process.env.WINDOW || 'morning') as Window;

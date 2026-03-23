@@ -37,11 +37,11 @@ async function scanAll<T>(table: string, opts?: Parameters<typeof scan>[1]): Pro
 
 // Hardcoded fallback from completeMinigame.ts ASSET_POOL
 const ASSET_POOL_FALLBACK: Array<{ id: string; name: string; category: string; rarity: string; dropWeight: number }> = [
-  { id: 'banner_ember',       name: 'Ember Banner',       category: 'banner',    rarity: 'common',    dropWeight: 30 },
-  { id: 'banner_bloom',       name: 'Bloom Banner',       category: 'banner',    rarity: 'common',    dropWeight: 30 },
-  { id: 'banner_tide',        name: 'Tide Banner',        category: 'banner',    rarity: 'common',    dropWeight: 30 },
-  { id: 'banner_gale',        name: 'Gale Banner',        category: 'banner',    rarity: 'common',    dropWeight: 30 },
-  { id: 'banner_hearth',      name: 'Hearth Banner',      category: 'banner',    rarity: 'common',    dropWeight: 30 },
+  { id: 'banner_ember',       name: 'Seekers Banner',     category: 'banner',    rarity: 'common',    dropWeight: 30 },
+  { id: 'banner_bloom',       name: 'Wardens Banner',     category: 'banner',    rarity: 'common',    dropWeight: 30 },
+  { id: 'banner_tide',        name: 'Guardians Banner',   category: 'banner',    rarity: 'common',    dropWeight: 30 },
+  { id: 'banner_gale',        name: 'Keepers Banner',     category: 'banner',    rarity: 'common',    dropWeight: 30 },
+  { id: 'banner_hearth',      name: 'Chroniclers Banner', category: 'banner',    rarity: 'common',    dropWeight: 30 },
   { id: 'statue_fox',         name: 'Stone Fox',          category: 'statue',    rarity: 'uncommon',  dropWeight: 15 },
   { id: 'statue_owl',         name: 'Mossy Owl',          category: 'statue',    rarity: 'uncommon',  dropWeight: 15 },
   { id: 'statue_frog',        name: 'Frog on Lily Pad',   category: 'statue',    rarity: 'uncommon',  dropWeight: 15 },

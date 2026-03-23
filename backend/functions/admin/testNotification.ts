@@ -5,15 +5,12 @@ import { sendToTokens, sendToAll, sendToClan } from '../../shared/notifications'
 import { getTodayISTString } from '../../shared/time';
 import type { User, Clan, DailyConfig } from '../../shared/types';
 import { ClanId } from '../../shared/types';
+import { clanDisplayName } from '../../shared/clanLabels';
 
 type WindowType = 'morning' | 'lunch' | 'final' | 'day_start' | 'capture' | 'asset_expiry';
 
 const VALID_WINDOWS: WindowType[] = ['morning', 'lunch', 'final', 'day_start', 'capture', 'asset_expiry'];
 const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
-
-function clanDisplayName(clanId: ClanId): string {
-  return clanId.charAt(0).toUpperCase() + clanId.slice(1);
-}
 
 async function getTargetTokens(targetUserId?: string): Promise<string[]> {
   if (targetUserId) {

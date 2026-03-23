@@ -1,8 +1,7 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { extractUserId } from '../../shared/auth';
 import { getItem, query, updateItem } from '../../shared/db';
-import { isWithinGeofence } from '../../shared/geo';
-import { verifyQrPayload, verifyPermanentQrPayload } from '../../shared/hmac';
+import { verifyPermanentQrPayload } from '../../shared/hmac';
 import { success, error, ErrorCode } from '../../shared/response';
 import { scanQrSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
@@ -90,7 +89,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.QUIET_MODE, 'The game is currently in quiet mode. No new sessions can be started.', 403);
     }
 
-    const { qrData, gpsLat, gpsLng } = parsed.data;
+    const { qrData } = parsed.data;
     const today = getTodayISTString();
     const isPermanentQr = qrData.v === 2 || qrData.d === 'permanent';
 
@@ -98,48 +97,33 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const isDevBypass = stage === 'dev' && qrData.h === 'dev-bypass';
     const locationId = qrData.l;
 
-    // Step 1+2: Verify QR authenticity — branched by QR version
+    // Step 1+2: Verify QR authenticity — permanent/v2 only
+    if (!isPermanentQr) {
+      return error(ErrorCode.QR_INVALID, 'Invalid QR code version', 400);
+    }
+
     let dailyConfig: DailyConfig | undefined;
 
-    if (isPermanentQr) {
-      // Permanent QR: verify using per-location secret from location-master-config
-      if (!isDevBypass) {
-        const mc = await getItem<LocationMasterConfig>('location-master-config', { locationId });
-        if (!mc?.qrSecret) {
-          return error(ErrorCode.QR_INVALID, 'No permanent QR configured for this location', 400);
-        }
-        if (!verifyPermanentQrPayload(qrData, mc.qrSecret)) {
-          return error(ErrorCode.QR_INVALID, 'Invalid QR code', 400);
-        }
+    // Permanent QR: verify using per-location secret from location-master-config
+    if (!isDevBypass) {
+      const mc = await getItem<LocationMasterConfig>('location-master-config', { locationId });
+      if (!mc?.qrSecret) {
+        return error(ErrorCode.QR_INVALID, 'No permanent QR configured for this location', 400);
       }
-      // Still need daily config for activeLocationIds check
-      dailyConfig = await getItem<DailyConfig>('daily-config', { date: today }) ?? undefined;
-      if (!dailyConfig) {
-        return error(ErrorCode.GAME_INACTIVE, 'No daily config found for today', 400);
-      }
-    } else {
-      // Daily QR (v1): existing validation — date must match today
-      if (qrData.d !== today) {
-        return error(ErrorCode.QR_EXPIRED, 'QR code has expired', 400);
-      }
-      dailyConfig = await getItem<DailyConfig>('daily-config', { date: today }) ?? undefined;
-      if (!dailyConfig) {
-        return error(ErrorCode.GAME_INACTIVE, 'No daily config found for today', 400);
-      }
-      if (!isDevBypass && !verifyQrPayload(qrData, dailyConfig.qrSecret)) {
+      if (!verifyPermanentQrPayload(qrData, mc.qrSecret)) {
         return error(ErrorCode.QR_INVALID, 'Invalid QR code', 400);
       }
+    }
+    // Still need daily config for activeLocationIds check
+    dailyConfig = await getItem<DailyConfig>('daily-config', { date: today }) ?? undefined;
+    if (!dailyConfig) {
+      return error(ErrorCode.GAME_INACTIVE, 'No daily config found for today', 400);
     }
 
     // Step 3: Location exists
     const location = await getItem<Location>('locations', { locationId });
     if (!location) {
       return error(ErrorCode.NOT_FOUND, 'Location not found', 400);
-    }
-
-    // Step 3b: Geofence check (skip in dev bypass)
-    if (!isDevBypass && !isWithinGeofence(gpsLat, gpsLng, location.gpsLat, location.gpsLng, location.geofenceRadius)) {
-      return error(ErrorCode.GPS_OUT_OF_RANGE, 'You must be at the location to scan', 400);
     }
 
     // Step 4: Location in player's assigned set
@@ -151,6 +135,11 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       } else {
         return error(ErrorCode.NOT_ASSIGNED, 'You are not assigned to this location today', 400);
       }
+    }
+
+    // Step 4c: Location must be in today's active location list
+    if (!dailyConfig.activeLocationIds.includes(locationId)) {
+      return error(ErrorCode.GAME_INACTIVE, 'This location is not active today', 403);
     }
 
     // Bridge the two-table problem: fetch location-master-config (best-effort)

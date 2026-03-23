@@ -51,11 +51,11 @@ interface AssetPoolEntry {
 }
 
 const ASSET_POOL: AssetPoolEntry[] = [
-  { id: 'banner_ember',       name: 'Ember Banner',       category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'ember'  },
-  { id: 'banner_bloom',       name: 'Bloom Banner',       category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'bloom'  },
-  { id: 'banner_tide',        name: 'Tide Banner',        category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'tide'   },
-  { id: 'banner_gale',        name: 'Gale Banner',        category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'gale'   },
-  { id: 'banner_hearth',      name: 'Hearth Banner',      category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'hearth' },
+  { id: 'banner_ember',       name: 'Seekers Banner',     category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'ember'  },
+  { id: 'banner_bloom',       name: 'Wardens Banner',     category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'bloom'  },
+  { id: 'banner_tide',        name: 'Guardians Banner',   category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'tide'   },
+  { id: 'banner_gale',        name: 'Keepers Banner',     category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'gale'   },
+  { id: 'banner_hearth',      name: 'Chroniclers Banner', category: AssetCategory.Banner,    rarity: Rarity.Common,    dropWeight: 30, clanLocked: 'hearth' },
   { id: 'statue_fox',         name: 'Stone Fox',          category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
   { id: 'statue_owl',         name: 'Mossy Owl',          category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
   { id: 'statue_frog',        name: 'Frog on Lily Pad',   category: AssetCategory.Statue,    rarity: Rarity.Uncommon,  dropWeight: 15 },
@@ -523,10 +523,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           const isFirstWinToday = newTodayXp === XP_PER_WIN;
           const clanUpdateExpr = isFirstWinToday
             ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
-            : 'SET todayXpTimestamp = :ts ADD todayXp :xp';
+            : 'ADD todayXp :xp';
           const clanUpdateValues = isFirstWinToday
             ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
-            : { ':ts': now, ':xp': XP_PER_WIN };
+            : { ':xp': XP_PER_WIN };
           const updatedClan = await updateItem(
             'clans',
             { clanId },
@@ -580,10 +580,10 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
             const coopIsFirstWin = coopResult.newTodayXp === XP_PER_WIN;
             const coopClanExpr = coopIsFirstWin
               ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
-              : 'SET todayXpTimestamp = :ts ADD todayXp :xp';
+              : 'ADD todayXp :xp';
             const coopClanValues = coopIsFirstWin
               ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
-              : { ':ts': now, ':xp': XP_PER_WIN };
+              : { ':xp': XP_PER_WIN };
             await updateItem(
               'clans',
               { clanId: partnerClanId },

@@ -42,8 +42,6 @@ export const qrPayloadSchema = z.object({
 
 export const scanQrSchema = z.object({
   qrData: qrPayloadSchema,
-  gpsLat: z.number().min(-90).max(90),
-  gpsLng: z.number().min(-180).max(180),
   coopPartnerId: z.string().uuid().nullable().optional(),
 });
 

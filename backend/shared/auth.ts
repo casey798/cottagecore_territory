@@ -32,11 +32,7 @@ export function extractUserId(event: APIGatewayProxyEvent): string {
   const sub = authorizer.sub as string | undefined;
   if (sub) return sub;
 
-  // Fallback: Cognito authorizer format (claims.sub)
-  const claims = authorizer.claims;
-  if (claims?.sub) return claims.sub as string;
-
-  throw new Error('No user ID found in authorization context');
+  throw new Error('Missing user ID in authorizer context');
 }
 
 export function isAdmin(event: APIGatewayProxyEvent): boolean {
@@ -46,11 +42,7 @@ export function isAdmin(event: APIGatewayProxyEvent): boolean {
   // Check Lambda authorizer context
   if (authorizer.isAdmin === 'true') return true;
 
-  // Fallback: Cognito format
-  const claims = authorizer.claims;
-  if (!claims) return false;
-  const groups: string[] = (claims['cognito:groups'] as string || '').split(',').filter(Boolean);
-  return groups.some((g: string) => g.toLowerCase() === 'admin');
+  return false;
 }
 
 export function extractClaims(event: APIGatewayProxyEvent): FirebaseTokenPayload {

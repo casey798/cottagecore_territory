@@ -3,6 +3,7 @@ import { getItem, scan, updateItem, putItem } from '../../shared/db';
 import { getTodayISTString, toISTString } from '../../shared/time';
 import { sendToAll } from '../../shared/notifications';
 import { User, DailyConfig, Clan, ClanId, DailyConfigStatus, CapturedSpace, WsConnection } from '../../shared/types';
+import { clanDisplayName } from '../../shared/clanLabels';
 import { v4 as uuidv4 } from 'uuid';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { addDays } from 'date-fns';
@@ -22,9 +23,14 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     { '#status': 'status' }
   );
 
-  // Step 2: Scan clans table
-  const clansResult = await scan<Clan>('clans');
-  const clans = clansResult.items;
+  // Step 2: Scan clans table (paginated)
+  const clans: Clan[] = [];
+  let clansLastKey: Record<string, unknown> | undefined;
+  do {
+    const result = await scan<Clan>('clans', { exclusiveStartKey: clansLastKey });
+    clans.push(...result.items);
+    clansLastKey = result.lastEvaluatedKey;
+  } while (clansLastKey);
 
   // Step 3: Determine winner with tiebreaker
   let winnerClan: Clan | null = null;
@@ -107,7 +113,7 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
   );
 
   // Step 8: Send capture result push notification
-  const clanName = winnerClan.clanId.charAt(0).toUpperCase() + winnerClan.clanId.slice(1);
+  const clanName = clanDisplayName(winnerClan.clanId);
   const delivered = await sendToAll({
     notification: {
       title: `${clanName} wins!`,
