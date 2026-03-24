@@ -4,6 +4,7 @@ import { getItem } from '../shared/db';
 import { getTodayISTString } from '../shared/time';
 import { success, error, ErrorCode } from '../shared/response';
 import { PlayerAssignment, Location, LocationMasterConfig, PlayerLock, DailyConfig } from '../shared/types';
+import { generatePlayerAssignment } from '../shared/generatePlayerAssignment';
 
 const STAGE = process.env.STAGE || 'dev';
 
@@ -15,7 +16,7 @@ export const handler = async (
     const today = getTodayISTString();
     console.log(`[getTodayLocations] userId=${userId}, today=${today}, stage=${STAGE}`);
 
-    const assignment = await getItem<PlayerAssignment>('player-assignments', {
+    let assignment = await getItem<PlayerAssignment>('player-assignments', {
       dateUserId: `${today}#${userId}`,
     });
     console.log(`[getTodayLocations] assignment:`, assignment ? `found ${assignment.assignedLocationIds.length} locations` : 'NOT FOUND');
@@ -27,7 +28,7 @@ export const handler = async (
       : null;
 
     let locationIds: string[];
-    const coopLocationIds = new Set(assignment?.coopLocationIds ?? []);
+    let coopLocationIds = new Set(assignment?.coopLocationIds ?? []);
 
     if (assignment) {
       // Filter out locations that admin removed from today's active pool
@@ -45,7 +46,18 @@ export const handler = async (
         return success({ locations: [] });
       }
     } else {
-      return success({ locations: [] });
+      // Lazy-create assignment for players who signed in after the 8 AM bulk assignment
+      try {
+        assignment = await generatePlayerAssignment(userId, today);
+        console.log('[getTodayLocations] Lazy-created assignment for user', userId);
+        coopLocationIds = new Set(assignment.coopLocationIds ?? []);
+        locationIds = activePool
+          ? assignment.assignedLocationIds.filter((id) => activePool.has(id))
+          : assignment.assignedLocationIds;
+      } catch (lazyErr) {
+        console.warn('[getTodayLocations] No active game day or assignment failed:', lazyErr);
+        return success({ locations: [], note: 'No active game day' });
+      }
     }
 
     const locations = await Promise.all(

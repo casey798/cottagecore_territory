@@ -7,6 +7,7 @@ import { scanQrSchema } from '../../shared/schemas';
 import { getTodayISTString } from '../../shared/time';
 import { isQuietModeActive } from '../../shared/quietMode';
 import { MINIGAME_POOL } from '../../shared/minigames';
+import { generatePlayerAssignment } from '../../shared/generatePlayerAssignment';
 import {
   COOP_MINIGAME_IDS,
   DailyConfig,
@@ -128,10 +129,26 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
     // Step 4: Location in player's assigned set
     const dateUserId = `${today}#${userId}`;
-    const assignment = await getItem<PlayerAssignment>('player-assignments', { dateUserId });
-    if (!assignment || !assignment.assignedLocationIds.includes(locationId)) {
+    let assignment = await getItem<PlayerAssignment>('player-assignments', { dateUserId });
+    if (!assignment) {
       if (isDevBypass && dailyConfig.activeLocationIds.includes(locationId)) {
         console.log(`[scanQR] Dev bypass: no assignment but location ${locationId} is in daily-config`);
+      } else {
+        // Lazy-create for players who signed in after the 8 AM bulk assignment
+        try {
+          assignment = await generatePlayerAssignment(userId, today);
+          console.log('[scanQR] Lazy-created assignment for user', userId);
+        } catch (lazyErr) {
+          console.error('[scanQR] Failed to lazy-create assignment:', lazyErr);
+          return error(ErrorCode.GAME_INACTIVE, 'No active game day found', 400);
+        }
+        if (!assignment.assignedLocationIds.includes(locationId)) {
+          return error(ErrorCode.NOT_ASSIGNED, 'You are not assigned to this location today', 400);
+        }
+      }
+    } else if (!assignment.assignedLocationIds.includes(locationId)) {
+      if (isDevBypass && dailyConfig.activeLocationIds.includes(locationId)) {
+        console.log(`[scanQR] Dev bypass: location ${locationId} not in assignment but in daily-config`);
       } else {
         return error(ErrorCode.NOT_ASSIGNED, 'You are not assigned to this location today', 400);
       }
