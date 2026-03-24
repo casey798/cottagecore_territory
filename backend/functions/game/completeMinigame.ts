@@ -522,8 +522,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           // First win of the day: todayXp went from 0 → 25, so increment todayParticipants
           const isFirstWinToday = newTodayXp === XP_PER_WIN;
           const clanUpdateExpr = isFirstWinToday
-            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
-            : 'ADD todayXp :xp';
+            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, seasonXp :xp, todayParticipants :one'
+            : 'ADD todayXp :xp, seasonXp :xp';
           const clanUpdateValues = isFirstWinToday
             ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
             : { ':xp': XP_PER_WIN };
@@ -588,8 +588,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         if (partnerClanId && coopResult.xpActuallyAwarded) {
           const coopIsFirstWin = coopResult.newTodayXp === XP_PER_WIN;
           const coopClanExpr = coopIsFirstWin
-            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
-            : 'ADD todayXp :xp';
+            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, seasonXp :xp, todayParticipants :one'
+            : 'ADD todayXp :xp, seasonXp :xp';
           const coopClanValues = coopIsFirstWin
             ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
             : { ':xp': XP_PER_WIN };

@@ -19,12 +19,21 @@ export const handler = async (
 
     const { clan } = parsed.data;
 
-    await updateItem(
-      'users',
-      { userId },
-      'SET clan = :clan',
-      { ':clan': clan }
-    );
+    try {
+      await updateItem(
+        'users',
+        { userId },
+        'SET clan = :clan',
+        { ':clan': clan, ':empty': '' },
+        undefined,
+        'attribute_not_exists(clan) OR clan = :empty',
+      );
+    } catch (err: unknown) {
+      if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
+        return error(ErrorCode.FORBIDDEN, 'Clan choice is permanent for the season', 403);
+      }
+      throw err;
+    }
 
     return success({ clan });
   } catch (err) {
