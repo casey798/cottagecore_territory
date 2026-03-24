@@ -1,14 +1,15 @@
 import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { extractUserId } from '../../shared/auth';
-import { updateItem, query, deleteItem } from '../../shared/db';
+import { getItem, updateItem, query, deleteItem } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
 import { getTodayISTString } from '../../shared/time';
-import { GameSession } from '../../shared/types';
+import { GameSession, User, Clan } from '../../shared/types';
+import { generatePlayerAssignment } from '../../shared/generatePlayerAssignment';
 
 /**
  * DEV ONLY — full reset of a player's daily game state:
- *   1. todayXp → 0 (preserves seasonXp, totalWins, streak, clan)
- *   2. Delete today's player-assignments for this user
+ *   1. Read user's current todayXp, then zero it and deduct from clan
+ *   2. Delete today's player-assignments, then regenerate via weighted algorithm
  *   3. Delete today's game-sessions for this user
  *   4. Delete today's player-locks for this user
  *
@@ -26,7 +27,14 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     const userId = body.userId || extractUserId(event);
     const today = getTodayISTString();
 
-    // 1. Reset user todayXp to 0 (leave everything else intact)
+    // 1a. Read user's current todayXp and clan before zeroing
+    const user = await getItem<User>('users', { userId });
+    if (!user) {
+      return error(ErrorCode.NOT_FOUND, 'User not found', 404);
+    }
+    const xpToDeduct = user.todayXp || 0;
+
+    // 1b. Reset user todayXp to 0 (leave everything else intact)
     await updateItem(
       'users',
       { userId },
@@ -34,9 +42,45 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       { ':zero': 0 },
     );
 
-    // 2. Delete today's player-assignment
+    // 1c. Deduct the player's XP contribution from their clan
+    if (xpToDeduct > 0) {
+      const clan = await getItem<Clan>('clans', { clanId: user.clan });
+      const currentClanXp = clan?.todayXp ?? 0;
+      const newClanXp = Math.max(0, currentClanXp - xpToDeduct);
+
+      if (newClanXp === 0) {
+        // Clan XP zeroed out — clear timestamp and participants too
+        await updateItem(
+          'clans',
+          { clanId: user.clan },
+          'SET todayXp = :zero, todayParticipants = :zero REMOVE todayXpTimestamp',
+          { ':zero': 0 },
+        );
+      } else {
+        await updateItem(
+          'clans',
+          { clanId: user.clan },
+          'SET todayXp = :newXp',
+          { ':newXp': newClanXp },
+        );
+      }
+    }
+
+    // 2a. Delete today's player-assignment
     const dateUserId = `${today}#${userId}`;
     await deleteItem('player-assignments', { dateUserId });
+
+    // 2b. Regenerate assignment using weighted algorithm
+    let assignmentRegenerated = false;
+    let assignmentWarning: string | undefined;
+    try {
+      await generatePlayerAssignment(userId, today);
+      assignmentRegenerated = true;
+    } catch (regenErr) {
+      const msg = regenErr instanceof Error ? regenErr.message : String(regenErr);
+      assignmentWarning = `Assignment regeneration failed: ${msg}`;
+      console.warn(`[resetPlayerState] ${assignmentWarning}`);
+    }
 
     // 3. Delete today's game sessions
     const { items: todaySessions } = await query<GameSession>(
@@ -62,7 +106,8 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
     }
 
     console.log(
-      `[resetPlayerState] Reset user ${userId}: todayXp=0, deleted assignment, ${todaySessions.length} sessions, ${locationIds.size} locks`,
+      `[resetPlayerState] Reset user ${userId}: todayXp=0, xpDeducted=${xpToDeduct} from clan ${user.clan}, ` +
+      `deleted assignment (regen=${assignmentRegenerated}), ${todaySessions.length} sessions, ${locationIds.size} locks`,
     );
 
     return success({
@@ -70,6 +115,9 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       sessionsDeleted: todaySessions.length,
       locksCleared: locationIds.size,
       assignmentCleared: true,
+      xpDeducted: xpToDeduct,
+      assignmentRegenerated,
+      ...(assignmentWarning && { assignmentWarning }),
     });
   } catch (err) {
     console.error('resetPlayerState error:', err);

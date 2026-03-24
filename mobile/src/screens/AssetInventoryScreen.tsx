@@ -81,9 +81,17 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+// FIX 1 — Timestamp-aware expiry check (expired flag may lag until next backend sync)
+function isActuallyExpired(asset: PlayerAsset): boolean {
+  if (asset.permanent) return false;
+  if (asset.expired) return true;
+  if (asset.expiresAt) return new Date(asset.expiresAt).getTime() <= Date.now();
+  return false;
+}
+
 // ISSUE 8 — Filter predicate for non-expired assets
 function isAssetActive(asset: PlayerAsset): boolean {
-  return !asset.expired;
+  return !isActuallyExpired(asset);
 }
 
 // ── Countdown label component (updates every 60s) ──────────────────
@@ -181,7 +189,11 @@ type AssetInventoryRoute = RouteProp<MainModalParamList, 'AssetInventory'>;
 export default function AssetInventoryScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<MainModalParamList>>();
   const route = useRoute<AssetInventoryRoute>();
-  const fromSpaceId = (route.params as { fromSpaceId?: string } | undefined)?.fromSpaceId;
+  const fromSpaceId = route.params?.fromSpaceId;
+  const fromSpaceName = route.params?.fromSpaceName;
+  const fromSpaceClan = route.params?.fromSpaceClan;
+  const fromSpaceGridCells = route.params?.fromSpaceGridCells;
+  const fromSpacePolygonPoints = route.params?.fromSpacePolygonPoints;
   const playerClan = useAuthStore((s) => s.clan);
 
   const [assets, setAssets] = useState<PlayerAsset[]>([]);
@@ -273,38 +285,29 @@ export default function AssetInventoryScreen() {
     setSelectedItem(item);
   }, []);
 
-  // ISSUE 7 — Fixed "Place Item" flow
   const handlePlaceItem = useCallback(() => {
     if (!selectedItem) return;
+    const assetId = selectedItem.userAssetId;
     setSelectedItem(null);
 
-    if (fromSpaceId) {
-      // Came from SpaceDecorationScreen — check if the previous route is SpaceDecoration
-      const parentState = navigation.getParent()?.getState();
-      const routes = parentState?.routes ?? [];
-      const prevRoute = routes.length >= 2 ? routes[routes.length - 2] : undefined;
-      const isFromDecoration =
-        prevRoute?.name === 'SpaceDecoration' &&
-        (prevRoute.params as Record<string, unknown> | undefined)?.spaceId === fromSpaceId;
-
-      if (isFromDecoration) {
-        // SpaceDecorationScreen is on the stack — go back; it will pick up userAssetId via focus
-        navigation.goBack();
-      } else {
-        // Not from SpaceDecoration — navigate to map in selectSpace mode
-        navigation.navigate('Map', {
-          mode: 'selectSpace',
-          userAssetId: selectedItem.userAssetId,
-        } as never);
-      }
+    if (fromSpaceId && fromSpaceName && fromSpaceClan && fromSpaceGridCells) {
+      // Came from SpaceDecorationScreen via "Browse All" — navigate directly back with asset selected
+      navigation.navigate('SpaceDecoration', {
+        spaceId: fromSpaceId,
+        spaceName: fromSpaceName,
+        clan: fromSpaceClan,
+        gridCells: fromSpaceGridCells,
+        polygonPoints: fromSpacePolygonPoints,
+        userAssetId: assetId,
+      });
     } else {
-      // No space context — navigate to map in selectSpace mode
+      // No space context — go to map in selectSpace mode
       navigation.navigate('Map', {
         mode: 'selectSpace',
-        userAssetId: selectedItem.userAssetId,
-      } as never);
+        userAssetId: assetId,
+      });
     }
-  }, [selectedItem, navigation, fromSpaceId]);
+  }, [selectedItem, navigation, fromSpaceId, fromSpaceName, fromSpaceClan, fromSpaceGridCells, fromSpacePolygonPoints]);
 
   const renderItem = useCallback(
     ({ item }: { item: PlayerAsset }) => (
@@ -471,6 +474,10 @@ export default function AssetInventoryScreen() {
                   <Text style={styles.modalPlacedText}>
                     {'\u2713'} Already placed
                   </Text>
+                ) : isActuallyExpired(selectedItem) ? (
+                  <Text style={styles.modalExpiredText}>
+                    {'\u2715'} Expired
+                  </Text>
                 ) : (
                   <Pressable style={styles.placeButton} onPress={handlePlaceItem}>
                     <Text style={styles.placeButtonText}>Place Item</Text>
@@ -546,11 +553,13 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: PALETTE.mutedRose,
+    backgroundColor: PALETTE.errorRed + 'CC',
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
     marginBottom: 8,
+    borderWidth: 1.5,
+    borderColor: PALETTE.errorRed,
   },
   refreshErrorText: {
     fontSize: 12,
@@ -770,6 +779,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.softGreen,
+    marginTop: 16,
+  },
+  modalExpiredText: {
+    fontSize: 15,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.stoneGrey,
     marginTop: 16,
   },
   placeButton: {

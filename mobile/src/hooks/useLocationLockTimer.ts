@@ -4,7 +4,10 @@ export interface LockTimerResult {
   isLocked: boolean;
   remainingSeconds: number;
   formattedTime: string;
+  progress: number;
 }
+
+const LOCK_TOTAL_SECONDS = 3600; // mirrors backend LOCK_DURATION_MS = 60 * 60 * 1000
 
 function computeRemaining(lockedUntil: string): number {
   const diff = new Date(lockedUntil).getTime() - Date.now();
@@ -52,9 +55,12 @@ export function useLocationLockTimer(lockedUntil: string | null | undefined): Lo
     };
   }, [lockedUntil]);
 
+  const progress = Math.max(0, Math.min(1, remainingSeconds / LOCK_TOTAL_SECONDS));
+
   return {
     isLocked: remainingSeconds > 0,
     remainingSeconds,
     formattedTime: formatTime(remainingSeconds),
+    progress,
   };
 }

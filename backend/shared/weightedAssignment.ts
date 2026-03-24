@@ -199,6 +199,25 @@ export function assignLocationsWithSpread(
     }
   }
 
+  // Stage 4: Backfill — all three adjacency-aware stages exhausted but count
+  // not yet reached and the original candidate pool has enough entries.
+  // Pick highest-scoring unselected candidates with adjacency fully relaxed.
+  if (selected.length < count) {
+    const selectedSet4 = new Set(selected);
+    const backfill = candidates
+      .filter((c) => !selectedSet4.has(c.locationId))
+      .sort((a, b) => b.score - a.score);
+
+    while (selected.length < count && backfill.length > 0) {
+      const picked = backfill.shift()!;
+      console.warn(
+        `[assignLocationsWithSpread] Backfill: added locationId ${picked.locationId}` +
+        ` to meet count target ${count} (adjacency fully relaxed)`,
+      );
+      selected.push(picked.locationId);
+    }
+  }
+
   return selected;
 }
 

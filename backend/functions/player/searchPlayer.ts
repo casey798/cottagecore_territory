@@ -4,8 +4,9 @@ import { query, scan } from '../../shared/db';
 import { success, error, ErrorCode } from '../../shared/response';
 import { User, PlayerSearchResult } from '../../shared/types';
 
-const PLAYER_CODE_PATTERN = /^grv-\d{4,5}$/i;
-const MAX_RESULTS = 5;
+// Matches GRV-XXXX / GRV-XXXXX codes, or any 8-character alphanumeric string (bare player code)
+const PLAYER_CODE_PATTERN = /^(grv-\d{4,5}|[a-z0-9]{8})$/i;
+const MAX_RESULTS = 10;
 
 export const handler = async (
   event: APIGatewayProxyEvent
@@ -21,16 +22,17 @@ export const handler = async (
     let players: PlayerSearchResult[] = [];
 
     if (PLAYER_CODE_PATTERN.test(q)) {
-      // Exact playerCode lookup via GSI
+      // Exact playerCode lookup via PlayerCodeIndex GSI — O(1), no scan
       const code = q.toLowerCase();
       const { items } = await query<User>(
         'users',
         'playerCode = :code',
         { ':code': code },
-        { indexName: 'PlayerCodeIndex', limit: 1 },
+        { indexName: 'PlayerCodeIndex', limit: MAX_RESULTS },
       );
       players = items
         .filter((u) => u.userId !== userId && u.playerCode)
+        .slice(0, MAX_RESULTS)
         .map((u) => ({
           userId: u.userId,
           displayName: u.displayName,
@@ -38,15 +40,15 @@ export const handler = async (
           clan: u.clan,
         }));
     } else {
-      // Display name search — scan without server-side filter (contains is case-sensitive)
-      const searchLower = q.toLowerCase();
+      // Display name search — server-side FilterExpression with Limit caps scan cost
       const { items } = await scan<User>('users', {
+        filterExpression: 'contains(displayName, :q)',
+        expressionValues: { ':q': q },
         limit: 50,
       });
 
-      // All filtering done client-side for case-insensitive matching
       players = items
-        .filter((u) => u.userId !== userId && u.playerCode && u.displayName.toLowerCase().includes(searchLower))
+        .filter((u) => u.userId !== userId && u.playerCode)
         .slice(0, MAX_RESULTS)
         .map((u) => ({
           userId: u.userId,

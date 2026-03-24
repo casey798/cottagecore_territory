@@ -230,12 +230,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       (session as unknown as Record<string, unknown>).puzzleSolution = {
         rounds: bsGame.rounds,
       };
-      // Strip correctAnswer from client payload — server validates by index
-      // against stored puzzleSolution, so the client never sees the answers.
-      const clientRounds = bsGame.rounds.map(({ correctAnswer: _ca, ...rest }) => rest);
+      // correctAnswer is included in the client payload so the game component
+      // can show immediate correct/wrong feedback. Security is enforced
+      // server-side: completeMinigame validates the submitted answer indices
+      // against the stored puzzleSolution, not the client payload.
       puzzleData = {
         type: minigameId,
-        rounds: clientRounds,
+        rounds: bsGame.rounds,
       };
     }
 

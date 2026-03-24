@@ -2,6 +2,8 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Dimensions,
   ImageBackground,
+  Modal,
+  Pressable,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -241,10 +243,13 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
 
   const startTimeRef = useRef(Date.now());
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
   const completedRef = useRef(false);
   const pendingResultRef = useRef<MinigameResult | null>(null);
   const userMappingsRef = useRef(userMappings);
   const onCompleteRef = useRef(onComplete);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   useEffect(() => { userMappingsRef.current = userMappings; }, [userMappings]);
   useEffect(() => { onCompleteRef.current = onComplete; }, [onComplete]);
@@ -255,6 +260,7 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
   useEffect(() => {
     if (gameOver) return;
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, gameDuration - elapsed);
       setTimeLeft(remaining);
@@ -296,6 +302,21 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
       onCompleteRef.current(pendingResultRef.current);
       pendingResultRef.current = null;
     }
+  }, []);
+
+  // ── How to Play ─────────────────────────────────────────────────
+
+  const openHowToPlay = useCallback(() => {
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, []);
+
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
   }, []);
 
   // ── Find next unsolved letter ───────────────────────────────────
@@ -460,6 +481,11 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
 
   return (
     <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
+      {/* Help button */}
+      <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+        <Text style={styles.helpBtnText}>?</Text>
+      </TouchableOpacity>
+
       {/* P1 Zone — top (Vowels) */}
       <View style={[styles.playerZone, { backgroundColor: withAlpha(clanColor(p1Clan), 0.1) }]}>
         <Text style={styles.zoneLabel}>Vowels</Text>
@@ -505,6 +531,24 @@ export default function CipherStonesCoopGame(props: MinigamePlayProps) {
           revealQuote={decodedQuote}
         />
       )}
+
+      {/* How to Play modal */}
+      <Modal animationType="slide" transparent visible={isHowToPlayVisible} onRequestClose={closeHowToPlay}>
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Cipher Stones (Co-op)</Text>
+            <Text style={styles.modalRule}>{'\u2022'} A famous quote is encrypted with a substitution cipher.</Text>
+            <Text style={styles.modalRule}>{'\u2022'} Player 1 controls vowel substitutions. Player 2 controls consonant substitutions.</Text>
+            <Text style={styles.modalRule}>{'\u2022'} Tap a cipher letter in your zone, then tap the real letter you think it maps to.</Text>
+            <Text style={styles.modalRule}>{'\u2022'} Both players work on the same shared cipher board — your corrections appear for your partner instantly.</Text>
+            <Text style={styles.modalRule}>{'\u2022'} Decode the entire quote before time runs out to win.</Text>
+            <Text style={styles.modalTip}>Tip: Reveal hints (up to 3) if you{'\u2019'}re stuck — but there{'\u2019'}s a cooldown between them.</Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ImageBackground>
   );
 }
@@ -676,5 +720,73 @@ const styles = StyleSheet.create({
     color: PALETTE.darkBrown,
     textAlign: 'center',
     lineHeight: 26,
+  },
+
+  // Help button (absolute positioned)
+  helpBtn: {
+    position: 'absolute',
+    top: 8,
+    right: 8,
+    zIndex: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+  },
+
+  // How to Play modal
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

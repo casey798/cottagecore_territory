@@ -7,6 +7,7 @@ import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { useGameStore } from '@/store/useGameStore';
 import { useAuthStore } from '@/store/useAuthStore';
+import { useErrorStore } from '@/store/useErrorStore';
 import { generateCompletionHash, generateClientCompletionHash } from '@/utils/hmac';
 import * as gameApi from '@/api/game';
 import { GameResult, ChestDrop } from '@/types';
@@ -181,6 +182,7 @@ export default function MinigamePlayScreen() {
   const userId = useAuthStore((s) => s.userId) || '';
   const todayXp = useGameStore((s) => s.todayXp);
   const recordWin = useGameStore((s) => s.recordWin);
+  const showError = useErrorStore((s) => s.showError);
   const [submitting, setSubmitting] = useState(false);
   const hasCompletedRef = useRef(false);
   const startTimeRef = useRef(Date.now());
@@ -228,7 +230,7 @@ export default function MinigamePlayScreen() {
       // For losses/timeouts: fire-and-forget, navigate immediately
       if (finalResult !== 'win') {
         gameApi.completeMinigame(sessionId, finalResult, completionHash, timeTaken, data.solutionData)
-          .catch((err) => console.warn('Loss submission failed (non-blocking):', err));
+          .catch(() => showError('Result could not be saved. Check your connection.', 'SUBMIT_FAILED'));
         navigation.replace('Result', fallbackParams);
         return;
       }
@@ -264,14 +266,14 @@ export default function MinigamePlayScreen() {
             practiceMode: isPractice,
           };
         } else {
-          console.warn('Win submission rejected:', result.error?.message);
+          showError('Result could not be saved. Check your connection.', 'SUBMIT_FAILED');
         }
-      } catch (err) {
-        console.warn('Win submission failed (network):', err);
+      } catch {
+        showError('Result could not be saved. Check your connection.', 'SUBMIT_FAILED');
       }
       navigation.replace('Result', resultParams);
     },
-    [sessionId, userId, navigation, recordWin, salt, todayXp, locationId, locationName, minigameId],
+    [sessionId, userId, navigation, recordWin, salt, todayXp, locationId, locationName, minigameId, showError],
   );
 
   const handleMinigameComplete = useCallback(

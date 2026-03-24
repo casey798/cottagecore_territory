@@ -570,77 +570,102 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
           };
         }
 
-        // Co-op: repeat XP/streak for partner + independent chest roll + cross-clan XP
-        if (session.coopPartnerId && session.coopPartnerId !== 'dev-partner') {
-          const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
-          const partnerClanId = coopResult.clan;
-
-          // Credit partner's own clan (cross-clan support)
-          if (partnerClanId && coopResult.xpActuallyAwarded) {
-            const coopIsFirstWin = coopResult.newTodayXp === XP_PER_WIN;
-            const coopClanExpr = coopIsFirstWin
-              ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
-              : 'ADD todayXp :xp';
-            const coopClanValues = coopIsFirstWin
-              ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
-              : { ':xp': XP_PER_WIN };
-            await updateItem(
-              'clans',
-              { clanId: partnerClanId },
-              coopClanExpr,
-              coopClanValues
-            );
-          }
-
-          // Independent chest roll for partner
-          if (coopResult.xpActuallyAwarded) {
-            const partnerPickedAsset = pickAssetForClan(partnerClanId, session.minigameId, true);
-            const partnerUserAssetId = crypto.randomUUID();
-            const partnerPlayerAsset: PlayerAsset = {
-              userAssetId: partnerUserAssetId,
-              userId: session.coopPartnerId,
-              assetId: partnerPickedAsset.id,
-              obtainedAt: now,
-              obtainedFrom: AssetObtainedFrom.Chest,
-              locationId: session.locationId,
-              placed: false,
-              expiresAt: getMidnightISTAsISO(),
-              expired: false,
-              permanent: false,
-            };
-            await putItem('player-assets', partnerPlayerAsset as unknown as Record<string, unknown>);
-
-            partnerChestDrop = {
-              dropped: true,
-              asset: {
-                assetId: partnerPickedAsset.id,
-                name: partnerPickedAsset.name,
-                category: partnerPickedAsset.category,
-                rarity: partnerPickedAsset.rarity,
-                imageKey: partnerPickedAsset.id,
-              },
-            };
-          }
-
-          // Fire-and-forget push notification to partner about their chest
-          if (partnerChestDrop.dropped && session.coopPartnerId) {
-            sendToPlayer(session.coopPartnerId, {
-              notification: {
-                title: 'Co-op reward!',
-                body: 'Your partner won — you earned XP and a chest!',
-              },
-              data: {
-                type: 'PARTNER_CHEST',
-              },
-            }).catch(console.error);
-          }
-        }
       } else {
         // Already earned XP here — just get current user XP for response
         const user = await getItem<User>('users', { userId });
         newTodayXp = user?.todayXp ?? 0;
         clanId = user?.clan ?? '';
         capReached = newTodayXp >= DAILY_XP_CAP;
+      }
+
+      // Co-op: partner award runs independently of shouldAwardXp — partner eligibility
+      // is determined entirely by their own daily cap check inside awardXpAndStreak.
+      if (session.coopPartnerId && session.coopPartnerId !== 'dev-partner') {
+        const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
+        const partnerClanId = coopResult.clan;
+
+        // Credit partner's own clan (cross-clan support)
+        if (partnerClanId && coopResult.xpActuallyAwarded) {
+          const coopIsFirstWin = coopResult.newTodayXp === XP_PER_WIN;
+          const coopClanExpr = coopIsFirstWin
+            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, todayParticipants :one'
+            : 'ADD todayXp :xp';
+          const coopClanValues = coopIsFirstWin
+            ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
+            : { ':xp': XP_PER_WIN };
+          await updateItem(
+            'clans',
+            { clanId: partnerClanId },
+            coopClanExpr,
+            coopClanValues
+          );
+        }
+
+        // Independent chest roll for partner
+        let partnerChestAssetId: string | null = null;
+        if (coopResult.xpActuallyAwarded) {
+          const partnerPickedAsset = pickAssetForClan(partnerClanId, session.minigameId, true);
+          const partnerUserAssetId = crypto.randomUUID();
+          partnerChestAssetId = partnerPickedAsset.id;
+          const partnerPlayerAsset: PlayerAsset = {
+            userAssetId: partnerUserAssetId,
+            userId: session.coopPartnerId,
+            assetId: partnerPickedAsset.id,
+            obtainedAt: now,
+            obtainedFrom: AssetObtainedFrom.Chest,
+            locationId: session.locationId,
+            placed: false,
+            expiresAt: getMidnightISTAsISO(),
+            expired: false,
+            permanent: false,
+          };
+          await putItem('player-assets', partnerPlayerAsset as unknown as Record<string, unknown>);
+
+          partnerChestDrop = {
+            dropped: true,
+            asset: {
+              assetId: partnerPickedAsset.id,
+              name: partnerPickedAsset.name,
+              category: partnerPickedAsset.category,
+              rarity: partnerPickedAsset.rarity,
+              imageKey: partnerPickedAsset.id,
+            },
+          };
+        }
+
+        // Fire-and-forget push notification to partner about their chest
+        if (partnerChestDrop.dropped) {
+          sendToPlayer(session.coopPartnerId, {
+            notification: {
+              title: 'Co-op reward!',
+              body: 'Your partner won — you earned XP and a chest!',
+            },
+            data: {
+              type: 'PARTNER_CHEST',
+            },
+          }).catch(console.error);
+        }
+
+        // Write a session record for the partner so their win history, alreadyWon
+        // checks, and analytics all reflect this co-op win.
+        const partnerSessionId = crypto.randomUUID();
+        const partnerSession: GameSession = {
+          sessionId: partnerSessionId,
+          userId: session.coopPartnerId,
+          locationId: session.locationId,
+          minigameId: session.minigameId,
+          date: today,
+          startedAt: session.startedAt,
+          completedAt: now,
+          result: GameResult.Win,
+          xpEarned: coopResult.xpActuallyAwarded ? XP_PER_WIN : 0,
+          chestDropped: partnerChestDrop.dropped,
+          chestAssetId: partnerChestAssetId,
+          completionHash,
+          coopPartnerId: session.userId,
+          partnerIsGuest: session.partnerIsGuest,
+        };
+        await putItem('game-sessions', partnerSession as unknown as Record<string, unknown>);
       }
 
       // Update session (store solutionData for analytics)
@@ -695,7 +720,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       await putItem('player-locks', playerLock as unknown as Record<string, unknown>);
 
       // 1b. Lock partner only if they are NOT a guest (i.e. location was in their assignment)
-      if (session.coopPartnerId && session.coopPartnerId !== 'dev-partner' && session.partnerIsGuest === false) {
+      if (session.coopPartnerId && session.coopPartnerId !== 'dev-partner' && !session.partnerIsGuest) {
         const partnerLock: PlayerLock = {
           dateUserLocation: `${today}#${session.coopPartnerId}#${session.locationId}`,
           lockedAt: now,

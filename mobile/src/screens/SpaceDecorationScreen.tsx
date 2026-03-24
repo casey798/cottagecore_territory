@@ -21,6 +21,7 @@ import {
   Skia,
 } from '@shopify/react-native-skia';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -95,7 +96,7 @@ function lookupAssetGrid(assetId: string): { gridW: number; gridH: number } {
 }
 
 export default function SpaceDecorationScreen() {
-  const navigation = useNavigation();
+  const navigation = useNavigation<NativeStackNavigationProp<MainModalParamList>>();
   const route = useRoute<Route>();
   const { spaceId, spaceName, clan, gridCells, polygonPoints, userAssetId } = route.params;
 
@@ -286,8 +287,20 @@ export default function SpaceDecorationScreen() {
 
     setSaving(false);
     showToast('success', 'Saved!');
-    timeoutRef.current = setTimeout(() => navigation.goBack(), 600);
+    // FIX 5 — Navigate back to Map with cleared params so selectSpace banner disappears
+    timeoutRef.current = setTimeout(() => navigation.navigate('Map', { mode: undefined, userAssetId: undefined }), 600);
   }, [placedAnchors, spaceId, allAssets, navigation, showToast]);
+
+  // FIX 6 — Browse All: navigate to AssetInventory with fromSpace* params for direct return
+  const handleBrowseAll = useCallback(() => {
+    navigation.navigate('AssetInventory', {
+      fromSpaceId: spaceId,
+      fromSpaceName: spaceName,
+      fromSpaceClan: clan as ClanId,
+      fromSpaceGridCells: gridCells,
+      fromSpacePolygonPoints: polygonPoints,
+    });
+  }, [navigation, spaceId, spaceName, clan, gridCells, polygonPoints]);
 
   // Unplaced assets: not expired, not placed on the server, and not placed locally
   const placedAssetIds = useMemo(() => {
@@ -844,7 +857,12 @@ export default function SpaceDecorationScreen() {
 
         {/* Inventory tray */}
         <View style={styles.trayContainer}>
-          <Text style={styles.trayTitle}>Your Assets</Text>
+          <View style={styles.trayHeader}>
+            <Text style={styles.trayTitle}>Your Assets</Text>
+            <Pressable onPress={handleBrowseAll} hitSlop={8}>
+              <Text style={[styles.browseAllText, { color: clanColor }]}>Browse All</Text>
+            </Pressable>
+          </View>
           {!assetsLoaded ? (
             <Text style={styles.trayLoading}>Loading assets...</Text>
           ) : unplacedAssets.length === 0 ? (
@@ -1012,12 +1030,21 @@ const styles = StyleSheet.create({
   trayContainer: {
     flex: 1,
   },
+  trayHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    marginBottom: 4,
+  },
   trayTitle: {
     fontSize: 11,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.parchment,
-    paddingHorizontal: 16,
-    marginBottom: 4,
+  },
+  browseAllText: {
+    fontSize: 11,
+    fontFamily: FONTS.bodySemiBold,
   },
   trayLoading: {
     fontSize: 12,

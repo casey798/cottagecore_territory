@@ -10,6 +10,7 @@ import {
   ActivityIndicator,
   Pressable,
   Share,
+  TouchableOpacity,
 } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -48,7 +49,7 @@ const MILESTONES: StreakMilestone[] = [
 
 export default function PlayerProfileScreen() {
   const navigation = useNavigation<Nav>();
-  const selectedPresetId = useAuthStore((s) => s.selectedPresetId);
+  const selectedPresetId = useAuthStore((s) => s.selectedPresetId ?? s.avatarConfig?.characterPreset);
   const [profile, setProfile] = useState<PlayerProfile | null>(null);
   const [assetCount, setAssetCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -150,7 +151,7 @@ export default function PlayerProfileScreen() {
           />
         )}
         {(() => {
-          const preset = selectedPresetId
+          const preset = selectedPresetId != null
             ? getPresetById(selectedPresetId)
             : undefined;
           if (preset) {
@@ -168,24 +169,25 @@ export default function PlayerProfileScreen() {
                     resizeMode="contain"
                   />
                 </ImageBackground>
-                <Pressable
-                  style={styles.changeCharBtn}
+                <TouchableOpacity
+                  style={styles.changeAvatarBtn}
                   onPress={() => navigation.navigate('CharacterCreation')}
                 >
-                  <Text style={styles.changeCharText}>Change Character</Text>
-                </Pressable>
+                  <Text style={styles.changeAvatarBtnText}>Change Character</Text>
+                </TouchableOpacity>
               </>
             );
           }
           return (
-            <>
-              <View style={[styles.avatarRing, { borderColor: clanColor }]}>
-                <View style={[styles.avatarCircle, { backgroundColor: clanColor }]}>
-                  <Text style={styles.avatarSilhouette}>{'\u{1F464}'}</Text>
-                </View>
-              </View>
-              <Text style={styles.avatarHint}>Avatar coming soon</Text>
-            </>
+            <View style={styles.avatarSection}>
+              <View style={styles.avatarFramePlaceholder} />
+              <TouchableOpacity
+                style={styles.changeAvatarBtn}
+                onPress={() => navigation.navigate('CharacterCreation')}
+              >
+                <Text style={styles.changeAvatarBtnText}>Choose Your Avatar</Text>
+              </TouchableOpacity>
+            </View>
           );
         })()}
       </View>
@@ -401,6 +403,49 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodyRegular,
     color: PALETTE.stoneGrey,
     marginTop: 6,
+  },
+  avatarPlaceholder: {
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    marginTop: -20,
+    backgroundColor: PALETTE.parchment,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 8,
+  },
+  avatarPlaceholderText: {
+    fontSize: 12,
+    fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.darkBrown,
+    textAlign: 'center',
+  },
+  avatarSection: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  avatarFramePlaceholder: {
+    width: 240,
+    height: 280,
+    backgroundColor: '#E8D5A3',
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#8B6914',
+    marginBottom: 10,
+  },
+  changeAvatarBtn: {
+    width: 240,
+    height: 44,
+    backgroundColor: '#A0783C',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  changeAvatarBtnText: {
+    fontFamily: 'Nunito',
+    fontSize: 15,
+    color: '#FFF8EC',
+    fontWeight: '600',
   },
 
   // XP

@@ -16,6 +16,7 @@ import { FONTS } from '@/constants/fonts';
 import { useAuthStore } from '@/store/useAuthStore';
 import { submitSpaceSentiment, submitLeave } from '@/api/game';
 import { useGameStore } from '@/store/useGameStore';
+import { useErrorStore } from '@/store/useErrorStore';
 import { CottageButton } from '@/components/common/CottageButton';
 import type { SpaceSentiment } from '@/types';
 
@@ -42,6 +43,7 @@ export default function SpaceSentimentScreen() {
   const { sessionId, locationId: _locationId, locationName } = route.params;
   const clan = useAuthStore((s) => s.clan);
   const clanColor = clan ? CLAN_COLORS[clan] : PALETTE.honeyGold;
+  const showError = useErrorStore((s) => s.showError);
 
   const [selected, setSelected] = useState<SpaceSentiment | null>(null);
   const skipGuard = useRef(false);
@@ -107,7 +109,8 @@ export default function SpaceSentimentScreen() {
     (sentiment: SpaceSentiment, index: number) => {
       if (selected || skipGuard.current) return;
       setSelected(sentiment);
-      submitSpaceSentiment(sessionId, sentiment); // fire-and-forget
+      submitSpaceSentiment(sessionId, sentiment)
+        .catch(() => showError('Could not submit. Please try again.', 'SENTIMENT_FAILED'));
 
       // Selection feedback
       Vibration.vibrate(40);

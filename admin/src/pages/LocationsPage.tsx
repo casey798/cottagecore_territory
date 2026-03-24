@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getMasterLocations, createMasterLocation, updateMasterLocation, updateLocation, deleteMasterLocation, importPhase1Data } from '@/api/locations';
 import { getMapConfig } from '@/api/map';
 import { pixelToGps } from '@/utils/affineTransform';
+import { exportLocationsMap } from '@/utils/exportLocationsMap';
 import { MAP_WIDTH, MAP_HEIGHT } from '@/constants/map';
 import { Toggle } from '@/components/Toggle';
 import { LoadingSpinner } from '@/components/LoadingSpinner';
@@ -895,6 +896,7 @@ export function LocationsPage() {
   const { notification, notify } = useNotification();
   const [mapMode, setMapMode] = useState(false);
   const [moveTarget, setMoveTarget] = useState<LocationMasterConfig | null>(null);
+  const [exporting, setExporting] = useState(false);
   const phase1FileRef = useRef<HTMLInputElement>(null);
 
   const { data: locations, isLoading, error } = useQuery({
@@ -954,6 +956,27 @@ export function LocationsPage() {
     a.download = `locations-export-${new Date().toISOString().slice(0, 10)}.csv`;
     a.click();
     URL.revokeObjectURL(url);
+  }
+
+  async function handleExportMap() {
+    if (!locations || locations.length === 0) return;
+    setExporting(true);
+    try {
+      const mapConfig = await getMapConfig();
+      if (!mapConfig) {
+        notify('error', 'Map config unavailable — cannot export');
+        return;
+      }
+      if (!mapConfig.mapImageUrl) {
+        notify('error', 'No map image uploaded yet');
+        return;
+      }
+      await exportLocationsMap(locations, mapConfig.mapImageUrl);
+    } catch {
+      notify('error', 'Export failed — check browser console for details');
+    } finally {
+      setExporting(false);
+    }
   }
 
   function handlePhase1Import(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1054,6 +1077,13 @@ export function LocationsPage() {
               className="rounded border border-[#8B6914]/30 px-3 py-1.5 text-sm font-medium text-[#8B6914] hover:bg-[#F5EACB] disabled:opacity-50"
             >
               Export CSV
+            </button>
+            <button
+              onClick={handleExportMap}
+              disabled={exporting || !locations || locations.length === 0}
+              className="rounded border border-[#8B6914]/30 px-3 py-1.5 text-sm font-medium text-[#8B6914] hover:bg-[#F5EACB] disabled:opacity-50"
+            >
+              {exporting ? 'Exporting\u2026' : '\uD83D\uDCE5 Export Map'}
             </button>
             <button
               onClick={() => phase1FileRef.current?.click()}

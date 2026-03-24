@@ -2,9 +2,11 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Dimensions,
   ImageBackground,
+  Modal,
   Pressable,
   StyleSheet,
   Text,
+  TouchableOpacity,
   View,
 } from 'react-native';
 import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
@@ -45,6 +47,42 @@ interface SolvedGroup {
   color: string;
 }
 
+interface BalancedSplit {
+  topWords: string[];
+  bottomWords: string[];
+}
+
+// ── Balanced shuffle ──────────────────────────────────────────────
+
+function fisherYatesShuffle<T>(arr: T[]): T[] {
+  const result = [...arr];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+/**
+ * Split puzzle words so each group has exactly 2 in top and 2 in bottom.
+ * Then shuffle each half independently.
+ */
+export function balancedSplit(puzzle: WordClustersPuzzle): BalancedSplit {
+  const top: string[] = [];
+  const bottom: string[] = [];
+
+  for (const group of puzzle.groups) {
+    const shuffledGroup = fisherYatesShuffle([...group.words]);
+    top.push(shuffledGroup[0], shuffledGroup[1]);
+    bottom.push(shuffledGroup[2], shuffledGroup[3]);
+  }
+
+  return {
+    topWords: fisherYatesShuffle(top),
+    bottomWords: fisherYatesShuffle(bottom),
+  };
+}
+
 // ── Helpers ───────────────────────────────────────────────────────
 
 function clanColor(clan: string): string {
@@ -69,21 +107,26 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
 
   // ── Puzzle generation (once on mount) ───────────────────────────
   const puzzleRef = useRef<WordClustersPuzzle | null>(null);
+  const splitRef = useRef<BalancedSplit | null>(null);
   if (puzzleRef.current === null) {
     puzzleRef.current = generatePuzzle();
+    splitRef.current = balancedSplit(puzzleRef.current);
   }
   const puzzle = puzzleRef.current;
+  const { topWords, bottomWords } = splitRef.current!;
 
-  // ── Shared state ────────────────────────────────────────────────
-  const [selected, setSelected] = useState<string[]>([]);
+  // ── State ─────────────────────────────────────────────────────
+  const [selectedP1, setSelectedP1] = useState<string[]>([]);
+  const [selectedP2, setSelectedP2] = useState<string[]>([]);
   const [solvedGroups, setSolvedGroups] = useState<SolvedGroup[]>([]);
   const [mistakes, setMistakes] = useState(0);
   const [timeLeft, setTimeLeft] = useState(timeLimit);
   const [gameOver, setGameOver] = useState(false);
-  const [wrongFlash, setWrongFlash] = useState(false);
+  const [wrongFlashP1, setWrongFlashP1] = useState(false);
+  const [wrongFlashP2, setWrongFlashP2] = useState(false);
   const [overlayVisible, setOverlayVisible] = useState(false);
   const [overlayResult, setOverlayResult] = useState<'win' | 'lose'>('lose');
-  const [pendingSubmit, setPendingSubmit] = useState(false);
+  const [isHowToPlayVisible, setIsHowToPlayVisible] = useState(false);
 
   // Hint state (shared between both players)
   const [hintsUsed, setHintsUsed] = useState(0);
@@ -97,6 +140,8 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
   const isSubmittingRef = useRef(false);
   const hintTimerStartRef = useRef(Date.now());
   const hintIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const isPausedRef = useRef(false);
+  const pauseStartRef = useRef(0);
 
   // Refs to avoid stale closures in finishGame
   const mistakesRef = useRef(0);
@@ -109,16 +154,12 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
     return set;
   }, [solvedGroups]);
 
-  const remainingWords = useMemo(
-    () => puzzle.words.filter((w) => !solvedWords.has(w)),
-    [puzzle.words, solvedWords],
-  );
-
   // ── Timer ───────────────────────────────────────────────────────
   useEffect(() => {
     if (gameOver) return;
 
     const interval = setInterval(() => {
+      if (isPausedRef.current) return;
       const elapsed = (Date.now() - startTimeRef.current) / 1000;
       const remaining = Math.max(0, timeLimit - elapsed);
       setTimeLeft(remaining);
@@ -235,7 +276,7 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
       setOverlayResult(result === 'win' ? 'win' : 'lose');
       setOverlayVisible(true);
     },
-    [sessionId, solvedGroups, mistakes],
+    [sessionId],
   );
 
   const handleContinue = useCallback(() => {
@@ -245,32 +286,42 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
     }
   }, [onComplete]);
 
-  // ── Submission with Suggest+Confirm ─────────────────────────────
-  const handleSubmitPress = useCallback(() => {
-    if (gameOver || isSubmittingRef.current || selected.length !== 4) return;
+  // ── How to Play pause/resume ───────────────────────────────────
+  const openHowToPlay = useCallback(() => {
+    if (gameOver) return;
+    isPausedRef.current = true;
+    pauseStartRef.current = Date.now();
+    setIsHowToPlayVisible(true);
+  }, [gameOver]);
 
-    if (!pendingSubmit) {
-      // First tap — enter confirm state
-      setPendingSubmit(true);
-      return;
-    }
+  const closeHowToPlay = useCallback(() => {
+    const pausedMs = Date.now() - pauseStartRef.current;
+    startTimeRef.current += pausedMs;
+    isPausedRef.current = false;
+    setIsHowToPlayVisible(false);
+  }, []);
 
-    // Second tap — actually submit
-    setPendingSubmit(false);
+  // ── Submission ──────────────────────────────────────────────────
+  const handleSubmit = useCallback(() => {
+    if (gameOver || isSubmittingRef.current) return;
+    if (selectedP1.length !== 2 || selectedP2.length !== 2) return;
+
     isSubmittingRef.current = true;
-    const result = checkGroup(selected, puzzle.groups);
+    const combined = [...selectedP1, ...selectedP2];
+    const result = checkGroup(combined, puzzle.groups);
 
     if (result.correct && result.groupIndex !== null && result.label !== null) {
       const newSolved: SolvedGroup = {
         groupIndex: result.groupIndex,
         label: result.label,
-        words: [...selected],
+        words: [...combined],
         color: SOLVED_COLORS[solvedGroups.length % SOLVED_COLORS.length],
       };
       const updatedGroups = [...solvedGroups, newSolved];
       setSolvedGroups(updatedGroups);
       solvedGroupsRef.current = updatedGroups.map((sg) => sg.words);
-      setSelected([]);
+      setSelectedP1([]);
+      setSelectedP2([]);
       isSubmittingRef.current = false;
 
       if (updatedGroups.length === 4) {
@@ -280,11 +331,14 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
       const newMistakes = mistakes + 1;
       setMistakes(newMistakes);
       mistakesRef.current = newMistakes;
-      setWrongFlash(true);
+      setWrongFlashP1(true);
+      setWrongFlashP2(true);
 
       setTimeout(() => {
-        setWrongFlash(false);
-        setSelected([]);
+        setWrongFlashP1(false);
+        setWrongFlashP2(false);
+        setSelectedP1([]);
+        setSelectedP2([]);
         isSubmittingRef.current = false;
 
         if (newMistakes >= MAX_MISTAKES) {
@@ -292,29 +346,49 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
         }
       }, FLASH_DURATION_MS);
     }
-  }, [gameOver, selected, pendingSubmit, puzzle.groups, solvedGroups, mistakes, finishGame]);
+  }, [gameOver, selectedP1, selectedP2, puzzle.groups, solvedGroups, mistakes, finishGame]);
 
-  const handleCancelSubmit = useCallback(() => {
-    setPendingSubmit(false);
+  const handleCancelSelection = useCallback(() => {
+    setSelectedP1([]);
+    setSelectedP2([]);
   }, []);
 
-  // ── Tap handler (shared selection for both players) ─────────────
-  const interactionDisabled = gameOver || wrongFlash || overlayVisible;
+  // ── Tap handlers ──────────────────────────────────────────────
+  const interactionDisabled = gameOver || wrongFlashP1 || wrongFlashP2 || overlayVisible;
 
-  const tapWord = useCallback(
+  const tapP1 = useCallback(
     (word: string) => {
       if (interactionDisabled || isSubmittingRef.current) return;
-      // Clear pending confirm when selection changes
-      setPendingSubmit(false);
-      setSelected((prev) => {
+      if (solvedWords.has(word)) return;
+      setSelectedP1((prev) => {
         if (prev.includes(word)) {
           return prev.filter((w) => w !== word);
         }
-        if (prev.length >= 4) return prev;
+        if (prev.length >= 2) {
+          // FIFO: drop first, add new
+          return [prev[1], word];
+        }
         return [...prev, word];
       });
     },
-    [interactionDisabled],
+    [interactionDisabled, solvedWords],
+  );
+
+  const tapP2 = useCallback(
+    (word: string) => {
+      if (interactionDisabled || isSubmittingRef.current) return;
+      if (solvedWords.has(word)) return;
+      setSelectedP2((prev) => {
+        if (prev.includes(word)) {
+          return prev.filter((w) => w !== word);
+        }
+        if (prev.length >= 2) {
+          return [prev[1], word];
+        }
+        return [...prev, word];
+      });
+    },
+    [interactionDisabled, solvedWords],
   );
 
   // ── Layout computation ──────────────────────────────────────────
@@ -323,35 +397,49 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
   const gap = 6;
   const availableW = screenW - gridPadH * 2;
   const cellW = (availableW - gap * 3) / 4;
-  const cellH = cellW * 0.55;
+  const cellH = cellW * 0.65;
 
-  const canSubmit = selected.length === 4 && !gameOver && !isSubmittingRef.current;
+  const canSubmit =
+    selectedP1.length === 2 && selectedP2.length === 2 && !gameOver && !isSubmittingRef.current;
+  const hasSelection = selectedP1.length > 0 || selectedP2.length > 0;
 
   // ── Word card renderer ──────────────────────────────────────────
-  const renderWordGrid = () => (
+  const renderWordGrid = (
+    words: string[],
+    selected: string[],
+    onTap: (word: string) => void,
+    wrongFlash: boolean,
+  ) => (
     <View style={[styles.grid, { paddingHorizontal: gridPadH, gap }]}>
-      {remainingWords.map((word) => {
+      {words.map((word) => {
+        const isSolved = solvedWords.has(word);
+        const solvedGroup = isSolved
+          ? solvedGroups.find((sg) => sg.words.includes(word))
+          : undefined;
         const isSelected = selected.includes(word);
 
         return (
           <Pressable
             key={word}
-            onPress={() => tapWord(word)}
-            disabled={interactionDisabled || isSubmittingRef.current}
+            onPress={() => onTap(word)}
+            disabled={isSolved || interactionDisabled || isSubmittingRef.current}
             style={[
               styles.cell,
               { width: cellW, height: cellH },
-              isSelected
-                ? wrongFlash
-                  ? styles.cellWrong
-                  : styles.cellSelected
-                : styles.cellDefault,
+              isSolved && solvedGroup
+                ? { backgroundColor: solvedGroup.color, borderColor: solvedGroup.color }
+                : isSelected
+                  ? wrongFlash
+                    ? styles.cellWrong
+                    : styles.cellSelected
+                  : styles.cellDefault,
             ]}
           >
             <Text
               style={[
                 styles.cellText,
-                isSelected ? styles.cellTextSelected : null,
+                (isSelected && !isSolved) ? styles.cellTextSelected : null,
+                isSolved ? styles.cellTextSolved : null,
               ]}
               numberOfLines={1}
               adjustsFontSizeToFit
@@ -369,17 +457,22 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerText}>Word Clusters Co-op</Text>
-        <View style={styles.mistakeRow}>
-          {Array.from({ length: MAX_MISTAKES }).map((_, i) => (
-            <View
-              key={i}
-              style={[
-                styles.mistakeDot,
-                i < mistakes ? styles.mistakeUsed : styles.mistakeRemaining,
-              ]}
-            />
-          ))}
-          <Text style={styles.mistakeLabel}>{MAX_MISTAKES - mistakes} left</Text>
+        <View style={styles.headerRight}>
+          <View style={styles.mistakeRow}>
+            {Array.from({ length: MAX_MISTAKES }).map((_, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.mistakeDot,
+                  i < mistakes ? styles.mistakeUsed : styles.mistakeRemaining,
+                ]}
+              />
+            ))}
+            <Text style={styles.mistakeLabel}>{MAX_MISTAKES - mistakes} left</Text>
+          </View>
+          <TouchableOpacity style={styles.helpBtn} onPress={openHowToPlay}>
+            <Text style={styles.helpBtnText}>?</Text>
+          </TouchableOpacity>
         </View>
       </View>
 
@@ -388,10 +481,10 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
         style={[
           styles.playerZone,
           { backgroundColor: withAlpha(clanColor(p1Clan), 0.1) },
-          wrongFlash && styles.zoneFlash,
+          wrongFlashP1 && styles.zoneFlash,
         ]}
       >
-        {renderWordGrid()}
+        {renderWordGrid(topWords, selectedP1, tapP1, wrongFlashP1)}
       </View>
 
       {/* Divider with shared controls */}
@@ -414,7 +507,7 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
           </View>
         )}
 
-        {/* Hint + Submit buttons row */}
+        {/* Hint + Submit + Cancel buttons row */}
         <View style={styles.controlRow}>
           {/* Hint button */}
           <Pressable
@@ -436,31 +529,23 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
             </Text>
           </Pressable>
 
-          {/* Submit / Confirm button */}
-          <View style={styles.submitGroup}>
-            <Pressable
-              onPress={handleSubmitPress}
-              disabled={!canSubmit}
-              style={[
-                styles.submitBtn,
-                pendingSubmit ? styles.submitBtnConfirm : null,
-                !canSubmit && styles.submitBtnDisabled,
-              ]}
-            >
-              <Text style={[
-                styles.submitBtnText,
-                pendingSubmit ? styles.submitBtnTextConfirm : null,
-                !canSubmit && styles.submitBtnTextDisabled,
-              ]}>
-                {pendingSubmit ? 'Confirm?' : 'Submit'}
-              </Text>
+          {/* Submit Group button */}
+          <Pressable
+            onPress={handleSubmit}
+            disabled={!canSubmit}
+            style={[styles.submitBtn, !canSubmit && styles.submitBtnDisabled]}
+          >
+            <Text style={[styles.submitBtnText, !canSubmit && styles.submitBtnTextDisabled]}>
+              Submit Group
+            </Text>
+          </Pressable>
+
+          {/* Cancel button */}
+          {hasSelection && !gameOver && (
+            <Pressable onPress={handleCancelSelection} style={styles.cancelBtn}>
+              <Text style={styles.cancelBtnText}>Clear</Text>
             </Pressable>
-            {pendingSubmit && (
-              <Pressable onPress={handleCancelSubmit} style={styles.cancelBtn}>
-                <Text style={styles.cancelBtnText}>Cancel</Text>
-              </Pressable>
-            )}
-          </View>
+          )}
         </View>
       </CoopDivider>
 
@@ -469,10 +554,10 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
         style={[
           styles.playerZone,
           { backgroundColor: withAlpha(clanColor(p2Clan), 0.1) },
-          wrongFlash && styles.zoneFlash,
+          wrongFlashP2 && styles.zoneFlash,
         ]}
       >
-        {renderWordGrid()}
+        {renderWordGrid(bottomWords, selectedP2, tapP2, wrongFlashP2)}
       </View>
 
       {/* Solved groups banner */}
@@ -493,11 +578,48 @@ export default function WordClustersCoopGame(props: MinigamePlayProps) {
       {overlayVisible && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
           onContinue={handleContinue}
           practiceMode={practiceMode}
         />
       )}
+
+      {/* How to Play modal */}
+      <Modal
+        animationType="slide"
+        transparent
+        visible={isHowToPlayVisible}
+        onRequestClose={closeHowToPlay}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={closeHowToPlay}>
+          <Pressable style={styles.modalPanel} onPress={() => {}}>
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={closeHowToPlay}>
+              <Text style={styles.modalCloseBtnText}>{'\u00D7'}</Text>
+            </TouchableOpacity>
+            <Text style={styles.modalTitle}>How to Play {'\u2014'} Word Clusters Co-op</Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} 16 words are split between two players {'\u2014'} 8 words each.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Each player{'\u2019'}s half contains exactly 2 words from each group.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Player 1 selects 2 words from the top, Player 2 selects 2 from the bottom.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} When both have selected 2 words, tap Submit Group to check.
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} You share 8 mistakes and 3 hints {'\u2014'} communicate!
+            </Text>
+            <Text style={styles.modalRule}>
+              {'\u2022'} Find all 4 groups together before time runs out.
+            </Text>
+            <Text style={styles.modalTip}>
+              Tip: Tell your partner the categories you think your words belong to {'\u2014'} it helps narrow down the matches.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ImageBackground>
   );
 }
@@ -520,6 +642,11 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.title,
     fontSize: 14,
     color: UI.text,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
 
   // ── Mistake markers ──────────────────────────────────
@@ -544,6 +671,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: PALETTE.stoneGrey,
     marginLeft: 4,
+  },
+
+  // ── Help button ────────────────────────────────────
+  helpBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  helpBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
   },
 
   // ── Player zones ────────────────────────────────────
@@ -585,13 +727,17 @@ const styles = StyleSheet.create({
     borderColor: PALETTE.errorRed,
   },
   cellText: {
-    // No fontFamily — system font for word tile game elements
+    fontFamily: FONTS.bodySemiBold,
     fontSize: 11,
     color: UI.text,
     textTransform: 'uppercase',
   },
   cellTextSelected: {
     color: PALETTE.cream,
+  },
+  cellTextSolved: {
+    color: PALETTE.darkBrown,
+    opacity: 0.7,
   },
 
   // ── Hint banner ───────────────────────────────────────
@@ -606,12 +752,12 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // ── Control row (hint + submit) ───────────────────────
+  // ── Control row (hint + submit + cancel) ──────────────
   controlRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 12,
+    gap: 8,
     paddingVertical: 2,
   },
 
@@ -641,22 +787,14 @@ const styles = StyleSheet.create({
     color: PALETTE.stoneGrey,
   },
 
-  // ── Submit button group ───────────────────────────────
-  submitGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
+  // ── Submit button ─────────────────────────────────────
   submitBtn: {
     backgroundColor: PALETTE.deepGreen,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: 10,
     minWidth: 100,
     alignItems: 'center',
-  },
-  submitBtnConfirm: {
-    backgroundColor: PALETTE.honeyGold,
   },
   submitBtnDisabled: {
     backgroundColor: PALETTE.stoneGrey,
@@ -664,15 +802,14 @@ const styles = StyleSheet.create({
   },
   submitBtnText: {
     fontFamily: FONTS.bodySemiBold,
-    fontSize: 13,
+    fontSize: 12,
     color: PALETTE.cream,
-  },
-  submitBtnTextConfirm: {
-    color: PALETTE.darkBrown,
   },
   submitBtnTextDisabled: {
     color: PALETTE.cream,
   },
+
+  // ── Cancel button ─────────────────────────────────────
   cancelBtn: {
     paddingHorizontal: 10,
     paddingVertical: 4,
@@ -704,5 +841,54 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.title,
     fontSize: 11,
     color: PALETTE.darkBrown,
+  },
+
+  // ── How to Play modal ──────────────────────────────────
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalPanel: {
+    backgroundColor: PALETTE.parchment,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    padding: 24,
+    paddingBottom: 40,
+  },
+  modalCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: PALETTE.parchmentDark,
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-end',
+  },
+  modalCloseBtnText: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+  },
+  modalTitle: {
+    fontFamily: FONTS.title,
+    fontSize: 18,
+    color: PALETTE.darkBrown,
+    marginBottom: 16,
+  },
+  modalRule: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    marginBottom: 8,
+  },
+  modalTip: {
+    fontFamily: FONTS.bodyRegular,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
+    lineHeight: 22,
+    fontStyle: 'italic',
+    marginTop: 12,
   },
 });

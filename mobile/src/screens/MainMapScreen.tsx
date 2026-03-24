@@ -22,6 +22,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useMapStore } from '@/store/useMapStore';
 import { useGameStore } from '@/store/useGameStore';
 import { useDebugStore } from '@/store/useDebugStore';
+import { useErrorStore } from '@/store/useErrorStore';
 import { useClanScores } from '@/hooks/useClanScores';
 import { useGPS } from '@/hooks/useGPS';
 import { useCountdown } from '@/hooks/useCountdown';
@@ -37,6 +38,7 @@ import * as playerApi from '@/api/player';
 import { ClanId, CapturedSpace, Location, ClanScore } from '@/types';
 import { useAssetStore } from '@/store/useAssetStore';
 import { useDwellTracking } from '@/hooks/useDwellTracking';
+import { useLocationLockTimer } from '@/hooks/useLocationLockTimer';
 import { PLAYER_DOT_IMAGES } from '@/constants/playerAssets';
 
 // Map screen icon assets
@@ -65,11 +67,18 @@ interface LocationProximity {
 
 export default function MainMapScreen() {
   const { width: screenW, height: screenH } = useWindowDimensions();
+  const [vignetteSize, setVignetteSize] = React.useState({ w: screenW, h: screenH });
 
   const navigation = useNavigation<Nav>();
   const route = useRoute<MapRoute>();
-  const selectSpaceMode = route.params?.mode === 'selectSpace';
-  const selectSpaceAssetId = route.params?.userAssetId;
+  const [selectSpaceMode, setSelectSpaceMode] = useState(route.params?.mode === 'selectSpace');
+  const [selectSpaceAssetId, setSelectSpaceAssetId] = useState(route.params?.userAssetId);
+
+  // FIX 5 — Sync state when route params change (e.g. AssetInventory navigating back to Map)
+  useEffect(() => {
+    setSelectSpaceMode(route.params?.mode === 'selectSpace');
+    setSelectSpaceAssetId(route.params?.userAssetId);
+  }, [route.params?.mode, route.params?.userAssetId]);
   useDwellTracking();
   const { clans: scores } = useClanScores();
   const gps = useGPS();
@@ -93,6 +102,7 @@ export default function MainMapScreen() {
   const setQuietMode = useGameStore((s) => s.setQuietMode);
   const dailyInfo = useGameStore((s) => s.dailyInfo);
   const unplacedCount = useAssetStore((s) => s.unplacedCount);
+  const showError = useErrorStore((s) => s.showError);
 
   const [selectedPin, setSelectedPin] = useState<Location | null>(null);
   const sheetAnim = useRef(new Animated.Value(0)).current;
@@ -146,28 +156,40 @@ export default function MainMapScreen() {
     loadMapConfig();
     loadTodayLocations();
     loadCapturedSpaces();
-
-    playerApi.getAssets().then((result) => {
-      if (result.success && result.data) {
-        const now = Date.now();
-        const active = result.data.assets.filter(
-          (a) => !a.expiresAt || new Date(a.expiresAt).getTime() > now,
-        );
-        useAssetStore.getState().setUnplacedCount(
-          active.filter((a) => !a.placed).length,
-        );
-        // Build userAssetId→category and userAssetId→assetId lookups for decoration overlays
-        const catMap: Record<string, import('@/types').AssetCategory> = {};
-        const idMap: Record<string, string> = {};
-        for (const a of result.data.assets) {
-          catMap[a.userAssetId] = a.category;
-          idMap[a.userAssetId] = a.assetId;
-        }
-        useMapStore.getState().setAssetCategories(catMap);
-        useMapStore.getState().setAssetIdMap(idMap);
-      }
-    }).catch(() => {});
   }, [loadMapConfig, loadTodayLocations, loadCapturedSpaces]);
+
+  // Fetch assets on focus with 60s stale-time so badge updates after chest drops
+  const lastAssetFetchRef = useRef<number>(0);
+  const ASSET_STALE_MS = 60_000;
+
+  useFocusEffect(
+    useCallback(() => {
+      const now = Date.now();
+      if (now - lastAssetFetchRef.current < ASSET_STALE_MS) return;
+
+      playerApi.getAssets().then((result) => {
+        if (result.success && result.data) {
+          const nowInner = Date.now();
+          const active = result.data.assets.filter(
+            (a) => !a.expiresAt || new Date(a.expiresAt).getTime() > nowInner,
+          );
+          useAssetStore.getState().setUnplacedCount(
+            active.filter((a) => !a.placed).length,
+          );
+          // Build userAssetId→category and userAssetId→assetId lookups for decoration overlays
+          const catMap: Record<string, import('@/types').AssetCategory> = {};
+          const idMap: Record<string, string> = {};
+          for (const a of result.data.assets) {
+            catMap[a.userAssetId] = a.category;
+            idMap[a.userAssetId] = a.assetId;
+          }
+          useMapStore.getState().setAssetCategories(catMap);
+          useMapStore.getState().setAssetIdMap(idMap);
+          lastAssetFetchRef.current = Date.now();
+        }
+      }).catch(() => {});
+    }, []),
+  );
 
   useEffect(() => {
     if (captureResult) {
@@ -217,6 +239,18 @@ export default function MainMapScreen() {
       });
     }
   }, [gps.latitude, gps.longitude, gps.accuracy, updatePlayerPosition]);
+
+  useEffect(() => {
+    if (gps.error && gps.error !== 'PERMISSION_DENIED') {
+      showError(`GPS error: ${gps.error}`, 'GPS_ERROR');
+    }
+  }, [gps.error, showError]);
+
+  useEffect(() => {
+    if (gps.permissionDenied) {
+      showError('Location permission required. Open Settings to enable.', 'PERMISSION_DENIED');
+    }
+  }, [gps.permissionDenied, showError]);
 
   const proximities = useMemo<LocationProximity[]>(() => {
     if (gps.latitude === null || gps.longitude === null) {
@@ -342,6 +376,20 @@ export default function MainMapScreen() {
   }, [selectedPin, navigation, setSelectedLocation, closeSheet]);
 
   const handleSpaceTap = useCallback((space: CapturedSpace | null, screenX: number, screenY: number) => {
+    // FIX 3 — In selectSpace mode, directly navigate to SpaceDecoration for own-clan spaces
+    if (selectSpaceMode && selectSpaceAssetId && space && space.clan === clan) {
+      navigation.setParams({ mode: undefined, userAssetId: undefined });
+      navigation.navigate('SpaceDecoration', {
+        spaceId: space.spaceId,
+        spaceName: space.spaceName,
+        clan: space.clan as ClanId,
+        gridCells: (space.gridCells ?? []).map((c) => ({ x: (c as any).col ?? c.x, y: (c as any).row ?? c.y })),
+        polygonPoints: space.polygonPoints ?? [],
+        userAssetId: selectSpaceAssetId,
+      });
+      return;
+    }
+
     if (space && space.clan === clan) {
       setSelectedSpace(space);
       setDecorateBtnPos({ x: screenX, y: screenY - 50 });
@@ -363,7 +411,7 @@ export default function MainMapScreen() {
         ]).start(() => setEnemyToast(null));
       }
     }
-  }, [clan, enemyToastOpacity]);
+  }, [clan, enemyToastOpacity, selectSpaceMode, selectSpaceAssetId, navigation]);
 
   const handleDecorate = useCallback(() => {
     if (!selectedSpace) return;
@@ -393,6 +441,9 @@ export default function MainMapScreen() {
     return proximities.find((p) => p.locationId === selectedPin.locationId) ?? null;
   }, [selectedPin, proximities]);
 
+  const selectedPinLockedUntil = selectedPin ? (lockedUntilMap[selectedPin.locationId] ?? null) : null;
+  const sheetLockTimer = useLocationLockTimer(selectedPinLockedUntil);
+
   const sheetTranslateY = sheetAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [300, 0],
@@ -421,6 +472,7 @@ export default function MainMapScreen() {
           selectedSpaceId={selectedSpace?.spaceId ?? null}
           onSpaceTap={handleSpaceTap}
           pinProximities={quietMode ? undefined : pinProximities}
+          highlightClanId={selectSpaceMode ? clan : null}
         />
 
         {/* ── HUD: Clan Badge Button (left) ── */}
@@ -456,12 +508,16 @@ export default function MainMapScreen() {
 
         {/* ── HUD: Target Space Pill (below timer nameplate) ── */}
         {!quietMode && clan && dailyInfo?.targetSpace && (
-          <View style={styles.targetSpaceRow}>
-            <Text style={styles.targetSpaceLabel}>Today's prize</Text>
-            <Text style={styles.targetSpaceName} numberOfLines={1}>
+          <ImageBackground
+            source={NAMEPLATE}
+            style={styles.targetSpaceRow}
+            resizeMode="stretch"
+          >
+            <Text style={styles.targetSpaceLabel}>Today's space</Text>
+            <Text style={styles.targetSpaceName} numberOfLines={1} ellipsizeMode="tail">
               {dailyInfo.targetSpace.name}
             </Text>
-          </View>
+          </ImageBackground>
         )}
 
         {/* ── HUD: Info Bar (right of badge) ── */}
@@ -534,6 +590,13 @@ export default function MainMapScreen() {
             <Text style={styles.selectSpaceBannerText}>
               Tap one of your clan's spaces to place the item
             </Text>
+            <Pressable
+              onPress={() => navigation.setParams({ mode: undefined, userAssetId: undefined })}
+              hitSlop={12}
+              style={styles.selectSpaceCancelBtn}
+            >
+              <Text style={styles.selectSpaceCancelText}>{'\u2715'}</Text>
+            </Pressable>
           </View>
         )}
 
@@ -561,70 +624,72 @@ export default function MainMapScreen() {
 
         {/* ── Right-side FAB stack (below minimap) ── */}
         <View style={styles.fabStack}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.fabButton,
-              pressed && styles.fabButtonPressed,
-            ]}
-            onPress={() => navigation.navigate('Settings')}
-          >
-            <Image source={ICON_SETTINGS} style={styles.fabIconImage} resizeMode="contain" />
-          </Pressable>
-
-          <View>
+          <View style={styles.fabButtonWrapper}>
             <Pressable
               style={({ pressed }) => [
                 styles.fabButton,
                 pressed && styles.fabButtonPressed,
               ]}
-              onPress={() => navigation.navigate('AssetInventory')}
+              onPress={() => navigation.navigate('Settings')}
             >
-              <Image source={ICON_INVENTORY} style={styles.fabIconImage} resizeMode="contain" />
+              <Image source={ICON_SETTINGS} style={styles.fabIconImage} resizeMode="contain" />
             </Pressable>
-            {unplacedCount > 0 && (
-              <View style={styles.fabBadge}>
-                <Text style={styles.fabBadgeText}>
-                  {unplacedCount >= 9 ? '9+' : String(unplacedCount)}
-                </Text>
-              </View>
-            )}
+            <Text style={styles.fabLabel}>Set</Text>
           </View>
 
-          <Pressable
-            style={({ pressed }) => [
-              styles.fabButton,
-              pressed && styles.fabButtonPressed,
-            ]}
-            onPress={handleShowInfo}
-          >
-            <Image source={ICON_JOURNAL} style={styles.fabIconImage} resizeMode="contain" />
-          </Pressable>
+          <View style={styles.fabButtonWrapper}>
+            <View>
+              <Pressable
+                style={({ pressed }) => [
+                  styles.fabButton,
+                  pressed && styles.fabButtonPressed,
+                ]}
+                onPress={() => navigation.navigate('AssetInventory')}
+              >
+                <Image source={ICON_INVENTORY} style={styles.fabIconImage} resizeMode="contain" />
+              </Pressable>
+              {unplacedCount > 0 && (
+                <View style={styles.fabBadge}>
+                  <Text style={styles.fabBadgeText}>
+                    {unplacedCount >= 9 ? '9+' : String(unplacedCount)}
+                  </Text>
+                </View>
+              )}
+            </View>
+            <Text style={styles.fabLabel}>Inv</Text>
+          </View>
+
+          <View style={styles.fabButtonWrapper}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.fabButton,
+                pressed && styles.fabButtonPressed,
+              ]}
+              onPress={handleShowInfo}
+            >
+              <Image source={ICON_JOURNAL} style={styles.fabIconImage} resizeMode="contain" />
+            </Pressable>
+            <Text style={styles.fabLabel}>Jor</Text>
+          </View>
         </View>
 
         {/* ── Re-centre button (bottom-left) ── */}
         {!followPlayer && showPlayer && (
-          <Pressable
-            style={({ pressed }) => [
-              styles.reCenterBtn,
-              pressed && styles.reCenterBtnPressed,
-            ]}
-            onPress={handleReCenter}
-          >
-            <Image source={ICON_RECENTER} style={styles.reCenterImage} resizeMode="contain" />
-          </Pressable>
+          <View style={styles.reCenterWrapper}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.reCenterBtn,
+                pressed && styles.reCenterBtnPressed,
+              ]}
+              onPress={handleReCenter}
+            >
+              <Image source={ICON_RECENTER} style={styles.reCenterImage} resizeMode="contain" />
+            </Pressable>
+            <Text style={styles.reCenterLabel}>Ground Floor</Text>
+          </View>
         )}
 
         {/* ── GPS Status Banners ── */}
-        {gps.permissionDenied && (
-          <Pressable
-            style={styles.permissionBanner}
-            onPress={handleOpenSettings}
-          >
-            <Text style={styles.permissionBannerText}>
-              Location permission required to play. Tap to open settings.
-            </Text>
-          </Pressable>
-        )}
         {!gps.permissionDenied && !gps.isTracking && !gps.error && gameActive && (
           <View style={styles.loadingBanner}>
             <Text style={styles.loadingBannerText}>
@@ -636,13 +701,6 @@ export default function MainMapScreen() {
           <View style={styles.weakGpsBanner}>
             <Text style={styles.weakGpsBannerText}>
               GPS signal weak — move outdoors for better accuracy
-            </Text>
-          </View>
-        )}
-        {gps.error && gps.error !== 'PERMISSION_DENIED' && (
-          <View style={styles.errorBanner}>
-            <Text style={styles.errorBannerText}>
-              GPS error: {gps.error}
             </Text>
           </View>
         )}
@@ -783,12 +841,21 @@ export default function MainMapScreen() {
         )}
 
         {/* ── Screen-level vignette ── */}
-        <View style={styles.screenVignette} pointerEvents="none">
-          <Canvas style={StyleSheet.absoluteFill}>
-            <Rect x={0} y={0} width={screenW} height={screenH}>
+        <View
+          style={styles.screenVignette}
+          pointerEvents="none"
+          onLayout={(e) => {
+            const { width, height } = e.nativeEvent.layout;
+            setVignetteSize({ w: width, h: height });
+          }}
+        >
+          <Canvas
+            style={StyleSheet.absoluteFill}
+          >
+            <Rect x={0} y={0} width={vignetteSize.w} height={vignetteSize.h}>
               <RadialGradient
-                c={vec(screenW / 2, screenH / 2)}
-                r={Math.max(screenW, screenH) * 0.78}
+                c={vec(vignetteSize.w / 2, vignetteSize.h / 2)}
+                r={Math.max(vignetteSize.w, vignetteSize.h) * 0.78}
                 colors={['transparent', 'transparent', 'rgba(0,0,0,0.82)']}
                 positions={[0, 0.45, 1]}
               />
@@ -828,7 +895,11 @@ export default function MainMapScreen() {
 
             {selectedPin.locked ? (
               <View style={styles.sheetStatusRow}>
-                <Text style={styles.sheetLockedText}>Locked for today.</Text>
+                <Text style={styles.sheetLockedText}>
+                  {sheetLockTimer.remainingSeconds > 0
+                    ? `Locked — ${sheetLockTimer.formattedTime} remaining`
+                    : 'Lock expired — resets at next reset'}
+                </Text>
               </View>
             ) : xpExhaustedIds.has(selectedPin.locationId) && selectedProximity?.inRange ? (
               <>
@@ -947,30 +1018,31 @@ const styles = StyleSheet.create({
   // Center this pill under it: center at x=145, maxWidth=200 → left=45, top=102
   targetSpaceRow: {
     position: 'absolute',
-    top: 102,
-    left: 45,
+    top: 97,
+    left: 10,
+    width: 180,
     zIndex: 20,
-    backgroundColor: 'rgba(30, 20, 10, 0.72)',
-    borderRadius: 12,
     paddingHorizontal: 10,
     paddingVertical: 4,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    maxWidth: 200,
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    height: 44,
   },
   targetSpaceLabel: {
     fontFamily: FONTS.pixel,
-    fontSize: 10,
-    color: '#BDB49A',
+    fontSize: 9,
+    color: PALETTE.darkBrown,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+    textAlign: 'left',
   },
   targetSpaceName: {
-    fontFamily: FONTS.heading,
-    fontSize: 14,
-    color: '#F5EACB',
+    fontFamily: FONTS.pixel,
+    fontSize: 13,
+    color: PALETTE.darkBrown,
     flexShrink: 1,
+    textAlign: 'left',
   },
 
   // ── HUD: Info Bar ──
@@ -983,6 +1055,7 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   hudInfoBg: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 12,
@@ -992,6 +1065,7 @@ const styles = StyleSheet.create({
   hudInfoXp: {
     flexDirection: 'row',
     alignItems: 'center',
+    flexShrink: 0,
   },
   hudInfoXpIcon: {
     width: 22,
@@ -1006,16 +1080,20 @@ const styles = StyleSheet.create({
     color: PALETTE.darkBrown,
   },
   hudInfoDivider: {
-    width: 75,
+    width: 1,
     height: 16,
     backgroundColor: PALETTE.stoneGrey + '60',
-    marginHorizontal: 4,
+    marginHorizontal: 15,
   },
   hudInfoClans: {
+    flex: 1,
+    flexShrink: 1,
     flexDirection: 'row',
+    flexWrap: 'nowrap',
     alignItems: 'center',
     gap: 6,
     marginRight: 8,
+    overflow: 'hidden',
   },
   hudInfoClanChip: {
     flexDirection: 'row',
@@ -1040,17 +1118,17 @@ const styles = StyleSheet.create({
   fabStack: {
     position: 'absolute',
     top: 210,
-    right: 22,
+    right: 30,
     gap: 6,
     zIndex: 18,
     alignItems: 'center',
   },
   fabBackdrop: {
     position: 'absolute',
-    top: 240,
-    right: -73,
-    width: 240,
-    height: 75,
+    top: 253,
+    right: -77,
+    width: 265,
+    height: 94,
     transform: [{ rotate: '90deg' }],
     opacity: 0.85,
     zIndex: 14,
@@ -1067,6 +1145,18 @@ const styles = StyleSheet.create({
   fabIconImage: {
     width: 42,
     height: 42,
+  },
+  fabButtonWrapper: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  fabLabel: {
+    fontFamily: FONTS.pixel,
+    fontSize: 9,
+    color: PALETTE.darkBrown,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    lineHeight: 11,
   },
   fabBadge: {
     position: 'absolute',
@@ -1088,18 +1178,30 @@ const styles = StyleSheet.create({
   },
 
   // ── Re-centre button (bottom-left, 1.2x) ──
-  reCenterBtn: {
+  reCenterWrapper: {
     position: 'absolute',
     bottom: 18,
     left: 14,
+    zIndex: 18,
+    alignItems: 'center',
+    gap: 2,
+  },
+  reCenterBtn: {
     width: 65,
     height: 65,
     justifyContent: 'center',
     alignItems: 'center',
-    zIndex: 18,
   },
   reCenterBtnPressed: {
     transform: [{ scale: 0.9 }],
+  },
+  reCenterLabel: {
+    fontFamily: FONTS.pixel,
+    fontSize: 9,
+    color: PALETTE.cream,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    lineHeight: 11,
   },
   reCenterImage: {
     width: 58,
@@ -1107,22 +1209,6 @@ const styles = StyleSheet.create({
   },
 
   // ── GPS banners ──
-  permissionBanner: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: PALETTE.errorRed,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    alignItems: 'center',
-  },
-  permissionBannerText: {
-    color: PALETTE.cream,
-    fontSize: 13,
-    fontFamily: FONTS.pixel,
-    textAlign: 'center',
-  },
   loadingBanner: {
     position: 'absolute',
     bottom: 12,
@@ -1131,6 +1217,7 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     paddingHorizontal: 16,
     borderRadius: 8,
+    zIndex: 35,
   },
   loadingBannerText: {
     color: PALETTE.cream,
@@ -1145,28 +1232,13 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     paddingHorizontal: 14,
     borderRadius: 8,
-    zIndex: 15,
+    zIndex: 35,
   },
   weakGpsBannerText: {
     color: PALETTE.darkBrown,
     fontSize: 11,
     fontFamily: FONTS.pixel,
   },
-  errorBanner: {
-    position: 'absolute',
-    bottom: 12,
-    alignSelf: 'center',
-    backgroundColor: 'rgba(192, 57, 43, 0.85)',
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-  },
-  errorBannerText: {
-    color: PALETTE.cream,
-    fontSize: 12,
-    fontFamily: FONTS.pixel,
-  },
-
   // ── Check-In button ──
   checkInBtn: {
     position: 'absolute',
@@ -1439,10 +1511,26 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     zIndex: 30,
     elevation: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
   },
   selectSpaceBannerText: {
     fontSize: 13,
     fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.cream,
+  },
+  selectSpaceCancelBtn: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: 'rgba(0,0,0,0.25)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  selectSpaceCancelText: {
+    fontSize: 13,
+    fontFamily: FONTS.bodyBold,
     color: PALETTE.cream,
   },
   quietButtonStack: {

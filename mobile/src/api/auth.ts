@@ -113,11 +113,7 @@ export async function signOut(): Promise<void> {
 }
 
 export async function refreshFirebaseToken(): Promise<string | null> {
-  try {
-    const user = getAuth().currentUser;
-    if (!user) return null;
-    return await getIdToken(user, true);
-  } catch {
-    return null;
-  }
+  const user = getAuth().currentUser;
+  if (!user) return null;
+  return await getIdToken(user, true);
 }

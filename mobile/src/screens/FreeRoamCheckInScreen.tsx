@@ -1033,14 +1033,14 @@ const styles = StyleSheet.create({
 
   // Error banner
   errorBanner: {
-    backgroundColor: PALETTE.errorRed + '15',
+    backgroundColor: PALETTE.errorRed + 'CC',
     borderRadius: 12,
     padding: 14,
     marginBottom: 12,
     alignItems: 'center',
     gap: 10,
-    borderWidth: 1,
-    borderColor: PALETTE.errorRed + '30',
+    borderWidth: 1.5,
+    borderColor: PALETTE.errorRed,
   },
   errorBannerText: {
     fontSize: 13,

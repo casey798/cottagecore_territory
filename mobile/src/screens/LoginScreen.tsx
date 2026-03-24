@@ -11,6 +11,7 @@ import {
 import { useAuthStore } from '@/store/useAuthStore';
 import { configureGoogleSignIn } from '@/api/auth';
 import { FONTS } from '@/constants/fonts';
+import { PALETTE } from '@/constants/colors';
 import { requestNotificationPermission } from '@/utils/notifications';
 
 export default function LoginScreen() {
@@ -141,7 +142,7 @@ const styles = StyleSheet.create({
   errorText: {
     fontFamily: FONTS.pixel,
     fontSize: 17,
-    color: '#ff6b6b',
+    color: PALETTE.errorRed,
     textAlign: 'center',
     marginTop: 8,
   },

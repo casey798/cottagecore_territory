@@ -53,11 +53,12 @@ export const handler = async (
       { indexName: 'UserAssetsIndex' }
     );
 
+    const now = Date.now();
     const activeAssetMap = new Map<string, PlayerAsset>();
     for (const asset of playerAssets) {
-      if (!asset.expired) {
-        activeAssetMap.set(asset.userAssetId, asset);
-      }
+      if (asset.expired) continue;
+      if (asset.expiresAt && new Date(asset.expiresAt).getTime() <= now) continue;
+      activeAssetMap.set(asset.userAssetId, asset);
     }
 
     for (const placedAsset of layout.placedAssets) {
@@ -97,7 +98,7 @@ export const handler = async (
 
     await Promise.all(
       playerAssets
-        .filter((asset) => !asset.expired)
+        .filter((asset) => !asset.expired && (!asset.expiresAt || new Date(asset.expiresAt).getTime() > now))
         .map(async (asset) => {
           const shouldBePlaced = placedAssetIds.has(asset.userAssetId);
           if (asset.placed && !shouldBePlaced) {

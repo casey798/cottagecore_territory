@@ -20,7 +20,7 @@ import { DAILY_XP_CAP, COLOR_SORT_TIME_LIMIT } from '@/constants/config';
 import { useGameStore } from '@/store/useGameStore';
 import { useDebugStore } from '@/store/useDebugStore';
 import * as gameApi from '@/api/game';
-import { MinigameInfo } from '@/types';
+import { MinigameInfo, ALL_MINIGAMES, MINIGAME_DIFFICULTY } from '@/constants/minigames';
 
 const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
@@ -45,23 +45,6 @@ const COOP_DEFAULTS: Record<string, { name: string; description: string; timeLim
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type SelectRoute = RouteProp<MainModalParamList, 'MinigameSelect'>;
 
-const ALL_MINIGAMES: MinigameInfo[] = [
-  { minigameId: 'grove-words', name: 'Wordle', timeLimit: 180, description: 'Guess the word in 6 tries', completed: false },
-  { minigameId: 'word-clusters', name: 'Word Clusters', timeLimit: 180, description: 'Sort 16 words into 4 groups. 8 mistakes allowed.', completed: false },
-  { minigameId: 'pips', name: 'Snuff Out', timeLimit: 75, description: 'Turn all the cells dark. Tap to toggle a cell and its neighbours.', completed: false },
-  { minigameId: 'vine-trail', name: 'Word Hunt', timeLimit: 180, description: 'Find all the hidden words in the letter grid. Every letter belongs to a word \u2014 trace your path and hunt them down.', completed: false },
-  { minigameId: 'mosaic', name: 'Tile Fit', timeLimit: 120, description: 'Fit all the colored pieces into the grid. No gaps, no overlaps.', completed: false },
-  { minigameId: 'number-grove', name: 'Mini Sudoku', timeLimit: 90, description: 'Fill the 6\u00D76 grid so every row, column, and box contains each number from 1 to 6 exactly once.', completed: false },
-  { minigameId: 'stone-pairs', name: 'Flip & Match', timeLimit: 90, description: 'Flip cards to find matching pairs. Remember what you saw \u2014 every flip counts.', completed: false },
-  { minigameId: 'potion-logic', name: 'Logic Grid', timeLimit: 150, description: 'Read the clues. Deduce which ingredient and effect belongs to each potion. Process of elimination.', completed: false },
-  { minigameId: 'leaf-sort', name: 'Color Sort', timeLimit: COLOR_SORT_TIME_LIMIT, description: 'Sort colored beads into jars. Move one bead at a time — each jar must hold only one color.', completed: false },
-  { minigameId: 'cipher-stones', name: 'Cipher', timeLimit: 150, description: 'A famous quote has been scrambled \u2014 every letter replaced with another. Decode it letter by letter before time runs out.', completed: false },
-  { minigameId: 'path-weaver', name: 'Nonogram', timeLimit: 180, description: 'Use number clues to fill a pixel grid and reveal a hidden image.', completed: false },
-  { minigameId: 'firefly-flow', name: 'Connect the Dots', timeLimit: 90, description: 'Connect matching colour pairs with paths. Fill every tile on the grid \u2014 no gaps, no crossings.', completed: false },
-  { minigameId: 'grove-equations', name: 'Number Crunch', timeLimit: 90, description: 'Tap the operators between four numbers to make them equal the target.', completed: false },
-  { minigameId: 'bloom-sequence', name: 'Spot the Pattern', timeLimit: 60, description: 'A sequence of 5 items follows a pattern. Pick the correct 6th item \u2014 3 rounds, no mistakes allowed.', completed: false },
-  { minigameId: 'shift-slide', name: 'Tile Slide', timeLimit: 120, description: 'Slide the tiles to piece together a hidden picture.', completed: false },
-];
 
 const MINIGAME_ICONS: Record<string, string> = {
   'grove-words': '📝',
@@ -85,6 +68,14 @@ const MINIGAME_ICONS: Record<string, string> = {
   'vine-trail-coop': '🌿',
   'cipher-stones-coop': '🔮',
   'potion-logic-coop': '⚗️',
+};
+
+const DIFF_ORDER: Record<'easy' | 'medium' | 'hard', number> = { easy: 0, medium: 1, hard: 2 };
+
+const DIFF_LABEL_COLORS: Record<'easy' | 'medium' | 'hard', string> = {
+  easy:   '#4CAF50',
+  medium: '#E6A817',
+  hard:   '#E05A3A',
 };
 
 export default function MinigameSelectScreen() {
@@ -165,7 +156,22 @@ export default function MinigameSelectScreen() {
       : __DEV__ && showAllMinigames
         ? ALL_MINIGAMES
         : filteredPool;
-  const allExhausted = soloMinigames.length > 0 && soloMinigames.every((m) => m.completed);
+
+  const sortedSoloMinigames = soloMinigames
+    .map(m => ({
+      ...m,
+      difficulty: (m.difficulty ?? MINIGAME_DIFFICULTY[m.minigameId] ?? 'medium') as 'easy' | 'medium' | 'hard',
+    }))
+    .sort((a, b) => DIFF_ORDER[a.difficulty] - DIFF_ORDER[b.difficulty]);
+
+  const sortedCoopMinigames = coopMinigames
+    .map(m => ({
+      ...m,
+      difficulty: (m.difficulty ?? MINIGAME_DIFFICULTY[m.minigameId] ?? 'medium') as 'easy' | 'medium' | 'hard',
+    }))
+    .sort((a, b) => DIFF_ORDER[a.difficulty] - DIFF_ORDER[b.difficulty]);
+
+  const allExhausted = sortedSoloMinigames.length > 0 && sortedSoloMinigames.every((m) => m.completed);
 
   const handleSelect = async (minigame: MinigameInfo) => {
     if (loading) return;
@@ -309,47 +315,54 @@ export default function MinigameSelectScreen() {
             <Text style={styles.coopOnlyText}>Co-op only at this location</Text>
           </View>
         )}
-        {soloMinigames.length === 0 && !loading && (
+        {sortedSoloMinigames.length === 0 && !loading && (
           <View style={styles.emptyState}>
             <Text style={styles.emptyStateText}>No minigames available here right now.</Text>
           </View>
         )}
 
         {/* Solo minigames section */}
-        <Text style={styles.sectionHeader}>Solo</Text>
-        <View style={styles.grid}>
-          {soloMinigames.map((item) => (
-            <TouchableOpacity
-              key={item.minigameId}
-              style={[styles.card, item.completed && styles.cardDone, !xpAvailable && !item.completed && styles.cardNoXp]}
-              onPress={() => handleSelect(item)}
-              disabled={loading || item.completed}
-              activeOpacity={item.completed ? 1 : 0.7}
-            >
-              <Text style={[styles.cardEmoji, !xpAvailable && !item.completed && styles.cardEmojiMuted]}>
-                {MINIGAME_ICONS[item.minigameId] || '🎮'}
-              </Text>
-              <Text style={[styles.cardName, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <Text
-                style={[styles.cardDesc, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}
-                numberOfLines={2}
-              >
-                {item.description}
-              </Text>
-              {item.completed ? (
-                <Text style={styles.cardCompleted}>✓ Done</Text>
-              ) : !xpAvailable ? (
-                <Text style={styles.cardNoXpBadge}>0 XP</Text>
-              ) : (
-                <Text style={styles.cardTime}>⏱ {item.timeLimit}s</Text>
-              )}
-            </TouchableOpacity>
-          ))}
-        </View>
+        {!isCoopOnly && (
+          <>
+            <Text style={styles.sectionHeader}>Solo</Text>
+            <View style={styles.grid}>
+              {sortedSoloMinigames.map((item) => (
+                <TouchableOpacity
+                  key={item.minigameId}
+                  style={[styles.card, item.completed && styles.cardDone, !xpAvailable && !item.completed && styles.cardNoXp]}
+                  onPress={() => handleSelect(item)}
+                  disabled={loading || item.completed}
+                  activeOpacity={item.completed ? 1 : 0.7}
+                >
+                  <Text style={[styles.cardEmoji, !xpAvailable && !item.completed && styles.cardEmojiMuted]}>
+                    {MINIGAME_ICONS[item.minigameId] || '🎮'}
+                  </Text>
+                  <Text style={[styles.difficultyBadge, { color: DIFF_LABEL_COLORS[item.difficulty ?? 'medium'] }]}>
+                    {(item.difficulty ?? 'medium').toUpperCase()}
+                  </Text>
+                  <Text style={[styles.cardName, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]} numberOfLines={1}>
+                    {item.name}
+                  </Text>
+                  <Text
+                    style={[styles.cardDesc, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]}
+                    numberOfLines={2}
+                  >
+                    {item.description}
+                  </Text>
+                  {item.completed ? (
+                    <Text style={styles.cardCompleted}>✓ Done</Text>
+                  ) : !xpAvailable ? (
+                    <Text style={styles.cardNoXpBadge}>0 XP</Text>
+                  ) : (
+                    <Text style={styles.cardTime}>⏱ {item.timeLimit}s</Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+          </>
+        )}
 
-        {(isCoopOnly || practiceMode) && (
+        {(isCoopOnly || isCoopSession || practiceMode) && (
           <>
             {/* Divider */}
             <View style={styles.sectionDivider}>
@@ -360,7 +373,7 @@ export default function MinigameSelectScreen() {
 
             {/* Co-op minigames section */}
             <View style={styles.grid}>
-              {coopMinigames.map((item) => (
+              {sortedCoopMinigames.map((item) => (
                 <TouchableOpacity
                   key={item.minigameId}
                   style={[styles.card, item.completed && styles.cardDone, !xpAvailable && !item.completed && styles.cardNoXp]}
@@ -370,6 +383,9 @@ export default function MinigameSelectScreen() {
                 >
                   <Text style={[styles.cardEmoji, !xpAvailable && !item.completed && styles.cardEmojiMuted]}>
                     {MINIGAME_ICONS[item.minigameId] || '🎮'}
+                  </Text>
+                  <Text style={[styles.difficultyBadge, { color: DIFF_LABEL_COLORS[item.difficulty ?? 'medium'] }]}>
+                    {(item.difficulty ?? 'medium').toUpperCase()}
                   </Text>
                   <Text style={[styles.cardName, item.completed && styles.cardTextDone, !xpAvailable && !item.completed && styles.cardTextMuted]} numberOfLines={1}>
                     {item.name}
@@ -504,6 +520,12 @@ const styles = StyleSheet.create({
   cardEmoji: {
     fontSize: 32,
     marginBottom: 6,
+  },
+  difficultyBadge: {
+    fontFamily: FONTS.bodySemiBold,
+    fontSize: 10,
+    letterSpacing: 0.5,
+    marginBottom: 2,
   },
   cardName: {
     fontSize: 14,

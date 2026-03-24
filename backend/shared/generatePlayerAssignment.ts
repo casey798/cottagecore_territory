@@ -4,7 +4,6 @@ import { toZonedTime } from 'date-fns-tz';
 import { getItem, query, docClient, tableName } from './db';
 import {
   DailyConfig,
-  DailyConfigStatus,
   User,
   PlayerAssignment,
   LocationMasterConfig,
@@ -70,7 +69,7 @@ function isConditionalCheckFailed(e: unknown): boolean {
  *
  * Throws if:
  * - daily-config does not exist for the given date
- * - daily-config status is not 'active'
+ * - daily-config exists but resetSeq is absent (8 AM reset has not yet run)
  * - no active locations are configured for the date
  * - user record is not found
  */
@@ -78,13 +77,13 @@ export async function generatePlayerAssignment(
   userId: string,
   date: string,
 ): Promise<PlayerAssignment> {
-  // Read daily-config — must be active
+  // Read daily-config — must exist and have had the 8 AM reset run
   const dailyConfig = await getItem<DailyConfig>('daily-config', { date });
   if (!dailyConfig) {
-    throw new Error(`No daily config found for date: ${date}`);
+    throw new Error('GAME_INACTIVE');
   }
-  if (dailyConfig.status !== DailyConfigStatus.Active) {
-    throw new Error(`Daily config for ${date} is not active (status: ${dailyConfig.status})`);
+  if (dailyConfig.resetSeq == null) {
+    throw new Error('GAME_INACTIVE: Daily reset has not run yet');
   }
   if (dailyConfig.activeLocationIds.length === 0) {
     throw new Error(`No active locations for date: ${date}`);

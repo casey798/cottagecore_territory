@@ -242,6 +242,14 @@ export const useAuthStore = create<AuthState>()(
           });
           return true;
         }
+        if (result.error?.code === 'NETWORK_ERROR') {
+          // Device is offline — the stored token may still be valid. Admit the
+          // user with their cached Zustand state; live data will load once
+          // connectivity returns. Do NOT clear Keychain.
+          set({ token: stored.token, isAuthenticated: true, isLoading: false });
+          return true;
+        }
+        // Definitive auth failure (UNAUTHORIZED, bad token, etc.) — sign out.
         await clearTokens();
         set({ isLoading: false });
         return false;
@@ -252,6 +260,7 @@ export const useAuthStore = create<AuthState>()(
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (state) => ({
         userId: state.userId,
+        isAuthenticated: state.isAuthenticated,
         clan: state.clan,
         tutorialDone: state.tutorialDone,
         tutorialSkipped: state.tutorialSkipped,

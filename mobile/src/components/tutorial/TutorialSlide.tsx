@@ -16,6 +16,8 @@ interface TutorialSlideProps {
   onNext: () => void;
   onSkip: () => void;
   showSkip?: boolean;
+  onBack?: () => void;
+  showBack?: boolean;
 }
 
 export default function TutorialSlide({
@@ -23,19 +25,31 @@ export default function TutorialSlide({
   onNext,
   onSkip,
   showSkip = true,
+  onBack,
+  showBack = true,
 }: TutorialSlideProps) {
   return (
     <TouchableWithoutFeedback onPress={onNext}>
       <View style={styles.container}>
         <Image source={image} style={styles.slideImage} resizeMode="contain" />
+        {showBack && onBack && (
+          <TouchableOpacity
+            style={[styles.overlayBtn, styles.overlayBtnLeft]}
+            onPress={onBack}
+            activeOpacity={0.7}
+            hitSlop={8}
+          >
+            <Text style={styles.overlayBtnText}>&#8592; Back</Text>
+          </TouchableOpacity>
+        )}
         {showSkip && (
           <TouchableOpacity
-            style={styles.skipBtn}
+            style={[styles.overlayBtn, styles.overlayBtnRight]}
             onPress={onSkip}
             activeOpacity={0.7}
             hitSlop={8}
           >
-            <Text style={styles.skipText}>Skip</Text>
+            <Text style={styles.overlayBtnText}>Skip</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -57,17 +71,22 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '100%',
   },
-  skipBtn: {
+  overlayBtn: {
     position: 'absolute',
     top: 16,
-    right: 16,
     zIndex: 10,
     backgroundColor: 'rgba(0, 0, 0, 0.45)',
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 20,
   },
-  skipText: {
+  overlayBtnLeft: {
+    left: 16,
+  },
+  overlayBtnRight: {
+    right: 16,
+  },
+  overlayBtnText: {
     fontFamily: FONTS.bodySemiBold,
     fontSize: 13,
     color: PALETTE.white,

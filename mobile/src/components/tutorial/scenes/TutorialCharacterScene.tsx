@@ -20,6 +20,8 @@ interface TutorialCharacterSceneProps {
 export default function TutorialCharacterScene({
   onComplete,
 }: TutorialCharacterSceneProps) {
+  const savedDisplayName = useAuthStore((s) => s.displayName);
+  const savedPresetId = useAuthStore((s) => s.selectedPresetId);
   const setSelectedPresetId = useAuthStore((s) => s.setSelectedPresetId);
   const setDisplayName = useAuthStore((s) => s.setDisplayName);
 
@@ -56,8 +58,11 @@ export default function TutorialCharacterScene({
 
       <View style={styles.creationArea}>
         <CharacterCreationWidget
+          initialDisplayName={savedDisplayName ?? undefined}
+          initialPresetId={savedPresetId ?? undefined}
           confirmLabel="Enter the Grove →"
           onComplete={handleComplete}
+          compact={true}
         />
       </View>
     </View>

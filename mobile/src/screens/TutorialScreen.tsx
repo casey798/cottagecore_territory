@@ -41,6 +41,10 @@ export default function TutorialScreen() {
     setSceneIndex((prev) => Math.min(prev + 1, TOTAL_SCENES - 1));
   };
 
+  const handleBack = () => {
+    if (sceneIndex > 0) setSceneIndex((prev) => prev - 1);
+  };
+
   /**
    * Skip handler: jump to character creation without setting any store flag yet.
    * The store is updated only after character creation completes (handleTutorialDone).
@@ -85,6 +89,8 @@ export default function TutorialScreen() {
             image={TUTORIAL_IMAGES.s1}
             onNext={advance}
             onSkip={handleSkip}
+            onBack={handleBack}
+            showBack={sceneIndex > 0}
           />
         );
       case 1:
@@ -93,6 +99,8 @@ export default function TutorialScreen() {
             image={TUTORIAL_IMAGES.s2}
             onNext={advance}
             onSkip={handleSkip}
+            onBack={handleBack}
+            showBack={sceneIndex > 0}
           />
         );
       case 2:
@@ -101,6 +109,8 @@ export default function TutorialScreen() {
             image={TUTORIAL_IMAGES.s3}
             onNext={advance}
             onSkip={handleSkip}
+            onBack={handleBack}
+            showBack={sceneIndex > 0}
           />
         );
       case 3:
@@ -109,6 +119,8 @@ export default function TutorialScreen() {
             image={TUTORIAL_IMAGES.s4}
             onNext={advance}
             onSkip={handleSkip}
+            onBack={handleBack}
+            showBack={sceneIndex > 0}
           />
         );
       case 4:
@@ -117,6 +129,8 @@ export default function TutorialScreen() {
             image={s5Image}
             onNext={advance}
             onSkip={handleSkip}
+            onBack={handleBack}
+            showBack={sceneIndex > 0}
           />
         );
       case 5:
@@ -125,6 +139,8 @@ export default function TutorialScreen() {
             image={TUTORIAL_IMAGES.s6}
             onNext={advance}
             onSkip={handleSkip}
+            onBack={handleBack}
+            showBack={sceneIndex > 0}
           />
         );
       case 6:

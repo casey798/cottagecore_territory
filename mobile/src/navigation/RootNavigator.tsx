@@ -17,6 +17,7 @@ import LoginScreen from '@/screens/LoginScreen';
 import TutorialScreen from '@/screens/TutorialScreen';
 import TermsAndConditionsScreen from '@/screens/TermsAndConditionsScreen';
 import { MainStack } from './MainStack';
+import { GlobalErrorBanner } from '@/components/common/GlobalErrorBanner';
 
 export type RootStackParamList = {
   Login: undefined;
@@ -135,6 +136,7 @@ export function RootNavigator() {
           <Stack.Screen name="Main" component={MainStack} />
         )}
       </Stack.Navigator>
+      <GlobalErrorBanner />
     </NavigationContainer>
   );
 }

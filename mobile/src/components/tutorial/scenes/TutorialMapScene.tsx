@@ -1,11 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState, useCallback } from 'react';
 import {
   View,
   Image,
   Text,
-  Pressable,
-  Animated,
-  Easing,
   StyleSheet,
   Dimensions,
   TouchableWithoutFeedback,
@@ -14,11 +11,14 @@ import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { CottageButton } from '@/components/common/CottageButton';
 import { MapCanvas } from '@/components/map/MapCanvas';
-import { MapPin } from '@/components/map/MapPin';
-import GroveWordsGame from '@/minigames/grove-words/GroveWordsGame';
+import StonePairsGame from '@/minigames/stone-pairs/StonePairsGame';
+import FireflyFlowGame from '@/minigames/firefly-flow/FireflyFlowGame';
+import BloomSequenceGame from '@/minigames/bloom-sequence/BloomSequenceGame';
+import LeafSortGame from '@/minigames/leaf-sort/LeafSortGame';
+import { ALL_MINIGAMES } from '@/constants/minigames';
 import { TUTORIAL_IMAGES } from '@/assets/tutorial/tutorialAssets';
+import { TUTORIAL_LOCATION_PIXEL } from '@/constants/config';
 import { useMapStore } from '@/store/useMapStore';
-import type { Location } from '@/types';
 import type { MinigameResult } from '@/types/minigame';
 
 // ─── Screen dimensions for overlay image sizing ───────────────────────────────
@@ -27,34 +27,25 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const IMG_ASPECT = 1920 / 1080;
 const imgHeight = SCREEN_WIDTH * IMG_ASPECT;
 
-// ─── Tutorial pin fake location ───────────────────────────────────────────────
+// ─── Tutorial minigame pool ───────────────────────────────────────────────────
 
-const TUTORIAL_FAKE_LOCATION: Location = {
-  locationId: 'tutorial-location',
-  name: 'The Grove',
-  gpsLat: 0,
-  gpsLng: 0,
-  geofenceRadius: 0,
-  category: 'other',
-  locked: false,
+const TUTORIAL_GAME_COMPONENTS: Record<string, React.ComponentType<any>> = {
+  'stone-pairs':    StonePairsGame,
+  'firefly-flow':   FireflyFlowGame,
+  'bloom-sequence': BloomSequenceGame,
+  'leaf-sort':      LeafSortGame,
 };
+
+const TUTORIAL_GAME_IDS = [
+  'stone-pairs',
+  'firefly-flow',
+  'bloom-sequence',
+  'leaf-sort',
+] as const;
 
 // ─── Phase types ──────────────────────────────────────────────────────────────
 
 type MapPhase = 'map' | 'gamePreview' | 'minigame' | 'result';
-
-// ─── PulsePin ─────────────────────────────────────────────────────────────────
-
-function PulseRing({ scale, opacity }: { scale: Animated.Value; opacity: Animated.Value }) {
-  return (
-    <Animated.View
-      style={[
-        styles.pulseRing,
-        { transform: [{ scale }], opacity },
-      ]}
-    />
-  );
-}
 
 // ─── Main Component ──────────────────────────────────────────────────────────
 
@@ -66,52 +57,16 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
   const [phase, setPhase] = useState<MapPhase>('map');
   const [gameResult, setGameResult] = useState<'win' | 'lose' | null>(null);
 
-  const { width: screenWidth, height: screenHeight } = Dimensions.get('window');
-
-  // Pin position: horizontal center, upper-center of screen
-  const pinX = screenWidth / 2;
-  const pinY = screenHeight * 0.38;
-
-  // Pulse animation for the map pin
-  const pulseScale = useRef(new Animated.Value(1)).current;
-  const pulseOpacity = useRef(new Animated.Value(0.7)).current;
-
-  useEffect(() => {
-    if (phase !== 'map') return;
-
-    const loop = Animated.loop(
-      Animated.parallel([
-        Animated.sequence([
-          Animated.timing(pulseScale, {
-            toValue: 1.7,
-            duration: 900,
-            easing: Easing.out(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseScale, {
-            toValue: 1,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-        ]),
-        Animated.sequence([
-          Animated.timing(pulseOpacity, {
-            toValue: 0,
-            duration: 900,
-            easing: Easing.out(Easing.ease),
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseOpacity, {
-            toValue: 0.7,
-            duration: 0,
-            useNativeDriver: true,
-          }),
-        ]),
-      ]),
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [phase, pulseScale, pulseOpacity]);
+  const selectedGame = useMemo(() => {
+    const id = TUTORIAL_GAME_IDS[Math.floor(Math.random() * TUTORIAL_GAME_IDS.length)];
+    const info = ALL_MINIGAMES.find(m => m.minigameId === id)!;
+    return {
+      id,
+      name: info.name,
+      description: info.description,
+      component: TUTORIAL_GAME_COMPONENTS[id],
+    };
+  }, []);
 
   // Pre-load map config so MapCanvas has something to render
   useEffect(() => {
@@ -121,6 +76,10 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
         // Non-fatal — MapCanvas shows loading state if config is unavailable
       });
     }
+  }, []);
+
+  const handleTutorialPinPress = useCallback(() => {
+    setPhase('gamePreview');
   }, []);
 
   const handleGameComplete = (result: MinigameResult) => {
@@ -133,13 +92,18 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
   if (phase === 'map') {
     return (
       <View style={styles.container}>
-        <MapCanvas interactive={false} />
+        <MapCanvas
+          tutorialGlowPin={{ px: TUTORIAL_LOCATION_PIXEL.x, py: TUTORIAL_LOCATION_PIXEL.y }}
+          tutorialPinPress={handleTutorialPinPress}
+          playerX={TUTORIAL_LOCATION_PIXEL.x}
+          playerY={TUTORIAL_LOCATION_PIXEL.y}
+        />
 
         {/* s7 Moss overlay — transparent PNG, map shows through */}
         <View style={styles.s7Overlay} pointerEvents="none">
           <Image
             source={TUTORIAL_IMAGES.s7}
-            style={{ width: '100%', height: '100%' }}
+            style={styles.s7Image}
             resizeMode="contain"
           />
         </View>
@@ -150,26 +114,6 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
             Tap the glowing pin to begin your challenge!
           </Text>
         </View>
-
-        {/* Pulsing ring behind the pin */}
-        <View
-          pointerEvents="none"
-          style={[
-            styles.pulseContainer,
-            { left: pinX - 24, top: pinY - 24 },
-          ]}
-        >
-          <PulseRing scale={pulseScale} opacity={pulseOpacity} />
-        </View>
-
-        {/* The actual MapPin */}
-        <MapPin
-          location={TUTORIAL_FAKE_LOCATION}
-          pixelX={pinX}
-          pixelY={pinY}
-          onPress={() => setPhase('gamePreview')}
-          inRange
-        />
       </View>
     );
   }
@@ -181,10 +125,8 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
       <TouchableWithoutFeedback onPress={() => setPhase('minigame')}>
         <View style={styles.gamePreviewBackdrop}>
           <View style={styles.gamePreviewCard}>
-            <Text style={styles.gamePreviewTitle}>Grove Words</Text>
-            <Text style={styles.gamePreviewSubtitle}>
-              Guess the hidden 5-letter word. You have 6 tries.
-            </Text>
+            <Text style={styles.gamePreviewTitle}>{selectedGame.name}</Text>
+            <Text style={styles.gamePreviewSubtitle}>{selectedGame.description}</Text>
             <Text style={styles.gamePreviewHint}>Tap anywhere to begin</Text>
           </View>
         </View>
@@ -195,13 +137,14 @@ export default function TutorialMapScene({ onComplete }: TutorialMapSceneProps) 
   // ── Phase: minigame ─────────────────────────────────────────────────────────
 
   if (phase === 'minigame') {
+    const MinigameComponent = selectedGame.component;
     return (
       <View style={styles.container}>
         <View style={styles.practiceBar}>
           <Text style={styles.practiceText}>Practice — no XP earned</Text>
         </View>
         <View style={styles.gameArea}>
-          <GroveWordsGame
+          <MinigameComponent
             sessionId="tutorial-demo"
             timeLimit={120}
             onComplete={handleGameComplete}
@@ -254,6 +197,10 @@ const styles = StyleSheet.create({
     height: imgHeight,
     zIndex: 10,
   },
+  s7Image: {
+    width: '100%',
+    height: '100%',
+  },
   // Map phase — instruction label
   mapInstructionRow: {
     position: 'absolute',
@@ -271,21 +218,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 12,
     overflow: 'hidden',
-  },
-  pulseContainer: {
-    position: 'absolute',
-    width: 48,
-    height: 48,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  pulseRing: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    borderWidth: 2,
-    borderColor: PALETTE.honeyGold,
-    backgroundColor: 'transparent',
   },
   // Game preview phase
   gamePreviewBackdrop: {

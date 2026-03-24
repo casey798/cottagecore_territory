@@ -75,11 +75,9 @@ export function submitLeave(
 export function submitSpaceSentiment(
   sessionId: string,
   sentiment: SpaceSentiment,
-): void {
-  apiRequest(SUBMIT_SENTIMENT(sessionId), {
+) {
+  return apiRequest(SUBMIT_SENTIMENT(sessionId), {
     method: 'PATCH',
     body: JSON.stringify({ spaceSentiment: sentiment }),
-  }).catch((err) => {
-    console.warn('[submitSpaceSentiment] Failed (non-blocking):', err);
   });
 }

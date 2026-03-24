@@ -213,7 +213,7 @@ export default function WordClustersGame(props: MinigamePlayProps) {
       setOverlayResult(outcome === 'win' ? 'win' : 'lose');
       setShowCompleteOverlay(true);
     },
-    [sessionId, mistakes, solvedGroups],
+    [sessionId],
   );
 
   const handleContinue = useCallback(() => {
@@ -457,7 +457,6 @@ export default function WordClustersGame(props: MinigamePlayProps) {
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
           onContinue={handleContinue}
           practiceMode={practiceMode}
         />
@@ -477,22 +476,22 @@ export default function WordClustersGame(props: MinigamePlayProps) {
             </TouchableOpacity>
             <Text style={styles.modalTitle}>How to Play {'\u2014'} Word Clusters</Text>
             <Text style={styles.modalRule}>
-              {'\u2022'} 16 words are shown on the board. Your goal is to find 4 groups of 4 words that share something in common.
+              {'\u2022'} 16 words are displayed in a 4{'\u00D7'}4 grid.
             </Text>
             <Text style={styles.modalRule}>
-              {'\u2022'} Tap words to select them. When you have 4 selected, tap Submit to check if they form a group.
+              {'\u2022'} Find 4 groups of 4 words that share a category.
             </Text>
             <Text style={styles.modalRule}>
-              {'\u2022'} If correct, the group is cleared from the board and its category is revealed.
+              {'\u2022'} Tap 4 words, then tap Submit to check your group.
             </Text>
             <Text style={styles.modalRule}>
-              {'\u2022'} If wrong, a mistake is counted. You can make up to 8 mistakes before the game ends.
+              {'\u2022'} You get 8 mistakes before the game ends.
             </Text>
             <Text style={styles.modalRule}>
-              {'\u2022'} Tap a selected word again to deselect it. Tap Deselect All to clear your selection.
+              {'\u2022'} Use hints (3 available) to reveal a category label.
             </Text>
             <Text style={styles.modalRule}>
-              {'\u2022'} Use a Hint to reveal the category label of one unsolved group. You have 3 hints {'\u2014'} there is a 60-second cooldown between hints.
+              {'\u2022'} Find all 4 groups before time runs out to win.
             </Text>
             <Text style={styles.modalTip}>
               Tip: One word can look like it belongs to multiple groups. Look for the group where all 4 words fit perfectly.

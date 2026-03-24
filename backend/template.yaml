@@ -228,7 +228,7 @@ Resources:
       CorsConfiguration:
         CorsRules:
           - AllowedOrigins: ['*']
-            AllowedMethods: [PUT]
+            AllowedMethods: [GET, PUT]
             AllowedHeaders: ['Content-Type']
             MaxAge: 300
 
@@ -839,6 +839,14 @@ Resources:
             TableName: !Ref PlayerLocksTable
         - DynamoDBCrudPolicy:
             TableName: !Ref PlayerAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref DailyConfigTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref LocationMasterConfigTable
+        - DynamoDBReadPolicy:
+            TableName: !Ref ClusterWeightConfigTable
       Events:
         Api:
           Type: Api
@@ -1176,6 +1184,8 @@ Resources:
             TableName: !Ref PlayerLocksTable
         - DynamoDBCrudPolicy:
             TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref LocationMasterConfigTable
       Events:
         Api:
           Type: Api

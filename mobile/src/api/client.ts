@@ -69,8 +69,31 @@ export async function apiRequest<T>(
     });
 
     if (response.status === 401 && token) {
-      // Try refreshing the Firebase ID token
-      const newToken = await refreshFirebaseToken();
+      // Try refreshing the Firebase ID token.
+      // refreshFirebaseToken() returns null only when there is no current Firebase
+      // user (genuine sign-out). It throws on network errors or Firebase auth
+      // rejections (token revoked, user disabled, etc.).
+      let newToken: string | null = null;
+      try {
+        newToken = await refreshFirebaseToken();
+      } catch (refreshErr) {
+        const code = (refreshErr as { code?: string })?.code ?? '';
+        if (code === 'auth/network-request-failed' || code === '') {
+          // Network failure during the refresh round-trip — the stored token may
+          // still be valid. Do NOT clear Keychain; surface as a transient error.
+          return {
+            success: false,
+            error: { code: 'NETWORK_ERROR', message: 'Network request failed' },
+          };
+        }
+        // Firebase explicitly rejected the refresh (revoked, user disabled, etc.)
+        // — this is a genuine auth failure, sign the user out.
+        await useAuthStore.getState().logout();
+        return {
+          success: false,
+          error: { code: 'UNAUTHORIZED', message: 'Session expired' },
+        };
+      }
       if (newToken) {
         headers.Authorization = newToken;
         // Update stored token
@@ -81,7 +104,8 @@ export async function apiRequest<T>(
           headers,
         });
       } else {
-        await clearTokens();
+        // refreshFirebaseToken() returned null — no current Firebase user.
+        await useAuthStore.getState().logout();
         return {
           success: false,
           error: { code: 'UNAUTHORIZED', message: 'Session expired' },

@@ -33,10 +33,12 @@ import { useDebugStore } from '@/store/useDebugStore';
 import { ClanId, Location, CapturedSpace, SpaceDecoration } from '@/types';
 import { isWithinMapBounds, getEdgeIndicator } from '@/utils/mapBounds';
 import { pixelToGps } from '@/utils/affineTransform';
-import { PLAYER_DOT_IMAGES, GPS_RING_COLORS } from '@/constants/playerAssets';
+import { GPS_RING_COLORS } from '@/constants/playerAssets';
+import { getPresetById } from '@/utils/characterPresets';
 import { ASSET_MAP } from '@/constants/assets';
 import { gpsToPixel } from '@/utils/affineTransform';
 import { MAP_TILE_SIZE } from '@/constants/config';
+import { MapPin } from './MapPin';
 import { MapPinsLayer } from './MapPinsLayer';
 import { MapOverlay } from './MapOverlay';
 import { DecorationMapItem } from './DecorationMapItem';
@@ -71,6 +73,9 @@ interface Props {
   pinRingColor?: string;
   pinProximities?: Map<string, { distance: number; geofenceRadius: number }>;
   interactive?: boolean;
+  tutorialGlowPin?: { px: number; py: number };
+  tutorialPinPress?: () => void;
+  highlightClanId?: ClanId | null;
 }
 
 function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
@@ -88,7 +93,7 @@ function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: n
   return inside;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, lockedUntilMap, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor, pinProximities, interactive = true }: Props) {
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, lockedUntilMap, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor, pinProximities, interactive = true, tutorialGlowPin, tutorialPinPress, highlightClanId }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
   const spaceDecorations = useMapStore((s) => s.spaceDecorations);
   const assetCategories = useMapStore((s) => s.assetCategories);
@@ -103,10 +108,11 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
   // Font for decoration category letters on the Skia canvas
   const decoFont = useFont(require('../../assets/fonts/PixelifySans-VariableFont_wght.ttf'), 10);
 
-  // Load player clan badge as a Skia image (pass require() result directly)
-  // PLAYER_DOT_IMAGES values are require() numbers at runtime; cast for Skia's DataSourceParam
-  const playerBadgeImage = useImage(
-    clan ? (PLAYER_DOT_IMAGES[clan] as number) : null,
+  // Load player character icon as a Skia image (icon require() values are numeric module IDs at runtime)
+  const selectedPresetId = useAuthStore((s) => s.selectedPresetId);
+  const characterPreset = selectedPresetId !== null ? getPresetById(selectedPresetId) : undefined;
+  const playerCharacterImage = useImage(
+    characterPreset ? (characterPreset.icon as unknown as number) : null,
   );
   const gpsRingColors = GPS_RING_COLORS[clan ?? 'ember'];
 
@@ -595,6 +601,26 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
   const ripple2Radius = useDerivedValue(() => interpolate(ripple2.value, [0, 1], [12, 36]));
   const ripple2Opacity = useDerivedValue(() => interpolate(ripple2.value, [0, 0.3, 1], [0.7, 0.5, 0.0]));
 
+  // FIX 4 — Highlight rings for selectSpace mode (pulsing border on own-clan spaces)
+  const highlightActive = useSharedValue(false);
+  useEffect(() => {
+    highlightActive.value = !!highlightClanId;
+  }, [highlightClanId, highlightActive]);
+  const animatedHighlightOpacity = useDerivedValue(() =>
+    highlightActive.value ? interpolate(pulseValue.value, [0, 1], [0.35, 0.9]) : 0,
+  );
+  const highlightClanPaths = useMemo(() => {
+    if (!highlightClanId || !capturedSpaces) return [];
+    return capturedSpaces
+      .filter((s) => s.clan === highlightClanId && s.polygonPoints && s.polygonPoints.length >= 3)
+      .map((s) => {
+        const pts = s.polygonPoints!;
+        const d = `M ${pts[0].x} ${pts[0].y} ` +
+          pts.slice(1).map((p) => `L ${p.x} ${p.y}`).join(' ') + ' Z';
+        return { key: s.spaceId, d, color: CLAN_COLORS[highlightClanId] };
+      });
+  }, [highlightClanId, capturedSpaces]);
+
   // Animated style for OOB text label
   const oobLabelStyle = useAnimatedStyle(() => {
     if (!edgeIndicator) return { opacity: 0 };
@@ -720,33 +746,50 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
 
   // Compute Skia glow data for each pin — idle glow always visible, intensifies with proximity
   const pinGlowData = useMemo(() => {
-    if (!locations || !mapConfig?.transformMatrix) return [];
-    return locations
-      .filter((loc) => !loc.locked && !xpExhaustedIds?.has(loc.locationId))
-      .map((loc) => {
-        const prox = pinProximities?.get(loc.locationId);
-        // factor: 0 = far/no GPS (idle glow), 1 = right on top of pin
-        const factor = prox
-          ? Math.max(0, Math.min(1, 1 - prox.distance / (prox.geofenceRadius * 2)))
-          : 0;
-        const pixel = gpsToPixel(loc.gpsLat, loc.gpsLng, mapConfig.transformMatrix);
-        const px = Math.round(pixel.x / MAP_TILE_SIZE) * MAP_TILE_SIZE;
-        const py = Math.round(pixel.y / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+    const glowEntries: Array<{ px: number; py: number; factor: number; baseColor: string; key: string; isInRange: boolean }> = [];
 
-        // State-aware glow color
-        const isInRange = inRangeIds?.has(loc.locationId) ?? false;
-        let baseColor: string;
-        if (loc.isCoop) {
-          baseColor = '#A78BFA';
-        } else if (loc.bonusXP) {
-          baseColor = '#E8F4FD';
-        } else {
-          baseColor = isInRange ? '#FFD700' : '#C8A84B';
-        }
+    if (locations && mapConfig?.transformMatrix) {
+      locations
+        .filter((loc) => !loc.locked && !xpExhaustedIds?.has(loc.locationId))
+        .forEach((loc) => {
+          const prox = pinProximities?.get(loc.locationId);
+          // factor: 0 = far/no GPS (idle glow), 1 = right on top of pin
+          const factor = prox
+            ? Math.max(0, Math.min(1, 1 - prox.distance / (prox.geofenceRadius * 2)))
+            : 0;
+          const pixel = gpsToPixel(loc.gpsLat, loc.gpsLng, mapConfig.transformMatrix);
+          const px = Math.round(pixel.x / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+          const py = Math.round(pixel.y / MAP_TILE_SIZE) * MAP_TILE_SIZE;
 
-        return { px, py, factor, baseColor, key: loc.locationId, isInRange };
+          // State-aware glow color
+          const isInRange = inRangeIds?.has(loc.locationId) ?? false;
+          let baseColor: string;
+          if (loc.isCoop) {
+            baseColor = '#A78BFA';
+          } else if (loc.bonusXP) {
+            baseColor = '#E8F4FD';
+          } else {
+            const clanHex = CLAN_COLORS[clan ?? 'ember'];
+            baseColor = isInRange ? clanHex : clanHex + 'AA';
+          }
+
+          glowEntries.push({ px, py, factor, baseColor, key: loc.locationId, isInRange });
+        });
+    }
+
+    if (tutorialGlowPin && mapConfig?.transformMatrix) {
+      glowEntries.push({
+        px: tutorialGlowPin.px,
+        py: tutorialGlowPin.py,
+        factor: 1.0,
+        isInRange: true,
+        baseColor: '#FFD700',
+        key: 'tutorial-pin',
       });
-  }, [locations, mapConfig?.transformMatrix, pinProximities, xpExhaustedIds, inRangeIds]);
+    }
+
+    return glowEntries;
+  }, [locations, mapConfig?.transformMatrix, pinProximities, xpExhaustedIds, inRangeIds, tutorialGlowPin]);
 
   // Early returns AFTER all hooks
   if (!mapConfig) {
@@ -878,6 +921,19 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                   selectedSpaceId={selectedSpaceId}
                 />
               )}
+              {/* FIX 4 — Highlight rings for selectSpace mode */}
+              {highlightClanPaths.map((h) => (
+                <SkiaPath
+                  key={`highlight-ring-${h.key}`}
+                  path={h.d}
+                  color={h.color}
+                  style="stroke"
+                  strokeWidth={5}
+                  opacity={animatedHighlightOpacity}
+                >
+                  <BlurMask blur={4} style="outer" />
+                </SkiaPath>
+              ))}
               {playerX != null && playerY != null && dotColor && inBounds && (
                 <Group>
                   {/* Expanding sonar ripple 1 */}
@@ -904,10 +960,10 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                   <Circle cx={playerX} cy={playerY} r={16} color="rgba(15, 10, 5, 0.4)" style="fill">
                     <BlurMask blur={6} style="normal" />
                   </Circle>
-                  {/* Player clan badge image */}
-                  {!isDebugMode && playerBadgeImage ? (
+                  {/* Player character icon */}
+                  {!isDebugMode && playerCharacterImage ? (
                     <SkiaImage
-                      image={playerBadgeImage}
+                      image={playerCharacterImage}
                       x={playerX - 11}
                       y={playerY - 11}
                       width={22}
@@ -976,6 +1032,15 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                 inRangeIds={inRangeIds}
                 xpExhaustedIds={xpExhaustedIds}
                 lockedUntilMap={lockedUntilMap}
+              />
+            )}
+            {tutorialGlowPin && tutorialPinPress && (
+              <MapPin
+                location={{ locationId: 'tutorial-location', name: 'The Grove', gpsLat: 0, gpsLng: 0, geofenceRadius: 0, category: 'other', locked: false }}
+                pixelX={tutorialGlowPin.px}
+                pixelY={tutorialGlowPin.py}
+                onPress={tutorialPinPress}
+                inRange
               />
             )}
         </Animated.View>

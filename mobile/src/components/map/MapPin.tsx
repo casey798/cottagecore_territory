@@ -4,12 +4,11 @@ import {
   StyleSheet,
   View,
   Image,
-  Text,
   ImageSourcePropType,
 } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 import { MAP_TILE_SIZE } from '@/constants/config';
 import { PALETTE } from '@/constants/colors';
-import { FONTS } from '@/constants/fonts';
 import { Location } from '@/types';
 import { useLocationLockTimer } from '@/hooks/useLocationLockTimer';
 
@@ -23,6 +22,10 @@ const PIN_IMAGES = {
 
 const PIN_SIZE = 30;
 const CONTAINER_SIZE = 42;
+const RING_SIZE = 38;
+const RING_RADIUS = 16;
+const RING_STROKE = 3;
+const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 function getPinImage(isLocked: boolean, isCoop: boolean, xpExhausted: boolean, bonusXP: boolean): ImageSourcePropType {
   if (isLocked) return PIN_IMAGES.locked;
@@ -79,7 +82,32 @@ export function MapPin({ location, pixelX, pixelY, onPress, xpExhausted, isCoop,
         />
       </View>
       {isLocked && (
-        <Text style={styles.lockTimerText}>{lockTimer.formattedTime}</Text>
+        <View style={styles.lockRingWrapper} pointerEvents="none">
+          <Svg width={RING_SIZE} height={RING_SIZE}>
+            <Circle
+              cx={RING_SIZE / 2}
+              cy={RING_SIZE / 2}
+              r={RING_RADIUS}
+              stroke={PALETTE.parchmentDark}
+              strokeWidth={RING_STROKE}
+              fill="none"
+              opacity={0.4}
+            />
+            <Circle
+              cx={RING_SIZE / 2}
+              cy={RING_SIZE / 2}
+              r={RING_RADIUS}
+              stroke={PALETTE.honeyGold}
+              strokeWidth={RING_STROKE}
+              fill="none"
+              strokeDasharray={RING_CIRCUMFERENCE}
+              strokeDashoffset={RING_CIRCUMFERENCE * (1 - lockTimer.progress)}
+              strokeLinecap="round"
+              rotation={-90}
+              origin={`${RING_SIZE / 2}, ${RING_SIZE / 2}`}
+            />
+          </Svg>
+        </View>
       )}
     </Pressable>
   );
@@ -105,11 +133,12 @@ const styles = StyleSheet.create({
     width: PIN_SIZE,
     height: PIN_SIZE,
   },
-  lockTimerText: {
-    fontFamily: FONTS.bodyBold,
-    fontSize: 10,
-    color: PALETTE.warmBrown,
-    textAlign: 'center',
-    marginTop: 1,
+  lockRingWrapper: {
+    position: 'absolute',
+    top: (CONTAINER_SIZE - RING_SIZE) / 2,
+    left: (CONTAINER_SIZE - RING_SIZE) / 2,
+    width: RING_SIZE,
+    height: RING_SIZE,
+    zIndex: 10,
   },
 });

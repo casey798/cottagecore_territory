@@ -30,7 +30,13 @@ export type MainModalParamList = {
   Map: { mode?: 'selectSpace'; userAssetId?: string } | undefined;
   ClanScoreboard: undefined;
   PlayerProfile: undefined;
-  AssetInventory: { fromSpaceId?: string } | undefined;
+  AssetInventory: {
+    fromSpaceId?: string;
+    fromSpaceName?: string;
+    fromSpaceClan?: ClanId;
+    fromSpaceGridCells?: Array<{ x: number; y: number }>;
+    fromSpacePolygonPoints?: Array<{ x: number; y: number }>;
+  } | undefined;
   QRScanner: { locationId?: string; locationName?: string } | undefined;
   MinigameSelect: {
     locationId: string;

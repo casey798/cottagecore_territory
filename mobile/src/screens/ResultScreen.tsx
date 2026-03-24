@@ -26,6 +26,7 @@ import { ASSET_MAP } from '@/constants/assets';
 import { useClanStore } from '@/store/useClanStore';
 import { useGameStore } from '@/store/useGameStore';
 import { useMapStore } from '@/store/useMapStore';
+import { useAssetStore } from '@/store/useAssetStore';
 import { AssetRarity } from '@/types';
 import { useLocationLockTimer } from '@/hooks/useLocationLockTimer';
 
@@ -181,6 +182,12 @@ export default function ResultScreen() {
       lockLocation(locationId, lockedUntil);
       loadTodayLocations();
       patchLastScanResult({ xpAvailable: false });
+    }
+    // Optimistic badge increment after chest drop
+    if (hasChest) {
+      useAssetStore.getState().setUnplacedCount(
+        useAssetStore.getState().unplacedCount + 1,
+      );
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 

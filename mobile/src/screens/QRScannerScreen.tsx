@@ -29,6 +29,7 @@ import { getTodayISTString } from '@/utils/time';
 import * as gameApi from '@/api/game';
 import { ErrorCode, PlayerSearchResult, ScanQRMinigameResponse } from '@/types';
 import PartnerSearchModal from '@/components/common/PartnerSearchModal';
+import { useErrorStore } from '@/store/useErrorStore';
 
 type Nav = NativeStackNavigationProp<MainModalParamList>;
 type Route = RouteProp<MainModalParamList, 'QRScanner'>;
@@ -74,10 +75,9 @@ export default function QRScannerScreen() {
   const setScanResult = useGameStore((s) => s.setScanResult);
   const todayLocations = useMapStore((s) => s.todayLocations);
   const gps = useGPS();
+  const showError = useErrorStore((s) => s.showError);
   const [processing, setProcessing] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [cameraPermission, setCameraPermission] = useState<string | null>(null);
-  const errorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Co-op partner modal state
   const [showPartnerModal, setShowPartnerModal] = useState(false);
@@ -141,21 +141,10 @@ export default function QRScannerScreen() {
     requestCamera();
   }, []);
 
-  // Cleanup error timer on unmount
-  useEffect(() => {
-    return () => {
-      if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
-    };
-  }, []);
-
-  const showErrorAndResume = useCallback((message: string) => {
-    setErrorMsg(message);
+  const showErrorAndResume = useCallback((message: string, code?: string) => {
+    showError(message, code);
     setProcessing(false);
-    if (errorTimerRef.current) clearTimeout(errorTimerRef.current);
-    errorTimerRef.current = setTimeout(() => {
-      setErrorMsg(null);
-    }, ERROR_RESUME_MS);
-  }, []);
+  }, [showError]);
 
   const navigateToMinigameSelect = useCallback(
     (data: ScanQRMinigameResponse, coopPartner?: { userId: string; displayName: string }) => {
@@ -210,7 +199,7 @@ export default function QRScannerScreen() {
             ERROR_MESSAGES[code] ||
             result.error?.message ||
             'Something went wrong. Please try again.';
-          showErrorAndResume(message);
+          showErrorAndResume(message, code || undefined);
         }
       } catch {
         showErrorAndResume('Something went wrong. Please try again.');
@@ -289,7 +278,7 @@ export default function QRScannerScreen() {
 
   const handleQRDetected = useCallback(
     async (rawData: string) => {
-      if (processing || errorMsg || showPartnerModal) return;
+      if (processing || showPartnerModal) return;
       setProcessing(true);
 
       const qrData = parseQrPayload(rawData);
@@ -300,7 +289,7 @@ export default function QRScannerScreen() {
 
       await handleScanResult(qrData);
     },
-    [processing, errorMsg, showPartnerModal, showErrorAndResume, handleScanResult],
+    [processing, showPartnerModal, showErrorAndResume, handleScanResult],
   );
 
   const codeScanner = useCodeScanner({
@@ -370,11 +359,6 @@ export default function QRScannerScreen() {
         <View style={styles.processingOverlay}>
           <ActivityIndicator size="large" color={PALETTE.honeyGold} />
           <Text style={styles.processingText}>Verifying...</Text>
-        </View>
-      )}
-      {errorMsg && (
-        <View style={styles.errorOverlay}>
-          <Text style={styles.errorText}>{errorMsg}</Text>
         </View>
       )}
       {gpsTimedOut && (
@@ -534,23 +518,6 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
     marginTop: 12,
-  },
-  errorOverlay: {
-    position: 'absolute',
-    bottom: 100,
-    left: 24,
-    right: 24,
-    backgroundColor: 'rgba(192, 57, 43, 0.95)',
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  errorText: {
-    color: '#FFFFFF',
-    fontSize: 14,
-    fontFamily: FONTS.bodySemiBold,
-    textAlign: 'center',
   },
   gpsTimeoutBanner: {
     position: 'absolute',

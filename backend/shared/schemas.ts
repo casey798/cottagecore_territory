@@ -42,13 +42,13 @@ export const qrPayloadSchema = z.object({
 
 export const scanQrSchema = z.object({
   qrData: qrPayloadSchema,
-  coopPartnerId: z.string().uuid().nullable().optional(),
+  coopPartnerId: z.string().nullable().optional(),
 });
 
 export const startMinigameSchema = z.object({
   locationId: z.string().uuid(),
   minigameId: z.string(),
-  coopPartnerId: z.string().uuid().nullable(),
+  coopPartnerId: z.string().nullable().optional(),
 });
 
 export const completeMinigameSchema = z.object({

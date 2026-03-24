@@ -45,7 +45,8 @@ export function generatePuzzle(): Jars {
 
     let state = deepCopyJars(jars);
 
-    for (let move = 0; move < SCRAMBLE_MOVES; move++) {
+    let successfulMoves = 0;
+    for (let iter = 0; iter < SCRAMBLE_MOVES * 4 && successfulMoves < SCRAMBLE_MOVES; iter++) {
       const nonEmpty = state
         .map((jar, i) => ({ jar, i }))
         .filter(({ jar }) => jar.beads.length > 0);
@@ -53,14 +54,13 @@ export function generatePuzzle(): Jars {
 
       const source = nonEmpty[Math.floor(Math.random() * nonEmpty.length)];
       const destinations = state
-        .map((jar, i) => ({ jar, i }))
-        .filter(({ jar, i }) => i !== source.i && jar.beads.length < JAR_CAPACITY);
+        .map((_jar, i) => i)
+        .filter((i) => canMove(state, source.i, i));
       if (destinations.length === 0) continue;
 
-      const dest = destinations[Math.floor(Math.random() * destinations.length)];
-      const bead = state[source.i].beads[state[source.i].beads.length - 1];
-      state[source.i].beads = state[source.i].beads.slice(0, -1);
-      state[dest.i].beads = [...state[dest.i].beads, bead];
+      const destIndex = destinations[Math.floor(Math.random() * destinations.length)];
+      state = applyMove(state, source.i, destIndex);
+      successfulMoves++;
     }
 
     if (!checkWin(state)) {
@@ -120,4 +120,13 @@ export function applyMove(jars: Jars, fromIndex: number, toIndex: number): Jars 
   const bead = newJars[fromIndex].beads.pop()!;
   newJars[toIndex].beads.push(bead);
   return newJars;
+}
+
+export function hasAnyValidMove(jars: Jars): boolean {
+  for (let i = 0; i < jars.length; i++) {
+    for (let j = 0; j < jars.length; j++) {
+      if (canMove(jars, i, j)) return true;
+    }
+  }
+  return false;
 }

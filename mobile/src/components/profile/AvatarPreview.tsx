@@ -1,56 +1,59 @@
 import React from 'react';
-import { View, Text, Image, ImageBackground, StyleSheet } from 'react-native';
-import { PALETTE } from '@/constants/colors';
-import { FONTS } from '@/constants/fonts';
+import { Image, ImageBackground, StyleSheet } from 'react-native';
 import type { CharacterPreset } from '@/utils/characterPresets';
 
 const dialogueFrame = require('@/assets/ui/frames/dialogue_frame.png');
 
 interface AvatarPreviewProps {
   selectedPreset: CharacterPreset | null;
+  width?: number;
+  height?: number;
 }
 
-export default function AvatarPreview({ selectedPreset }: AvatarPreviewProps) {
+function makeStyles(w: number, h: number) {
+  const wScale = w / 220;
+  const hScale = h / 325;
+  return StyleSheet.create({
+    frame: {
+      width: w,
+      height: h,
+      alignSelf: 'center',
+      marginLeft: Math.round(30 * wScale),
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: Math.round(16 * wScale),
+    },
+    fullBody: {
+      width: Math.round(148 * wScale),
+      height: Math.round(188 * hScale),
+      marginRight: Math.round(20 * wScale),
+    },
+  });
+}
+
+const staticStyles = StyleSheet.create({
+  frameImage: {
+    width: '100%',
+    height: '100%',
+  },
+});
+
+export default function AvatarPreview({ selectedPreset, width = 120, height = 140 }: AvatarPreviewProps) {
+  const dynStyles = React.useMemo(() => makeStyles(width, height), [width, height]);
   return (
     <ImageBackground
       source={dialogueFrame}
       resizeMode="stretch"
-      style={styles.frame}
-      imageStyle={styles.frameImage}
+      style={dynStyles.frame}
+      imageStyle={staticStyles.frameImage}
     >
       {selectedPreset && (
         <Image
           source={selectedPreset.fullBody}
-          style={styles.fullBody}
+          style={dynStyles.fullBody}
           resizeMode="contain"
         />
       )}
     </ImageBackground>
   );
 }
-
-const styles = StyleSheet.create({
-  frame: {
-    width: 220,
-    height: 325,
-    alignSelf: 'center',
-    marginLeft: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-  },
-  frameImage: {
-    width: '100%',
-    height: '100%',
-  },
-  placeholderText: {
-    fontFamily: FONTS.bodyRegular,
-    fontSize: 14,
-    color: PALETTE.stoneGrey,
-  },
-  fullBody: {
-    width: 148,
-    height: 188,
-    marginRight: 20,
-  },
-});

@@ -19,7 +19,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 import { useGameStore } from '@/store/useGameStore';
 import { CottageButton } from '@/components/common/CottageButton';
 import { AppTextInput } from '@/components/common/AppTextInput';
-import { ErrorToast } from '@/components/common/ErrorToast';
+import { useErrorStore } from '@/store/useErrorStore';
 import { requestNotificationPermission } from '@/utils/notifications';
 import { ClanId } from '@/types';
 
@@ -65,10 +65,11 @@ export default function SettingsScreen() {
   const notificationsMuted = useGameStore((s) => s.notificationsMuted);
   const setNotificationsMuted = useGameStore((s) => s.setNotificationsMuted);
 
+  const showError = useErrorStore((s) => s.showError);
+
   // Local state
   const [editingName, setEditingName] = useState(false);
   const [nameDraft, setNameDraft] = useState(displayName ?? '');
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [gpsGranted, setGpsGranted] = useState<boolean | null>(null);
   const [showLogoutModal, setShowLogoutModal] = useState(false);
   const [quietNote, setQuietNote] = useState(false);
@@ -97,7 +98,7 @@ export default function SettingsScreen() {
   const handleNameSubmit = useCallback(() => {
     const trimmed = nameDraft.trim();
     if (trimmed.length === 0) {
-      setErrorMsg("Name can't be empty");
+      showError("Name can't be empty");
       return;
     }
     setDisplayName(trimmed);
@@ -119,7 +120,7 @@ export default function SettingsScreen() {
           );
           if (reqResult !== PermissionsAndroid.RESULTS.GRANTED) {
             if (mountedRef.current) {
-              setErrorMsg(
+              showError(
                 'Notifications are blocked in system settings. Enable them in your Android notification settings.',
               );
               setNotificationsMuted(true);
@@ -130,7 +131,7 @@ export default function SettingsScreen() {
         await requestNotificationPermission();
       } catch {
         if (mountedRef.current) {
-          setErrorMsg(
+          showError(
             'Notifications are blocked in system settings. Enable them in your Android notification settings.',
           );
           setNotificationsMuted(true);
@@ -152,7 +153,7 @@ export default function SettingsScreen() {
       if (mountedRef.current) {
         setGpsGranted(granted);
         if (!granted) {
-          setErrorMsg(
+          showError(
             'Location permission denied. GroveWars needs GPS to verify you\'re at a location. Please enable it in Android Settings > Apps > GroveWars > Permissions.',
           );
         }
@@ -346,7 +347,7 @@ export default function SettingsScreen() {
           </View>
           <View style={styles.row}>
             <Text style={styles.rowLabel}>Contact Email</Text>
-            <Pressable onPress={handleAdminEmail}>
+            <Pressable style={styles.emailLinkWrapper} onPress={handleAdminEmail}>
               <Text style={[styles.emergencyValue, { color: clanColor }]}>
                 {ADMIN_EMAIL}
               </Text>
@@ -404,8 +405,6 @@ export default function SettingsScreen() {
         </View>
       </Modal>
 
-      {/* Error toast */}
-      <ErrorToast message={errorMsg} onDismiss={() => setErrorMsg(null)} />
     </ImageBackground>
   );
 }
@@ -625,10 +624,14 @@ const styles = StyleSheet.create({
   },
 
   // ── About ──
+  emailLinkWrapper: {
+    flexShrink: 1,
+  },
   emergencyValue: {
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
     textDecorationLine: 'underline',
+    flexWrap: 'wrap',
   },
   aboutParagraph: {
     fontSize: 12,
