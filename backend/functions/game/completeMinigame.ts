@@ -35,9 +35,8 @@ import {
   User,
 } from '../../shared/types';
 
-const XP_PER_WIN = 25;
-const DAILY_XP_CAP = 100;
-const TIME_GRACE_SECONDS = 5;
+const XP_PER_WIN = 10; // Reduced from 25 for modified playtest
+const TIME_GRACE_SECONDS = 15;
 const MIN_COMPLETION_SECONDS = 5;
 
 // SYNC: keep this in sync with mobile/src/constants/assets.ts DECORATION_ASSETS
@@ -117,32 +116,14 @@ async function awardXpAndStreak(
   userId: string,
   today: string
 ): Promise<{ newTodayXp: number; clan: string; xpActuallyAwarded: boolean }> {
-  // Award 25 XP using ADD expression with condition to prevent exceeding daily cap
-  let xpActuallyAwarded = false;
-  let newTodayXp = 0;
-
-  try {
-    const updatedUser = await updateItem(
-      'users',
-      { userId },
-      'ADD todayXp :xp, seasonXp :xp, totalWins :one',
-      { ':xp': XP_PER_WIN, ':one': 1, ':maxXp': DAILY_XP_CAP - XP_PER_WIN },
-      undefined,
-      'todayXp <= :maxXp'
-    );
-    newTodayXp = (updatedUser?.todayXp as number) ?? 0;
-    xpActuallyAwarded = true;
-  } catch (err: unknown) {
-    // ConditionalCheckFailedException means todayXp + 25 > 100 — cap reached
-    if ((err as { name?: string }).name === 'ConditionalCheckFailedException') {
-      const user = await getItem<User>('users', { userId });
-      newTodayXp = user?.todayXp ?? 0;
-      // Still count the win
-      await updateItem('users', { userId }, 'ADD totalWins :one', { ':one': 1 });
-    } else {
-      throw err;
-    }
-  }
+  // Award XP using atomic ADD — no daily cap
+  const updatedUser = await updateItem(
+    'users',
+    { userId },
+    'ADD todayXp :xp, seasonXp :xp, totalWins :one',
+    { ':xp': XP_PER_WIN, ':one': 1 }
+  );
+  const newTodayXp = (updatedUser?.todayXp as number) ?? 0;
 
   // Get full user for streak check
   const user = await getItem<User>('users', { userId });
@@ -157,7 +138,7 @@ async function awardXpAndStreak(
     );
   }
 
-  return { newTodayXp, clan: user?.clan ?? '', xpActuallyAwarded };
+  return { newTodayXp, clan: user?.clan ?? '', xpActuallyAwarded: true };
 }
 
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
@@ -227,10 +208,13 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.INVALID_HASH, 'Invalid completion hash', 400);
     }
 
-    // 4. Time validation — use server-side elapsed time for anti-cheat
+    // 4. Time validation
+    // Use client-provided timeTaken (hash-verified, tamper-proof) for the upper bound
+    // so that background/tab-away time doesn't count against the player.
+    // Use server-side elapsed time only for the minimum speed anti-cheat check.
     const timeLimit = session.timeLimit || 120;
 
-    if (elapsedSeconds > timeLimit + TIME_GRACE_SECONDS) {
+    if (timeTaken > timeLimit + TIME_GRACE_SECONDS) {
       return error(ErrorCode.SUSPICIOUS_TIME, 'Completion time exceeds allowed limit', 400);
     }
 
@@ -519,153 +503,104 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
         // Atomic clan XP (only if XP was actually awarded)
         if (clanId && xpToAward > 0) {
-          // First win of the day: todayXp went from 0 → 25, so increment todayParticipants
-          const isFirstWinToday = newTodayXp === XP_PER_WIN;
-          const clanUpdateExpr = isFirstWinToday
-            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, seasonXp :xp, todayParticipants :one'
-            : 'ADD todayXp :xp, seasonXp :xp';
-          const clanUpdateValues = isFirstWinToday
-            ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
-            : { ':xp': XP_PER_WIN };
-          const updatedClan = await updateItem(
-            'clans',
-            { clanId },
-            clanUpdateExpr,
-            clanUpdateValues
-          );
-          clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
+          try {
+            // First win of the day: todayXp went from 0 → 25, so increment todayParticipants
+            const isFirstWinToday = newTodayXp === XP_PER_WIN;
+            const clanUpdateExpr = isFirstWinToday
+              ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, seasonXp :xp, todayParticipants :one'
+              : 'ADD todayXp :xp, seasonXp :xp';
+            const clanUpdateValues = isFirstWinToday
+              ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
+              : { ':xp': XP_PER_WIN };
+            const updatedClan = await updateItem(
+              'clans',
+              { clanId },
+              clanUpdateExpr,
+              clanUpdateValues
+            );
+            clanTodayXp = (updatedClan?.todayXp as number) ?? 0;
+          } catch (clanErr) {
+            console.error('Clan XP update failed (non-fatal):', clanErr);
+          }
         }
 
-        // Chest drop — 100% on XP-earning wins, weighted random from ASSET_POOL
-        if (xpToAward === XP_PER_WIN) {
-          const pickedAsset = pickAssetForClan(clanId, session.minigameId, session.coopPartnerId !== null);
-          chestDropped = true;
-          const userAssetId = crypto.randomUUID();
-          chestAssetId = pickedAsset.id;
-
-          const playerAsset: PlayerAsset = {
-            userAssetId,
-            userId,
-            assetId: pickedAsset.id,
-            obtainedAt: now,
-            obtainedFrom: AssetObtainedFrom.Chest,
-            locationId: session.locationId,
-            placed: false,
-            expiresAt: getMidnightISTAsISO(),
-            expired: false,
-            permanent: false,
-          };
-
-          await putItem('player-assets', playerAsset as unknown as Record<string, unknown>);
-
-          chestDrop = {
-            dropped: true,
-            asset: {
-              assetId: pickedAsset.id,
-              name: pickedAsset.name,
-              category: pickedAsset.category,
-              rarity: pickedAsset.rarity,
-              imageKey: pickedAsset.id,
-            },
-          };
-        }
+        // Chest drops disabled for modified playtest
+        chestDropped = false;
+        chestAssetId = null;
+        chestDrop = { dropped: false };
 
       } else {
         // Already earned XP here — just get current user XP for response
         const user = await getItem<User>('users', { userId });
         newTodayXp = user?.todayXp ?? 0;
         clanId = user?.clan ?? '';
-        capReached = newTodayXp >= DAILY_XP_CAP;
+        capReached = false;
       }
 
       // Co-op: partner award runs independently of shouldAwardXp — partner eligibility
       // is determined entirely by their own daily cap check inside awardXpAndStreak.
       if (session.coopPartnerId && session.coopPartnerId !== 'dev-partner') {
-        const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
-        const partnerClanId = coopResult.clan;
+        try {
+          const coopResult = await awardXpAndStreak(session.coopPartnerId, today);
+          const partnerClanId = coopResult.clan;
 
-        // Credit partner's own clan (cross-clan support)
-        if (partnerClanId && coopResult.xpActuallyAwarded) {
-          const coopIsFirstWin = coopResult.newTodayXp === XP_PER_WIN;
-          const coopClanExpr = coopIsFirstWin
-            ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, seasonXp :xp, todayParticipants :one'
-            : 'ADD todayXp :xp, seasonXp :xp';
-          const coopClanValues = coopIsFirstWin
-            ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
-            : { ':xp': XP_PER_WIN };
-          await updateItem(
-            'clans',
-            { clanId: partnerClanId },
-            coopClanExpr,
-            coopClanValues
-          );
-        }
+          // Credit partner's own clan (cross-clan support)
+          if (partnerClanId && coopResult.xpActuallyAwarded) {
+            const coopIsFirstWin = coopResult.newTodayXp === XP_PER_WIN;
+            const coopClanExpr = coopIsFirstWin
+              ? 'SET todayXpTimestamp = :ts ADD todayXp :xp, seasonXp :xp, todayParticipants :one'
+              : 'ADD todayXp :xp, seasonXp :xp';
+            const coopClanValues = coopIsFirstWin
+              ? { ':ts': now, ':xp': XP_PER_WIN, ':one': 1 }
+              : { ':xp': XP_PER_WIN };
+            await updateItem(
+              'clans',
+              { clanId: partnerClanId },
+              coopClanExpr,
+              coopClanValues
+            );
+          }
 
-        // Independent chest roll for partner
-        let partnerChestAssetId: string | null = null;
-        if (coopResult.xpActuallyAwarded) {
-          const partnerPickedAsset = pickAssetForClan(partnerClanId, session.minigameId, true);
-          const partnerUserAssetId = crypto.randomUUID();
-          partnerChestAssetId = partnerPickedAsset.id;
-          const partnerPlayerAsset: PlayerAsset = {
-            userAssetId: partnerUserAssetId,
+          // Partner chest drops disabled for modified playtest
+          partnerChestDrop = { dropped: false };
+          const partnerChestAssetId: string | null = null;
+
+          // Fire-and-forget push notification to partner about XP
+          if (coopResult.xpActuallyAwarded) {
+            sendToPlayer(session.coopPartnerId, {
+              notification: {
+                title: 'Co-op reward!',
+                body: 'Your partner won — you earned XP!',
+              },
+              data: {
+                type: 'PARTNER_CHEST',
+              },
+            }).catch(console.error);
+          }
+
+          // Write a session record for the partner so their win history, alreadyWon
+          // checks, and analytics all reflect this co-op win.
+          const partnerSessionId = crypto.randomUUID();
+          const partnerSession: GameSession = {
+            sessionId: partnerSessionId,
             userId: session.coopPartnerId,
-            assetId: partnerPickedAsset.id,
-            obtainedAt: now,
-            obtainedFrom: AssetObtainedFrom.Chest,
             locationId: session.locationId,
-            placed: false,
-            expiresAt: getMidnightISTAsISO(),
-            expired: false,
-            permanent: false,
+            minigameId: session.minigameId,
+            date: today,
+            startedAt: session.startedAt,
+            completedAt: now,
+            result: GameResult.Win,
+            xpEarned: coopResult.xpActuallyAwarded ? XP_PER_WIN : 0,
+            chestDropped: partnerChestDrop.dropped,
+            chestAssetId: partnerChestAssetId,
+            completionHash,
+            coopPartnerId: session.userId,
+            partnerIsGuest: session.partnerIsGuest,
           };
-          await putItem('player-assets', partnerPlayerAsset as unknown as Record<string, unknown>);
-
-          partnerChestDrop = {
-            dropped: true,
-            asset: {
-              assetId: partnerPickedAsset.id,
-              name: partnerPickedAsset.name,
-              category: partnerPickedAsset.category,
-              rarity: partnerPickedAsset.rarity,
-              imageKey: partnerPickedAsset.id,
-            },
-          };
+          await putItem('game-sessions', partnerSession as unknown as Record<string, unknown>);
+        } catch (coopErr) {
+          console.error('Co-op partner reward failed (non-fatal):', coopErr);
         }
-
-        // Fire-and-forget push notification to partner about their chest
-        if (partnerChestDrop.dropped) {
-          sendToPlayer(session.coopPartnerId, {
-            notification: {
-              title: 'Co-op reward!',
-              body: 'Your partner won — you earned XP and a chest!',
-            },
-            data: {
-              type: 'PARTNER_CHEST',
-            },
-          }).catch(console.error);
-        }
-
-        // Write a session record for the partner so their win history, alreadyWon
-        // checks, and analytics all reflect this co-op win.
-        const partnerSessionId = crypto.randomUUID();
-        const partnerSession: GameSession = {
-          sessionId: partnerSessionId,
-          userId: session.coopPartnerId,
-          locationId: session.locationId,
-          minigameId: session.minigameId,
-          date: today,
-          startedAt: session.startedAt,
-          completedAt: now,
-          result: GameResult.Win,
-          xpEarned: coopResult.xpActuallyAwarded ? XP_PER_WIN : 0,
-          chestDropped: partnerChestDrop.dropped,
-          chestAssetId: partnerChestAssetId,
-          completionHash,
-          coopPartnerId: session.userId,
-          partnerIsGuest: session.partnerIsGuest,
-        };
-        await putItem('game-sessions', partnerSession as unknown as Record<string, unknown>);
       }
 
       // Update session (store solutionData for analytics)
@@ -687,8 +622,12 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
 
       // WebSocket broadcast (non-fatal)
       if (xpToAward > 0) {
-        const stage = process.env.STAGE || 'dev';
-        await broadcastScoreUpdate(stage);
+        try {
+          const stage = process.env.STAGE || 'dev';
+          await broadcastScoreUpdate(stage);
+        } catch (broadcastErr) {
+          console.error('broadcastScoreUpdate failed (non-fatal):', broadcastErr);
+        }
       }
 
       return success({

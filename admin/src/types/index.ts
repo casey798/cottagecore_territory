@@ -39,6 +39,8 @@ export interface ClanScore {
   todayXp: number;
   seasonXp: number;
   spacesCaptured: number;
+  todayParticipants: number;
+  rosterSize: number;
 }
 
 export type ClanId = 'ember' | 'tide' | 'bloom' | 'gale' | 'hearth';
@@ -243,6 +245,9 @@ export interface AnalyticsOverviewData {
     uniqueLocationsVisited: number;
     totalActiveLocations: number;
     totalRoster: number;
+    decorationsToday: number;
+    decoratorsToday: number;
+    decorationXpToday: number;
   };
   yesterday: {
     date: string;
@@ -250,12 +255,14 @@ export interface AnalyticsOverviewData {
     sessionsToday: number;
     checkinsToday: number;
     uniqueLocationsVisited: number;
+    decorationsToday: number;
   };
   deltas: {
     dau: number;
     sessions: number;
     checkins: number;
     locations: number;
+    decorations: number;
   };
 }
 
@@ -264,6 +271,7 @@ export interface EngagementDay {
   dau: number;
   totalSessions: number;
   totalCheckins: number;
+  totalDecorations: number;
   perClanDau: Record<ClanId, number>;
 }
 
@@ -388,6 +396,26 @@ export interface DecayAlertUnactivatedSpaces {
   locations: Array<{ locationId: string; name: string; priorityTier: string }>;
 }
 
+export interface DecayAlertDecorationDecline {
+  triggered: boolean;
+  peakDecorations: number;
+  peakDate: string;
+  todayDecorations: number;
+  dropPercent: number;
+}
+
+export interface DecayAlertClansNotDecorating {
+  triggered: boolean;
+  clans: Array<{ clanId: string; decoratorsLast2Days: number }>;
+}
+
+export interface DecayAlertLowSpaceCompletion {
+  triggered: boolean;
+  completionRate: number;
+  totalAssigned: number;
+  totalCompleted: number;
+}
+
 export interface AnalyticsDecayData {
   alerts: {
     dauDecline: DecayAlertDauDecline;
@@ -395,6 +423,100 @@ export interface AnalyticsDecayData {
     minigameAbandonment: DecayAlertMinigameAbandonment;
     sessionsPerPlayerLow: DecayAlertSessionsLow;
     unactivatedSpaces: DecayAlertUnactivatedSpaces;
+    decorationDecline: DecayAlertDecorationDecline;
+    clansNotDecorating: DecayAlertClansNotDecorating;
+    lowSpaceCompletion: DecayAlertLowSpaceCompletion;
   };
   computedAt: string;
+}
+
+// ── Spaces Analytics Types ───────────────────────────────
+
+export interface AnalyticsSpacesClanEntry {
+  clanId: ClanId;
+  minigameXp: number;
+  spaceXp: number;
+  totalXp: number;
+  activeUsers: number;
+  spacesDecorated: number;
+  uniqueDecorators: number;
+  assignmentCompletionRate: number;
+}
+
+export interface AnalyticsSpacesData {
+  clanLeaderboard: AnalyticsSpacesClanEntry[];
+  dailyActivity: Array<{
+    date: string;
+    decorations: number;
+    spaceXp: number;
+    perClan: Record<ClanId, { decorations: number; spaceXp: number; minigameXp: number }>;
+  }>;
+  sentimentBreakdown: {
+    overall: { yes: number; maybe: number; no: number };
+    perClan: Record<ClanId, { yes: number; maybe: number; no: number }>;
+  };
+  packCategoryUsage: { furniture: number; aesthetics: number; nature: number };
+  totals: {
+    totalDecorations: number;
+    totalSpaceXp: number;
+    totalMinigameXp: number;
+    uniqueDecorators: number;
+  };
+}
+
+// ── Space Decoration System Types ───────────────────────
+
+export interface Space {
+  spaceId: string;
+  name: string;
+  polygonPoints: Array<{ x: number; y: number }>;
+  gridCells: Array<{ col: number; row: number }>;
+  gridColumns: number;
+  gridRows: number;
+  qrSecret: string;
+  qrNumber: number;
+  gpsLat: number;
+  gpsLng: number;
+  geofenceRadius: number;
+  mapPixelX: number;
+  mapPixelY: number;
+  active: boolean;
+  createdAt: string;
+  notes?: string;
+}
+
+export type DecorationPackCategory = 'furniture' | 'aesthetics' | 'nature';
+
+export interface PlacedDecorationAsset {
+  assetId: string;
+  packCategory: DecorationPackCategory;
+  x: number;
+  y: number;
+  rotation: number;
+  gridW: number;
+  gridH: number;
+}
+
+export interface DecorationSurvey {
+  wantSpaceToBe: string;
+  whyChoseItems: string;
+  wouldVisitMore: 'yes' | 'maybe' | 'no';
+}
+
+export interface SpaceDecorationSubmission {
+  userSpaceId: string;
+  date: string;
+  layout: { placedAssets: PlacedDecorationAsset[] };
+  survey: DecorationSurvey;
+  screenshotS3Key: string;
+  packUsageSummary: Record<DecorationPackCategory, number>;
+  xpAwarded: number;
+  submittedAt: string;
+  userId: string;
+  spaceId: string;
+  clan: string;
+  // Enriched fields (populated by admin API endpoints that join user/space tables)
+  screenshotUrl?: string;
+  playerDisplayName?: string;
+  spaceName?: string;
 }

@@ -1,18 +1,25 @@
 import { ScheduledEvent } from 'aws-lambda';
 import { getItem, scan, updateItem, putItem } from '../../shared/db';
 import { getTodayISTString, toISTString } from '../../shared/time';
-import { sendToAll } from '../../shared/notifications';
-import { User, DailyConfig, Clan, ClanId, DailyConfigStatus, CapturedSpace, WsConnection } from '../../shared/types';
+import { sendToAll, sendToPlayer } from '../../shared/notifications';
+import { User, DailyConfig, Clan, ClanId, DailyConfigStatus, CapturedSpace, WsConnection, SpaceAssignment } from '../../shared/types';
 import { clanDisplayName } from '../../shared/clanLabels';
 import { v4 as uuidv4 } from 'uuid';
 import { ApiGatewayManagementApiClient, PostToConnectionCommand } from '@aws-sdk/client-apigatewaymanagementapi';
 import { addDays } from 'date-fns';
 import { toZonedTime } from 'date-fns-tz';
+import { isQuietModeActive } from '../../shared/quietMode';
 
 export const handler = async (_event: ScheduledEvent): Promise<void> => {
   try {
   const today = getTodayISTString();
   console.log(`Daily scoring running for: ${today}`);
+
+  // Quiet mode check — skip scoring entirely to avoid false captures from stale XP
+  if (await isQuietModeActive()) {
+    console.log(`Quiet mode active for ${today} — skipping scoring, streaks, and notifications`);
+    return;
+  }
 
   // Step 1: Set today's daily-config status to 'scoring'
   await updateItem(
@@ -112,20 +119,20 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     { '#status': 'status' }
   );
 
-  // Step 8: Send capture result push notification
-  const clanName = clanDisplayName(winnerClan.clanId);
-  const delivered = await sendToAll({
-    notification: {
-      title: `${clanName} wins!`,
-      body: `${clanName} has captured ${todayConfig.targetSpace.name}! See the updated map.`,
-    },
-    data: {
-      type: 'CAPTURE_RESULT',
-      winnerClan: winnerClan.clanId,
-      spaceName: todayConfig.targetSpace.name,
-    },
-  });
-  console.log(`Sent capture notifications: ${delivered} delivered`);
+  // MODIFIED: territory capture notifications disabled in playtest version
+  // const clanName = clanDisplayName(winnerClan.clanId);
+  // const delivered = await sendToAll({
+  //   notification: {
+  //     title: `${clanName} wins!`,
+  //     body: `${clanName} has captured ${todayConfig.targetSpace.name}! See the updated map.`,
+  //   },
+  //   data: {
+  //     type: 'CAPTURE_RESULT',
+  //     winnerClan: winnerClan.clanId,
+  //     spaceName: todayConfig.targetSpace.name,
+  //   },
+  // });
+  // console.log(`Sent capture notifications: ${delivered} delivered`);
 
   // Step 9: Broadcast CAPTURE event via WebSocket
   try {
@@ -217,6 +224,43 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
         { ':zero': 0 }
       );
     }
+  }
+
+  // Step 11: Per-player end-of-day recap notification
+  try {
+    console.log(`Sending end-of-day recap to ${allUsers.length} users`);
+    let recapsSent = 0;
+    const BATCH_SIZE = 25;
+    for (let i = 0; i < allUsers.length; i += BATCH_SIZE) {
+      const batch = allUsers.slice(i, i + BATCH_SIZE);
+      for (const user of batch) {
+        try {
+          const todayXp = user.todayXp ?? 0;
+          const spaceAssignment = await getItem<SpaceAssignment>('space-assignments', {
+            dateUserId: `${today}#${user.userId}`,
+          });
+          const completedCount = spaceAssignment?.completedSpaceIds?.length ?? 0;
+          const plural = completedCount === 1 ? '' : 's';
+          await sendToPlayer(user.userId, {
+            notification: {
+              title: "Today's Grove Report \uD83C\uDF3F",
+              body: `You earned ${todayXp} XP today and decorated ${completedCount} space${plural}. See you tomorrow!`,
+            },
+            data: {
+              type: 'DAY_RECAP',
+              xp: String(todayXp),
+              spacesDecorated: String(completedCount),
+            },
+          });
+          recapsSent++;
+        } catch (userErr) {
+          console.error(`Recap failed for user ${user.userId}:`, userErr);
+        }
+      }
+    }
+    console.log(`End-of-day recap sent to ${recapsSent}/${allUsers.length} users`);
+  } catch (recapErr) {
+    console.error('End-of-day recap failed (non-fatal):', recapErr);
   }
 
   console.log('Daily scoring complete');

@@ -30,12 +30,12 @@ import { FONTS } from '@/constants/fonts';
 import { useMapStore } from '@/store/useMapStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useDebugStore } from '@/store/useDebugStore';
-import { ClanId, Location, CapturedSpace, SpaceDecoration } from '@/types';
+import { ClanId, Location, CapturedSpace } from '@/types';
+import { SpaceAssignmentItem, MyDecorationItem } from '@/api/spaces';
 import { isWithinMapBounds, getEdgeIndicator } from '@/utils/mapBounds';
 import { pixelToGps } from '@/utils/affineTransform';
 import { GPS_RING_COLORS } from '@/constants/playerAssets';
 import { getPresetById } from '@/utils/characterPresets';
-import { ASSET_MAP } from '@/constants/assets';
 import { gpsToPixel } from '@/utils/affineTransform';
 import { MAP_TILE_SIZE } from '@/constants/config';
 import { MapPin } from './MapPin';
@@ -76,6 +76,22 @@ interface Props {
   tutorialGlowPin?: { px: number; py: number };
   tutorialPinPress?: () => void;
   highlightClanId?: ClanId | null;
+  assignedSpaces?: SpaceAssignmentItem[];
+  onAssignedSpaceTap?: (space: SpaceAssignmentItem) => void;
+  spacePinProximities?: Map<string, { distance: number; geofenceRadius: number }>;
+  inRangeSpaceIds?: Set<string>;
+  showOverlay?: boolean;
+  myDecorations?: MyDecorationItem[];
+}
+
+function getPolygonCentroid(points: Array<{ x: number; y: number }>): { x: number; y: number } {
+  if (!points || points.length === 0) return { x: 0, y: 0 };
+  const xs = points.map(p => p.x);
+  const ys = points.map(p => p.y);
+  return {
+    x: (Math.min(...xs) + Math.max(...xs)) / 2,
+    y: (Math.min(...ys) + Math.max(...ys)) / 2,
+  };
 }
 
 function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: number }>): boolean {
@@ -93,12 +109,8 @@ function pointInPolygon(px: number, py: number, polygon: Array<{ x: number; y: n
   return inside;
 }
 
-export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, lockedUntilMap, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor, pinProximities, interactive = true, tutorialGlowPin, tutorialPinPress, highlightClanId }: Props) {
+export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRangeIds, xpExhaustedIds, lockedUntilMap, onViewportChange, registerNavigate, capturedSpaces, followPlayer, onFollowChange, selectedSpaceId, onSpaceTap, onMapTap, pinColor, pinRingColor, pinProximities, interactive = true, tutorialGlowPin, tutorialPinPress, highlightClanId, assignedSpaces, onAssignedSpaceTap, spacePinProximities, inRangeSpaceIds, showOverlay = true, myDecorations }: Props) {
   const mapConfig = useMapStore((s) => s.mapConfig);
-  const spaceDecorations = useMapStore((s) => s.spaceDecorations);
-  const assetCategories = useMapStore((s) => s.assetCategories);
-  const assetIdMap = useMapStore((s) => s.assetIdMap);
-  const loadSpaceDecoration = useMapStore((s) => s.loadSpaceDecoration);
   const playerClan = useAuthStore((s) => s.clan);
   const isDebugMode = useDebugStore((s) => s.isDebugMode);
   const tapToSetMode = useDebugStore((s) => s.tapToSetMode);
@@ -438,23 +450,36 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       runOnJS(handleTapToSet)(e.x, e.y);
     });
 
-  // --- Space tap: detect taps on captured space polygons ---
+  // --- Space tap: detect taps on assigned spaces first, then captured space polygons ---
   const handleSpaceTap = useCallback((screenX: number, screenY: number) => {
-    if (!onSpaceTap) return;
+    if (!onSpaceTap && !onAssignedSpaceTap) return;
     const mapPixelX = (screenX - translateX.value) / scale.value;
     const mapPixelY = (screenY - translateY.value) / scale.value;
 
-    if (capturedSpaces) {
-      for (const space of capturedSpaces) {
+    // Check assigned spaces first (higher priority)
+    if (assignedSpaces && onAssignedSpaceTap) {
+      for (const space of assignedSpaces) {
         if (!space.polygonPoints || space.polygonPoints.length < 3) continue;
         if (pointInPolygon(mapPixelX, mapPixelY, space.polygonPoints)) {
-          onSpaceTap(space, screenX, screenY);
+          onAssignedSpaceTap(space);
           return;
         }
       }
     }
-    onSpaceTap(null, screenX, screenY);
-  }, [capturedSpaces, onSpaceTap, translateX, translateY, scale]);
+
+    if (onSpaceTap) {
+      if (capturedSpaces) {
+        for (const space of capturedSpaces) {
+          if (!space.polygonPoints || space.polygonPoints.length < 3) continue;
+          if (pointInPolygon(mapPixelX, mapPixelY, space.polygonPoints)) {
+            onSpaceTap(space, screenX, screenY);
+            return;
+          }
+        }
+      }
+      onSpaceTap(null, screenX, screenY);
+    }
+  }, [capturedSpaces, onSpaceTap, assignedSpaces, onAssignedSpaceTap, translateX, translateY, scale]);
 
   const spaceTapGesture = Gesture.Tap()
     .numberOfTaps(1)
@@ -481,7 +506,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
 
   // Pan + Pinch simultaneous; debug tap, double-tap, space tap, or map tap
   // mapTapGesture is last in the Exclusive race so pin/space taps take priority
-  const singleTapGesture = onSpaceTap
+  const singleTapGesture = (onSpaceTap || onAssignedSpaceTap)
     ? Gesture.Exclusive(spaceTapGesture, mapTapGesture)
     : mapTapGesture;
 
@@ -592,7 +617,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     interpolate(pulseValue.value, [0, 1], [0, 10]),
   );
   const animatedPulseOpacity = useDerivedValue(() =>
-    interpolate(pulseValue.value, [0, 1], [0.0, 0.45]),
+    interpolate(pulseValue.value, [0, 1], [0.0, 0.25]),
   );
 
   // Derived animated values for player sonar ripples
@@ -621,6 +646,19 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       });
   }, [highlightClanId, capturedSpaces]);
 
+  // Assigned space polygon paths
+  const assignedSpacePaths = useMemo(() => {
+    if (!assignedSpaces || assignedSpaces.length === 0) return [];
+    return assignedSpaces
+      .filter((s) => s.polygonPoints && s.polygonPoints.length >= 3)
+      .map((s) => {
+        const pts = s.polygonPoints;
+        const d = `M ${pts[0].x} ${pts[0].y} ` +
+          pts.slice(1).map((p) => `L ${p.x} ${p.y}`).join(' ') + ' Z';
+        return { key: s.spaceId, d, completed: s.completed };
+      });
+  }, [assignedSpaces]);
+
   // Animated style for OOB text label
   const oobLabelStyle = useAnimatedStyle(() => {
     if (!edgeIndicator) return { opacity: 0 };
@@ -635,19 +673,10 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     };
   });
 
-  // Load decorations for own-clan captured spaces
-  useEffect(() => {
-    if (!capturedSpaces || !playerClan) return;
-    const ownSpaces = capturedSpaces.filter((s) => s.clan === playerClan);
-    if (ownSpaces.length === 0) return;
-    Promise.all(
-      ownSpaces.map((s) => loadSpaceDecoration(s.spaceId)),
-    ).catch(() => {});
-  }, [capturedSpaces, playerClan, loadSpaceDecoration]);
-
-  // Compute decoration render data for own-clan spaces
+  // Compute decoration render data from myDecorations (user's submitted decorations)
   const decorationRenderData = useMemo(() => {
-    if (!capturedSpaces || !playerClan) return [];
+    if (!myDecorations || myDecorations.length === 0) return [];
+    const clanColor = CLAN_COLORS[clan ?? 'ember'] ?? PALETTE.honeyGold;
     const items: Array<{
       key: string;
       pixelX: number;
@@ -655,22 +684,17 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       width: number;
       height: number;
       assetId: string;
-      userAssetId: string;
       category: string;
       clanColor: string;
     }> = [];
-    const clanColor = CLAN_COLORS[playerClan] ?? PALETTE.honeyGold;
 
-    for (const space of capturedSpaces) {
-      if (space.clan !== playerClan) continue;
-
-      const deco: SpaceDecoration | undefined = spaceDecorations[space.spaceId];
-      if (!deco?.layout?.placedAssets?.length) continue;
-      if (!space.polygonPoints || space.polygonPoints.length < 3) continue;
+    for (const deco of myDecorations) {
+      if (!deco.polygonPoints || deco.polygonPoints.length < 3) continue;
+      if (!deco.placedAssets || deco.placedAssets.length === 0) continue;
 
       // Polygon bounding box in map pixel space
       let bMinX = Infinity, bMinY = Infinity, bMaxX = -Infinity, bMaxY = -Infinity;
-      for (const p of space.polygonPoints) {
+      for (const p of deco.polygonPoints) {
         if (p.x < bMinX) bMinX = p.x;
         if (p.y < bMinY) bMinY = p.y;
         if (p.x > bMaxX) bMaxX = p.x;
@@ -681,17 +705,15 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       if (bboxW <= 0 || bboxH <= 0) continue;
 
       // Determine grid extent from gridCells + placed assets
-      const gridCells = space.gridCells ?? [];
+      const gridCells = deco.gridCells ?? [];
       let gMinX = Infinity, gMinY = Infinity, gMaxX = -Infinity, gMaxY = -Infinity;
       for (const c of gridCells) {
-        const cx = c.col ?? c.x;
-        const cy = c.row ?? c.y;
-        if (cx < gMinX) gMinX = cx;
-        if (cy < gMinY) gMinY = cy;
-        if (cx > gMaxX) gMaxX = cx;
-        if (cy > gMaxY) gMaxY = cy;
+        if (c.col < gMinX) gMinX = c.col;
+        if (c.row < gMinY) gMinY = c.row;
+        if (c.col > gMaxX) gMaxX = c.col;
+        if (c.row > gMaxY) gMaxY = c.row;
       }
-      for (const a of deco.layout.placedAssets) {
+      for (const a of deco.placedAssets) {
         if (a.x < gMinX) gMinX = a.x;
         if (a.y < gMinY) gMinY = a.y;
         if (a.x > gMaxX) gMaxX = a.x;
@@ -703,33 +725,30 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
       const gridRows = gMaxY - gMinY + 1;
       if (gridCols <= 0 || gridRows <= 0) continue;
 
-      // Map-pixel size of one grid cell within this space
       const cellMapW = bboxW / gridCols;
       const cellMapH = bboxH / gridRows;
 
-      for (const asset of deco.layout.placedAssets) {
-        const assetDef = ASSET_MAP[assetIdMap[asset.userAssetId] ?? ''];
-        const assetGridW = assetDef?.gridW ?? 1;
-        const assetGridH = assetDef?.gridH ?? 1;
+      for (const asset of deco.placedAssets) {
+        const assetGridW = asset.gridW ?? 1;
+        const assetGridH = asset.gridH ?? 1;
 
         const px = bMinX + (asset.x - gMinX) * cellMapW;
         const py = bMinY + (asset.y - gMinY) * cellMapH;
 
         items.push({
-          key: `${space.spaceId}_${asset.userAssetId}_${asset.x}_${asset.y}`,
+          key: `${deco.spaceId}_${asset.assetId}_${asset.x}_${asset.y}`,
           pixelX: px,
           pixelY: py,
           width: assetGridW * cellMapW,
           height: assetGridH * cellMapH,
-          assetId: assetIdMap[asset.userAssetId] ?? '',
-          userAssetId: asset.userAssetId,
-          category: assetCategories[asset.userAssetId] ?? '',
+          assetId: asset.assetId,
+          category: asset.packCategory ?? '',
           clanColor,
         });
       }
     }
     return items;
-  }, [capturedSpaces, playerClan, spaceDecorations, assetCategories, assetIdMap]);
+  }, [myDecorations, clan]);
 
   // Faint backings for locked pins (visible without glow)
   const lockedPinBackings = useMemo(() => {
@@ -791,6 +810,27 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
     return glowEntries;
   }, [locations, mapConfig?.transformMatrix, pinProximities, xpExhaustedIds, inRangeIds, tutorialGlowPin]);
 
+  // Space pin glow data — mirrors location glow logic (same sizing, clan color, dark backing)
+  const spaceGlowData = useMemo(() => {
+    if (!assignedSpaces || assignedSpaces.length === 0) return [];
+    const clanHex = CLAN_COLORS[clan ?? 'ember'];
+    return assignedSpaces.map((space) => {
+      const prox = spacePinProximities?.get(space.spaceId);
+      // factor: 0 = far/no GPS (idle glow), 1 = right on top of pin
+      const factor = prox
+        ? Math.max(0, Math.min(1, 1 - prox.distance / (prox.geofenceRadius * 2)))
+        : 0;
+      const centroid = space.polygonPoints && space.polygonPoints.length >= 3
+        ? getPolygonCentroid(space.polygonPoints)
+        : { x: space.mapPixelX, y: space.mapPixelY };
+      const px = Math.round(centroid.x / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+      const py = Math.round(centroid.y / MAP_TILE_SIZE) * MAP_TILE_SIZE;
+      const isInRange = inRangeSpaceIds?.has(space.spaceId) ?? false;
+      const baseColor = isInRange ? '#CC2200' : '#CC2200AA';
+      return { px, py, factor, isInRange, baseColor, key: space.spaceId };
+    });
+  }, [assignedSpaces, spacePinProximities, inRangeSpaceIds, clan]);
+
   // Early returns AFTER all hooks
   if (!mapConfig) {
     return (
@@ -843,7 +883,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
             <View style={styles.desatOverlay} pointerEvents="none" />
             <Canvas style={styles.overlayCanvas}>
               {/* Locked pin backings — faint red circle for visibility */}
-              {lockedPinBackings.map((b) => (
+              {showOverlay && lockedPinBackings.map((b) => (
                 <Circle
                   key={`locked-bg-${b.key}`}
                   cx={b.px}
@@ -856,22 +896,22 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                 </Circle>
               ))}
               {/* Pin proximity glow (Skia) */}
-              {pinGlowData.map((g) => {
-                const glowRadius = 25 + g.factor * 15;
-                const blurAmount = 14 + g.factor * 8;
-                const glowOpacity = 0.6 + g.factor * 0.35;
-                const coreRadius = 6 + g.factor * 4;
-                const coreOpacity = 0.7 + g.factor * 0.3;
-                const ringRadius = glowRadius * 0.7;
+              {showOverlay && pinGlowData.map((g) => {
+                const glowRadius = 18 + g.factor * 10;
+                const blurAmount = 10 + g.factor * 6;
+                const glowOpacity = 0.35 + g.factor * 0.25;
+                const coreRadius = 4 + g.factor * 3;
+                const coreOpacity = 0.5 + g.factor * 0.25;
+                const ringRadius = glowRadius * 0.65;
                 return (
                   <Group key={`glow-${g.key}`}>
                     {/* Dark map-separation backing */}
-                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.6} color="rgba(15, 10, 5, 0.5)" style="fill">
-                      <BlurMask blur={18} style="normal" />
+                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.3} color="rgba(15, 10, 5, 0.3)" style="fill">
+                      <BlurMask blur={12} style="normal" />
                     </Circle>
                     {/* Wide soft outer halo */}
-                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.4} color={g.baseColor} opacity={glowOpacity * 0.35}>
-                      <BlurMask blur={blurAmount + 10} style="normal" />
+                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.2} color={g.baseColor} opacity={glowOpacity * 0.25}>
+                      <BlurMask blur={blurAmount + 6} style="normal" />
                     </Circle>
                     {/* Main glow blob */}
                     <Circle cx={g.px} cy={g.py} r={glowRadius} color={g.baseColor} opacity={glowOpacity}>
@@ -880,7 +920,7 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                     {/* Bright core dot */}
                     <Circle cx={g.px} cy={g.py} r={coreRadius} color="#FFFFFF" opacity={coreOpacity} />
                     {/* Outline ring */}
-                    <Circle cx={g.px} cy={g.py} r={ringRadius} color={g.baseColor} style="stroke" strokeWidth={2} opacity={0.7} />
+                    <Circle cx={g.px} cy={g.py} r={ringRadius} color={g.baseColor} style="stroke" strokeWidth={1.5} opacity={0.5} />
                     {/* In-range breathing pulse ring */}
                     {g.isInRange && (
                       <Circle
@@ -896,12 +936,12 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                   </Group>
                 );
               })}
-              {/* Decoration assets for own-clan spaces */}
+              {/* Decoration assets from user's past submissions */}
               {decorationRenderData.length > 0 && (
                 <Group>
                   {decorationRenderData.map((d) => (
                     <DecorationMapItem
-                      key={`deco-${d.userAssetId ?? d.key}`}
+                      key={`deco-${d.key}`}
                       assetId={d.assetId}
                       category={d.category}
                       mapPixelX={d.pixelX}
@@ -914,15 +954,43 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                   ))}
                 </Group>
               )}
-              {/* Territory overlay — rendered above decorations */}
-              {capturedSpaces && capturedSpaces.length > 0 && (
-                <MapOverlay
-                  capturedSpaces={capturedSpaces}
-                  selectedSpaceId={selectedSpaceId}
+              {/* Assigned space overlays — glow halo + crisp border */}
+              {showOverlay && assignedSpacePaths.map((sp) => (
+                <SkiaPath
+                  key={`assigned-glow-${sp.key}`}
+                  path={sp.d}
+                  color="#CC2200BB"
+                  style="stroke"
+                  strokeWidth={20}
+                  strokeJoin="round"
+                  strokeCap="round"
+                >
+                  <BlurMask blur={18} style="normal" respectCTM={true} />
+                </SkiaPath>
+              ))}
+              {showOverlay && assignedSpacePaths.map((sp) => (
+                <SkiaPath
+                  key={`assigned-border-${sp.key}`}
+                  path={sp.d}
+                  color="#CC2200"
+                  style="stroke"
+                  strokeWidth={5}
+                  strokeJoin="round"
+                  strokeCap="round"
                 />
-              )}
+              ))}
+              {showOverlay && assignedSpacePaths.filter((sp) => sp.completed).map((sp) => (
+                <SkiaPath
+                  key={`assigned-inner-${sp.key}`}
+                  path={sp.d}
+                  color="#FF6644"
+                  style="stroke"
+                  strokeWidth={1.5}
+                  opacity={0.7}
+                />
+              ))}
               {/* FIX 4 — Highlight rings for selectSpace mode */}
-              {highlightClanPaths.map((h) => (
+              {showOverlay && highlightClanPaths.map((h) => (
                 <SkiaPath
                   key={`highlight-ring-${h.key}`}
                   path={h.d}
@@ -934,6 +1002,47 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                   <BlurMask blur={4} style="outer" />
                 </SkiaPath>
               ))}
+              {/* Space pin proximity glow — rendered AFTER territory overlay so it's not buried */}
+              {showOverlay && spaceGlowData.map((g) => {
+                const glowRadius = 26 + g.factor * 10;
+                const blurAmount = 14 + g.factor * 6;
+                const glowOpacity = 0.55 + g.factor * 0.25;
+                const coreRadius = 6 + g.factor * 3;
+                const coreOpacity = 0.7 + g.factor * 0.2;
+                const ringRadius = glowRadius * 0.65;
+                return (
+                  <Group key={`space-glow-${g.key}`}>
+                    {/* Dark map-separation backing */}
+                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.3} color="rgba(15, 10, 5, 0.3)" style="fill">
+                      <BlurMask blur={12} style="normal" />
+                    </Circle>
+                    {/* Wide soft outer halo */}
+                    <Circle cx={g.px} cy={g.py} r={glowRadius * 1.2} color={g.baseColor} opacity={glowOpacity * 0.25}>
+                      <BlurMask blur={blurAmount + 6} style="normal" />
+                    </Circle>
+                    {/* Main glow blob */}
+                    <Circle cx={g.px} cy={g.py} r={glowRadius} color={g.baseColor} opacity={glowOpacity}>
+                      <BlurMask blur={blurAmount} style="normal" />
+                    </Circle>
+                    {/* Bright core dot */}
+                    <Circle cx={g.px} cy={g.py} r={coreRadius} color="#FFFFFF" opacity={coreOpacity} />
+                    {/* Outline ring */}
+                    <Circle cx={g.px} cy={g.py} r={ringRadius} color={g.baseColor} style="stroke" strokeWidth={1.5} opacity={0.5} />
+                    {/* In-range breathing pulse ring */}
+                    {g.isInRange && (
+                      <Circle
+                        cx={g.px}
+                        cy={g.py}
+                        r={glowRadius + animatedPulseRadius.value + 8}
+                        color={g.baseColor}
+                        opacity={animatedPulseOpacity.value}
+                        style="stroke"
+                        strokeWidth={2.5}
+                      />
+                    )}
+                  </Group>
+                );
+              })}
               {playerX != null && playerY != null && dotColor && inBounds && (
                 <Group>
                   {/* Expanding sonar ripple 1 */}
@@ -1024,14 +1133,17 @@ export function MapCanvas({ playerX, playerY, clan, locations, onPinPress, inRan
                 </Group>
               )}
             </Canvas>
-            {locations && locations.length > 0 && mapConfig.transformMatrix && onPinPress && (
+            {showOverlay && mapConfig.transformMatrix && onPinPress && ((locations && locations.length > 0) || (assignedSpaces && assignedSpaces.length > 0)) && (
               <MapPinsLayer
-                locations={locations}
+                locations={locations ?? []}
                 transformMatrix={mapConfig.transformMatrix}
                 onPinPress={onPinPress}
                 inRangeIds={inRangeIds}
                 xpExhaustedIds={xpExhaustedIds}
                 lockedUntilMap={lockedUntilMap}
+                spaces={assignedSpaces}
+                onSpacePress={onAssignedSpaceTap}
+                inRangeSpaceIds={inRangeSpaceIds}
               />
             )}
             {tutorialGlowPin && tutorialPinPress && (

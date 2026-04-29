@@ -54,6 +54,11 @@ export function DashboardPage() {
                 <p className="text-xs text-[#3D2B1F]/60">
                   Season: {clan.seasonXp} XP
                 </p>
+                {clan.rosterSize > 0 && (
+                  <p className="mt-1 text-xs text-[#3D2B1F]/40">
+                    {clan.todayParticipants}/{clan.rosterSize} active today
+                  </p>
+                )}
               </div>
             );
           })}

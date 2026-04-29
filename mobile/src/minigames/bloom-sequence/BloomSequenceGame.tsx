@@ -16,7 +16,7 @@ import {
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { SPOT_THE_PATTERN_TIME_LIMIT } from '@/constants/config';
+import { SPOT_THE_PATTERN_TIME_LIMIT, XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import {
@@ -447,7 +447,7 @@ export default function BloomSequenceGameComponent(props: MinigamePlayProps): Re
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
           onContinue={handleContinue}
           practiceMode={practiceMode}
         />

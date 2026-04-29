@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { LOGIC_GRID_TIME_LIMIT } from '@/constants/config';
+import { LOGIC_GRID_TIME_LIMIT, XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import type { ClanId } from '@/types';
@@ -674,7 +674,7 @@ export default function PotionLogicCoopGame(props: MinigamePlayProps): React.JSX
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' && !practiceMode ? 25 : 0}
+          xpEarned={overlayResult === 'win' && !practiceMode ? XP_PER_WIN : 0}
           onContinue={handleContinue}
           practiceMode={practiceMode}
         />

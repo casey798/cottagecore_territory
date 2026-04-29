@@ -18,6 +18,7 @@ const PIN_IMAGES = {
   coop: require('../../assets/sprites/pins/pin_coop.png'),
   done: require('../../assets/sprites/pins/pin_done.png'),
   bonus: require('../../assets/sprites/pins/pin_bonus.png'),
+  space: require('../../assets/sprites/pins/pin_space.png'),
 };
 
 const PIN_SIZE = 30;
@@ -45,9 +46,10 @@ interface Props {
   bonusXP?: boolean;
   isCoop?: boolean;
   lockedUntil?: string;
+  isSpace?: boolean;
 }
 
-export function MapPin({ location, pixelX, pixelY, onPress, xpExhausted, isCoop, lockedUntil, inRange, bonusXP }: Props) {
+export function MapPin({ location, pixelX, pixelY, onPress, xpExhausted, isCoop, lockedUntil, inRange, bonusXP, isSpace }: Props) {
   const snappedX = Math.round(pixelX / MAP_TILE_SIZE) * MAP_TILE_SIZE;
   const snappedY = Math.round(pixelY / MAP_TILE_SIZE) * MAP_TILE_SIZE;
 
@@ -61,7 +63,7 @@ export function MapPin({ location, pixelX, pixelY, onPress, xpExhausted, isCoop,
     onPress();
   }, [onPress]);
 
-  const pinSource = getPinImage(isLocked, isCoopPin, isXpExhausted, isBonusXP);
+  const pinSource = isSpace ? PIN_IMAGES.space : getPinImage(isLocked, isCoopPin, isXpExhausted, isBonusXP);
 
   return (
     <Pressable

@@ -130,13 +130,13 @@ describe('completeMinigame co-op tests', () => {
     // Default scan returns test assets
     mockScan.mockResolvedValue({ items: TEST_ASSETS, lastEvaluatedKey: undefined });
 
-    // Default updateItem: return updated user-like object
+    // Default updateItem: return updated user-like object (XP=10 for modified playtest)
     mockUpdateItem.mockImplementation(async (table: string) => {
       if (table === 'users') {
-        return { todayXp: 25 };
+        return { todayXp: 10 };
       }
       if (table === 'clans') {
-        return { todayXp: 25 };
+        return { todayXp: 10 };
       }
       return undefined;
     });
@@ -175,7 +175,7 @@ describe('completeMinigame co-op tests', () => {
     });
   }
 
-  it('uses COOP_CHEST_WEIGHTS for co-op session', async () => {
+  it('chest drops disabled for co-op session (modified playtest)', async () => {
     setupCoopWinMocks();
 
     const event = makeEvent(makeBody());
@@ -184,12 +184,11 @@ describe('completeMinigame co-op tests', () => {
 
     expect(result.statusCode).toBe(200);
     expect(body.data.result).toBe('win');
-    expect(body.data.chestDrop.dropped).toBe(true);
-    expect(body.data.chestDrop.asset).toBeDefined();
-    expect(body.data.chestDrop.asset.assetId).toBeDefined();
+    expect(body.data.chestDrop.dropped).toBe(false);
+    expect(body.data.partnerChestDrop.dropped).toBe(false);
   });
 
-  it('creates independent chest for partner', async () => {
+  it('no player-assets written for co-op (chest drops disabled)', async () => {
     setupCoopWinMocks();
 
     const event = makeEvent(makeBody());
@@ -200,14 +199,8 @@ describe('completeMinigame co-op tests', () => {
       (call) => call[0] === 'player-assets'
     );
 
-    // Should be 2: one for primary user, one for partner
-    expect(playerAssetCalls.length).toBe(2);
-
-    const primaryAsset = playerAssetCalls[0][1] as Record<string, unknown>;
-    const partnerAsset = playerAssetCalls[1][1] as Record<string, unknown>;
-
-    expect(primaryAsset.userId).toBe(USER_ID);
-    expect(partnerAsset.userId).toBe(PARTNER_ID);
+    // Should be 0: chest drops disabled for modified playtest
+    expect(playerAssetCalls.length).toBe(0);
   });
 
   it('credits partner XP to partner own clan', async () => {
@@ -274,7 +267,7 @@ describe('completeMinigame co-op tests', () => {
 
     expect(result.statusCode).toBe(200);
     expect(body.data.result).toBe('win');
-    expect(body.data.xpEarned).toBe(25);
+    expect(body.data.xpEarned).toBe(10);
 
     // Both user and partner should have updateItem calls to 'users' for XP
     const userUpdateCalls = mockUpdateItem.mock.calls.filter(

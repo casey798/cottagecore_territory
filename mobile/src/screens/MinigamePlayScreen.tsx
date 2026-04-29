@@ -181,7 +181,7 @@ export default function MinigamePlayScreen() {
 
   const userId = useAuthStore((s) => s.userId) || '';
   const todayXp = useGameStore((s) => s.todayXp);
-  const recordWin = useGameStore((s) => s.recordWin);
+  const setTodayXp = useGameStore((s) => s.setTodayXp);
   const showError = useErrorStore((s) => s.showError);
   const [submitting, setSubmitting] = useState(false);
   const hasCompletedRef = useRef(false);
@@ -247,8 +247,8 @@ export default function MinigamePlayScreen() {
         );
 
         if (result.success && result.data) {
-          if (result.data.result === 'win' && !isPractice) {
-            recordWin();
+          if (result.data.result === 'win' && !isPractice && result.data.newTodayXp != null) {
+            setTodayXp(result.data.newTodayXp);
           }
           resultParams = {
             result: result.data.result === 'win' ? 'win' as const : 'lose' as const,
@@ -273,7 +273,7 @@ export default function MinigamePlayScreen() {
       }
       navigation.replace('Result', resultParams);
     },
-    [sessionId, userId, navigation, recordWin, salt, todayXp, locationId, locationName, minigameId, showError],
+    [sessionId, userId, navigation, setTodayXp, salt, todayXp, locationId, locationName, minigameId, showError],
   );
 
   const handleMinigameComplete = useCallback(

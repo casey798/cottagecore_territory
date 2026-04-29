@@ -3,6 +3,7 @@ import { getItem, putItem, scan, updateItem, batchWrite, deleteItem } from '../.
 import { getTodayISTString, toISTString } from '../../shared/time';
 import { sendToAll } from '../../shared/notifications';
 import { assignLocationsForAllPlayers } from '../../shared/locationAssignment';
+import { generateSpaceAssignment, getActiveSpaceIds } from '../../shared/spaceAssignment';
 import { isQuietModeActive } from '../../shared/quietMode';
 import {
   buildAdjacencyMap,
@@ -61,20 +62,35 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     );
   }
 
-  // Step 2b: Reset streaks for users who missed yesterday
-  let streaksReset = 0;
-  for (const user of allUsers) {
-    if (user.lastActiveDate && user.lastActiveDate !== yesterdayDate) {
-      await updateItem(
-        'users',
-        { userId: user.userId },
-        'SET currentStreak = :zero',
-        { ':zero': 0 }
-      );
-      streaksReset++;
+  // Step 2b: Reset streaks for users who missed the last play day.
+  // Walk backwards to find the most recent non-quiet day, so leave/holiday
+  // gaps don't incorrectly break streaks.
+  const nowIST = toZonedTime(new Date(), 'Asia/Kolkata');
+  let lastPlayDate: string | null = null;
+  for (let d = 1; d <= 14; d++) {
+    const checkDate = toISTString(addDays(nowIST, -d));
+    const cfg = await getItem<DailyConfig>('daily-config', { date: checkDate });
+    if (!cfg || !cfg.quietMode) {
+      lastPlayDate = checkDate;
+      break;
     }
   }
-  console.log(`Reset ${streaksReset} user streaks (missed ${yesterdayDate})`);
+
+  let streaksReset = 0;
+  if (lastPlayDate) {
+    for (const user of allUsers) {
+      if (user.lastActiveDate && user.lastActiveDate !== lastPlayDate) {
+        await updateItem(
+          'users',
+          { userId: user.userId },
+          'SET currentStreak = :zero',
+          { ':zero': 0 }
+        );
+        streaksReset++;
+      }
+    }
+  }
+  console.log(`Reset ${streaksReset} user streaks (last play day: ${lastPlayDate ?? 'none'})`);
 
   // Step 3: Reset all 5 clans: todayXp = 0, clear todayXpTimestamp
   const clanIds = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
@@ -296,20 +312,89 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
     console.log(`Set resetSeq=${resetSeq} on daily-config for ${today}`);
   }
 
-  // Step 6: Send day-start push notification
-  if (todayConfig?.targetSpace) {
+  // Step 5c: Generate space assignments for all users (decoration system)
+  // First delete any existing assignments for today (stale empty records from lazy-creation
+  // before spaces existed would block regeneration via the conditional put).
+  try {
+    console.log('[dailyReset] Step 5c: Clearing stale space assignments for today');
+    let saLastKey: Record<string, unknown> | undefined;
+    let saDeleted = 0;
+    do {
+      const saResult = await scan<{ dateUserId: string }>('space-assignments', {
+        filterExpression: 'begins_with(dateUserId, :prefix)',
+        expressionValues: { ':prefix': `${today}#` },
+        exclusiveStartKey: saLastKey,
+      });
+      for (const item of saResult.items) {
+        await deleteItem('space-assignments', { dateUserId: item.dateUserId });
+        saDeleted++;
+      }
+      saLastKey = saResult.lastEvaluatedKey;
+    } while (saLastKey);
+    if (saDeleted > 0) console.log(`[dailyReset] Deleted ${saDeleted} stale space assignments for ${today}`);
+
+    console.log('[dailyReset] Step 5c: Generating space assignments');
+    // Scan active spaces once, pass to all users to avoid N redundant scans
+    const activeSpaceIds = await getActiveSpaceIds();
+    console.log(`[dailyReset] Found ${activeSpaceIds.length} active spaces`);
+
+    const spaceAssignmentResults = await Promise.allSettled(
+      allUsers.map(user =>
+        generateSpaceAssignment(user.userId, today, activeSpaceIds)
+          .catch((err: unknown) => {
+            if ((err as { name?: string })?.name === 'ConditionalCheckFailedException') return;
+            console.error(`[dailyReset] Space assignment failed for ${user.userId}:`, err);
+          })
+      )
+    );
+    const succeeded = spaceAssignmentResults.filter(r => r.status === 'fulfilled').length;
+    console.log(`[dailyReset] Step 5c complete: ${succeeded}/${allUsers.length} space assignments generated`);
+  } catch (spaceAssignErr) {
+    console.error('[dailyReset] Space assignment step failed (non-fatal):', spaceAssignErr);
+  }
+
+  // Step 6: Send day-start push notification (playtest day-aware copy)
+  {
+    // Determine playtest day: count completed (non-quiet) daily-configs
+    // within a wider window to handle leave / holiday gaps.
+    let playtestDay = 1;
+    try {
+      const MAX_LOOKBACK = 14;
+      const nowIST = toZonedTime(new Date(), 'Asia/Kolkata');
+      let completedDays = 0;
+      for (let d = 1; d <= MAX_LOOKBACK && completedDays < 3; d++) {
+        const pastDate = toISTString(addDays(nowIST, -d));
+        const pastConfig = await getItem<DailyConfig>('daily-config', { date: pastDate });
+        if (pastConfig && pastConfig.status === DailyConfigStatus.Complete && !pastConfig.quietMode) {
+          completedDays++;
+        }
+      }
+      playtestDay = Math.min(Math.max(completedDays + 1, 1), 4);
+    } catch (dayErr) {
+      console.warn('Failed to determine playtest day, defaulting to 1:', dayErr);
+      playtestDay = 1;
+    }
+
+    const dayStartCopy: Record<number, { title: string; body: string }> = {
+      1: { title: 'The playtest begins!', body: 'Your spaces and locations are ready. Head to the map and start exploring!' },
+      2: { title: 'Day 2 of 4!', body: 'Keep your streak going — your spaces and locations are waiting.' },
+      3: { title: 'Day 3 of 4!', body: 'Two days left! Visit your assigned spaces and locations to earn XP for your clan.' },
+      4: { title: 'Final day!', body: 'Last chance! Decorate your spaces and win your locations today.' },
+    };
+    const copy = dayStartCopy[playtestDay] ?? dayStartCopy[1];
+
     const delivered = await sendToAll({
       notification: {
-        title: 'A new day dawns!',
-        body: `Today's prize: ${todayConfig.targetSpace.name}. Go claim it!`,
+        title: copy.title,
+        body: copy.body,
       },
       data: {
         type: 'DAY_START',
-        targetSpace: todayConfig.targetSpace.name,
+        targetSpace: todayConfig?.targetSpace?.name ?? '',
         date: today,
       },
     });
-    console.log(`Sent day-start notifications: ${delivered} delivered`);
+    console.log(`Sent day-start notifications (playtest day ${playtestDay}): ${delivered} delivered`);
   }
 
   // Step 7: Broadcast DAILY_RESET event via WebSocket

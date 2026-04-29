@@ -166,11 +166,6 @@ export default function ResultScreen() {
       markXpEarnedAtLocation(locationId);
       loadTodayLocations();
 
-      const capReached = (newTodayXp ?? 0) >= 100;
-      if (capReached) {
-        patchLastScanResult({ xpAvailable: false });
-      }
-
       if (minigameId && lastScanResult && 'availableMinigames' in lastScanResult && lastScanResult.availableMinigames) {
         const patched = lastScanResult.availableMinigames.map((m) =>
           m.minigameId === minigameId ? { ...m, completed: true } : m,
@@ -321,7 +316,7 @@ export default function ResultScreen() {
                   Your clan now has {clanTodayXp ?? 0} XP today!
                 </Text>
                 <Text style={styles.playerXpText}>
-                  Your XP: {newTodayXp ?? 0}/100
+                  Your XP today: {newTodayXp ?? 0}
                 </Text>
               </>
             ) : (

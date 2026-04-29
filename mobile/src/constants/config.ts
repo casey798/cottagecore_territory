@@ -1,5 +1,4 @@
-export const XP_PER_WIN = 25;
-export const DAILY_XP_CAP = 100;
+export const XP_PER_WIN = 10;
 export const GEOFENCE_RADIUS_DEFAULT = 15;
 export const GAME_START_HOUR = 8;
 export const GAME_END_HOUR = 18;

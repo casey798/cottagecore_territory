@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -13,6 +13,8 @@ import { useDebugStore } from '@/store/useDebugStore';
 import { useMapStore } from '@/store/useMapStore';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useGPS } from '@/hooks/useGPS';
+import * as spacesApi from '@/api/spaces';
+import { SpaceAssignmentItem } from '@/api/spaces';
 
 export function DebugPanel() {
   if (!__DEV__) return null;
@@ -30,6 +32,17 @@ export function DebugPanel() {
   const showAllMinigames = useDebugStore((s) => s.showAllMinigames);
   const setShowAllMinigames = useDebugStore((s) => s.setShowAllMinigames);
   const todayLocations = useMapStore((s) => s.todayLocations ?? []);
+  const [spaceAssignments, setSpaceAssignments] = useState<SpaceAssignmentItem[]>([]);
+
+  // Fetch space assignments when panel expands
+  useEffect(() => {
+    if (!expanded) return;
+    spacesApi.getSpaceAssignments().then((res) => {
+      if (res.success && res.data) {
+        setSpaceAssignments(res.data.assignments);
+      }
+    }).catch(() => {});
+  }, [expanded]);
 
   // Get real GPS state (this will return debug values if debug is on,
   // but we also show the raw state for reference)
@@ -150,6 +163,27 @@ export function DebugPanel() {
                 </Text>
                 <Text style={styles.quickLocationCoords}>
                   {loc.gpsLat.toFixed(4)}, {loc.gpsLng.toFixed(4)}
+                </Text>
+              </Pressable>
+            ))}
+          </>
+        )}
+
+        {/* Quick Space Locations */}
+        {spaceAssignments.length > 0 && (
+          <>
+            <Text style={styles.sectionTitle}>Quick Spaces:</Text>
+            {spaceAssignments.map((sp) => (
+              <Pressable
+                key={sp.spaceId}
+                style={[styles.quickLocation, styles.quickSpaceLocation]}
+                onPress={() => handleQuickLocation(sp.gpsLat, sp.gpsLng)}
+              >
+                <Text style={styles.quickLocationText} numberOfLines={1}>
+                  {sp.spaceName}
+                </Text>
+                <Text style={styles.quickLocationCoords}>
+                  {sp.gpsLat.toFixed(4)}, {sp.gpsLng.toFixed(4)}
                 </Text>
               </Pressable>
             ))}
@@ -363,6 +397,10 @@ const styles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 4,
     marginBottom: 2,
+  },
+  quickSpaceLocation: {
+    borderLeftWidth: 2,
+    borderLeftColor: '#E8834A',
   },
   quickLocationText: {
     color: PALETTE.cream,

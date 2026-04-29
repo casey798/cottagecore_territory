@@ -3,7 +3,7 @@ import { success, error, ErrorCode } from '../../shared/response';
 import { scan, query } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
 import { ClanId } from '../../shared/types';
-import type { GameSession, CheckIn, User } from '../../shared/types';
+import type { GameSession, CheckIn, User, SpaceDecorationSubmission } from '../../shared/types';
 
 const CLAN_IDS: ClanId[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
 
@@ -63,6 +63,20 @@ export async function handler(
       } while (lastCheckinKey);
     }
 
+    // Scan space decorations in date range
+    const decorations: SpaceDecorationSubmission[] = [];
+    let lastDecKey: Record<string, unknown> | undefined;
+    do {
+      const result = await scan<SpaceDecorationSubmission>('space-decorations', {
+        filterExpression: '#d BETWEEN :start AND :end',
+        expressionNames: { '#d': 'date' },
+        expressionValues: { ':start': startDate, ':end': endDate },
+        exclusiveStartKey: lastDecKey,
+      });
+      decorations.push(...result.items);
+      lastDecKey = result.lastEvaluatedKey;
+    } while (lastDecKey);
+
     // Build userId → clan lookup from users table
     const userClanMap = new Map<string, string>();
     let lastUserKey: Record<string, unknown> | undefined;
@@ -90,23 +104,38 @@ export async function handler(
       checkinsByDate.set(c.date, list);
     }
 
+    // Group decorations by date
+    const decorationsByDate = new Map<string, SpaceDecorationSubmission[]>();
+    for (const d of decorations) {
+      const list = decorationsByDate.get(d.date) || [];
+      list.push(d);
+      decorationsByDate.set(d.date, list);
+    }
+
     // Build daily engagement data
     const days = dates.map((date) => {
       const daySessions = sessionsByDate.get(date) || [];
       const dayCheckins = checkinsByDate.get(date) || [];
+      const dayDecorations = decorationsByDate.get(date) || [];
 
-      // DAU: union of session userIds and checkin userIds
+      // DAU: union of session, checkin, and decoration userIds
       const allUserIds = new Set<string>();
       for (const s of daySessions) allUserIds.add(s.userId);
       for (const c of dayCheckins) allUserIds.add(c.userId);
+      for (const d of dayDecorations) allUserIds.add(d.userId);
 
-      // Per-clan DAU from sessions
+      // Per-clan DAU from sessions + decorations
       const perClanDau: Record<string, number> = {};
       for (const clanId of CLAN_IDS) {
         const clanUsers = new Set<string>();
         for (const s of daySessions) {
           if (userClanMap.get(s.userId) === clanId) {
             clanUsers.add(s.userId);
+          }
+        }
+        for (const d of dayDecorations) {
+          if (d.clan === clanId) {
+            clanUsers.add(d.userId);
           }
         }
         perClanDau[clanId] = clanUsers.size;
@@ -117,6 +146,7 @@ export async function handler(
         dau: allUserIds.size,
         totalSessions: daySessions.length,
         totalCheckins: dayCheckins.length,
+        totalDecorations: dayDecorations.length,
         perClanDau,
       };
     });

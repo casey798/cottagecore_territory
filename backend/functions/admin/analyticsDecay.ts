@@ -3,7 +3,7 @@ import { success, error, ErrorCode } from '../../shared/response';
 import { scan } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
 import { ClanId } from '../../shared/types';
-import type { GameSession, User, LocationMasterConfig } from '../../shared/types';
+import type { GameSession, User, LocationMasterConfig, SpaceDecorationSubmission, SpaceAssignment } from '../../shared/types';
 import { toZonedTime } from 'date-fns-tz';
 import { addDays, format } from 'date-fns';
 
@@ -31,10 +31,12 @@ export async function handler(
     const seasonStart = getSeasonStartDefault();
 
     // ── Parallel scans ───────────────────────────────────────────────
-    const [allSessions, usersData, locationsData] = await Promise.all([
+    const [allSessions, usersData, locationsData, allDecorations, allSpaceAssignments] = await Promise.all([
       scanAllFiltered<GameSession>('game-sessions', seasonStart, today),
       scanAll<User>('users'),
       scanAll<LocationMasterConfig>('location-master-config'),
+      scanAllFiltered<SpaceDecorationSubmission>('space-decorations', seasonStart, today),
+      scanAll<SpaceAssignment>('space-assignments'),
     ]);
 
     const sessions = allSessions.filter((s) => !s.practiceSession);
@@ -177,6 +179,79 @@ export async function handler(
       locations: unactivatedLocations,
     };
 
+    // ── 6) Decoration Decline ──────────────────────────────────────────
+    // Group decorations by date to check for declining trend
+    const decorationsByDate = new Map<string, number>();
+    for (const d of allDecorations) {
+      decorationsByDate.set(d.date, (decorationsByDate.get(d.date) || 0) + 1);
+    }
+
+    let peakDecorations = 0;
+    let peakDecDate = today;
+    decorationsByDate.forEach((count, date) => {
+      if (count > peakDecorations) {
+        peakDecorations = count;
+        peakDecDate = date;
+      }
+    });
+
+    const todayDecorations = decorationsByDate.get(today) || 0;
+    const decDropPercent = peakDecorations > 0 ? Math.round((1 - todayDecorations / peakDecorations) * 100) : 0;
+    const decorationDecline = {
+      triggered: peakDecorations >= 3 && todayDecorations < peakDecorations * 0.5,
+      peakDecorations,
+      peakDate: peakDecDate,
+      todayDecorations,
+      dropPercent: decDropPercent,
+    };
+
+    // ── 7) Clans Not Decorating ────────────────────────────────────────
+    const clanDecoratorSets = new Map<string, Set<string>>();
+    for (const clanId of CLAN_IDS) clanDecoratorSets.set(clanId, new Set());
+    for (const d of allDecorations) {
+      if (d.date >= yesterday) {
+        const s = clanDecoratorSets.get(d.clan);
+        if (s) s.add(d.userId);
+      }
+    }
+
+    const nonDecoratingClans: Array<{ clanId: string; decoratorsLast2Days: number }> = [];
+    for (const clanId of CLAN_IDS) {
+      const decorators = clanDecoratorSets.get(clanId)?.size || 0;
+      if (decorators === 0 && allDecorations.length > 0) {
+        nonDecoratingClans.push({ clanId, decoratorsLast2Days: decorators });
+      }
+    }
+
+    const clansNotDecorating = {
+      triggered: nonDecoratingClans.length > 0,
+      clans: nonDecoratingClans,
+    };
+
+    // ── 8) Low Space Assignment Completion ─────────────────────────────
+    // Filter assignments from last 3 days
+    const recentDateSet = new Set(recentDates);
+    let totalAssigned = 0;
+    let totalCompleted = 0;
+    for (const a of allSpaceAssignments) {
+      const aDate = a.dateUserId.split('#')[0];
+      if (recentDateSet.has(aDate)) {
+        totalAssigned += a.assignedSpaceIds.length;
+        totalCompleted += a.completedSpaceIds.length;
+      }
+    }
+
+    const completionRate = totalAssigned > 0
+      ? Math.round((totalCompleted / totalAssigned) * 10000) / 10000
+      : 0;
+
+    const lowSpaceCompletion = {
+      triggered: totalAssigned >= 10 && completionRate < 0.3,
+      completionRate,
+      totalAssigned,
+      totalCompleted,
+    };
+
     return success({
       alerts: {
         dauDecline,
@@ -184,6 +259,9 @@ export async function handler(
         minigameAbandonment,
         sessionsPerPlayerLow,
         unactivatedSpaces,
+        decorationDecline,
+        clansNotDecorating,
+        lowSpaceCompletion,
       },
       computedAt: new Date().toISOString(),
     });

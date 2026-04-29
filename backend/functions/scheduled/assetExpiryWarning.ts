@@ -3,9 +3,14 @@ import { scan, getItem } from '../../shared/db';
 import { sendToTokens } from '../../shared/notifications';
 import { PlayerAsset, User } from '../../shared/types';
 import { getMidnightISTAsISO } from '../../shared/time';
+import { isQuietModeActive } from '../../shared/quietMode';
 
 export const handler = async (_event: ScheduledEvent): Promise<void> => {
   try {
+  if (await isQuietModeActive()) {
+    console.log('Quiet mode active — skipping asset expiry warning');
+    return;
+  }
   console.log('Asset expiry warning check running');
 
   const nextMidnight = getMidnightISTAsISO();
@@ -38,23 +43,23 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
 
   console.log(`${userAssetCounts.size} users have unplaced assets`);
 
-  // Send notification to each user with unplaced assets
-  for (const [userId, count] of userAssetCounts.entries()) {
-    try {
-      const user = await getItem<User>('users', { userId });
-      if (user?.fcmToken) {
-        await sendToTokens([user.fcmToken], {
-          notification: {
-            title: 'Items fading...',
-            body: `You have ${count} unplaced item${count > 1 ? 's' : ''} — place them before midnight!`,
-          },
-          data: { type: 'ASSET_EXPIRY_WARNING', count: String(count) },
-        });
-      }
-    } catch (err) {
-      console.error(`Failed to send warning to user ${userId}:`, err);
-    }
-  }
+  // MODIFIED: asset expiry notifications disabled in playtest version
+  // for (const [userId, count] of userAssetCounts.entries()) {
+  //   try {
+  //     const user = await getItem<User>('users', { userId });
+  //     if (user?.fcmToken) {
+  //       await sendToTokens([user.fcmToken], {
+  //         notification: {
+  //           title: 'Items fading...',
+  //           body: `You have ${count} unplaced item${count > 1 ? 's' : ''} — place them before midnight!`,
+  //         },
+  //         data: { type: 'ASSET_EXPIRY_WARNING', count: String(count) },
+  //       });
+  //     }
+  //   } catch (err) {
+  //     console.error(`Failed to send warning to user ${userId}:`, err);
+  //   }
+  // }
 
   console.log('Asset expiry warnings complete');
   } catch (err) {

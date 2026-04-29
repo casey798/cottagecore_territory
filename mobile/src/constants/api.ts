@@ -31,6 +31,10 @@ export const ENDPOINTS = {
   PLAYER_JOURNAL: '/player/journal',
   PLAYER_TUTORIAL_DONE: '/player/tutorialDone',
   ACCEPT_TC: '/player/acceptTc',
+  SPACE_ASSIGNMENTS_TODAY: '/spaces/assignments/today',
+  SCAN_SPACE_QR: '/spaces/scan-qr',
+  SUBMIT_SPACE_DECORATION: '/spaces/decoration/submit',
+  MY_DECORATIONS: '/spaces/my-decorations',
 } as const;
 
 export function SUBMIT_SENTIMENT(sessionId: string): string {

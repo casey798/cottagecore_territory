@@ -13,7 +13,7 @@ import {
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { NUMBER_CRUNCH_TIME_LIMIT } from '@/constants/config';
+import { NUMBER_CRUNCH_TIME_LIMIT, XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps } from '@/types/minigame';
 import {
@@ -260,7 +260,7 @@ export default function GroveEquationsGame(props: MinigamePlayProps): React.JSX.
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
           onContinue={handleContinue}
           practiceMode={practiceMode}
         />

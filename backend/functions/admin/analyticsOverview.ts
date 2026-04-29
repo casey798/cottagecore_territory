@@ -2,7 +2,7 @@ import { APIGatewayProxyEvent, APIGatewayProxyResult } from 'aws-lambda';
 import { success, error, ErrorCode } from '../../shared/response';
 import { scan, query } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
-import type { GameSession, CheckIn, User, LocationMasterConfig } from '../../shared/types';
+import type { GameSession, CheckIn, User, LocationMasterConfig, SpaceDecorationSubmission } from '../../shared/types';
 import { toZonedTime } from 'date-fns-tz';
 import { addDays, format } from 'date-fns';
 
@@ -50,13 +50,36 @@ async function getMetricsForDate(date: string) {
     lastCheckinKey = result.lastEvaluatedKey;
   } while (lastCheckinKey);
 
-  const allUserIds = new Set([...sessionUserIds, ...checkinUserIds]);
+  // Space decorations for this date
+  const decoratorUserIds = new Set<string>();
+  let decorationCount = 0;
+  let decorationXp = 0;
+  let lastDecKey: Record<string, unknown> | undefined;
+  do {
+    const result = await scan<SpaceDecorationSubmission>('space-decorations', {
+      filterExpression: '#d = :date',
+      expressionNames: { '#d': 'date' },
+      expressionValues: { ':date': date },
+      exclusiveStartKey: lastDecKey,
+    });
+    for (const d of result.items) {
+      decoratorUserIds.add(d.userId);
+      decorationCount++;
+      decorationXp += d.xpAwarded;
+    }
+    lastDecKey = result.lastEvaluatedKey;
+  } while (lastDecKey);
+
+  const allUserIds = new Set([...sessionUserIds, ...checkinUserIds, ...decoratorUserIds]);
 
   return {
     dau: allUserIds.size,
     sessionsToday: sessionCount,
     checkinsToday: checkinCount,
     uniqueLocationsVisited: sessionLocationIds.size,
+    decorationsToday: decorationCount,
+    decoratorsToday: decoratorUserIds.size,
+    decorationXpToday: decorationXp,
   };
 }
 
@@ -107,6 +130,9 @@ export async function handler(
         uniqueLocationsVisited: todayMetrics.uniqueLocationsVisited,
         totalActiveLocations,
         totalRoster: totalUsers,
+        decorationsToday: todayMetrics.decorationsToday,
+        decoratorsToday: todayMetrics.decoratorsToday,
+        decorationXpToday: todayMetrics.decorationXpToday,
       },
       yesterday: {
         date: yesterday,
@@ -114,12 +140,14 @@ export async function handler(
         sessionsToday: yesterdayMetrics.sessionsToday,
         checkinsToday: yesterdayMetrics.checkinsToday,
         uniqueLocationsVisited: yesterdayMetrics.uniqueLocationsVisited,
+        decorationsToday: yesterdayMetrics.decorationsToday,
       },
       deltas: {
         dau: todayMetrics.dau - yesterdayMetrics.dau,
         sessions: todayMetrics.sessionsToday - yesterdayMetrics.sessionsToday,
         checkins: todayMetrics.checkinsToday - yesterdayMetrics.checkinsToday,
         locations: todayMetrics.uniqueLocationsVisited - yesterdayMetrics.uniqueLocationsVisited,
+        decorations: todayMetrics.decorationsToday - yesterdayMetrics.decorationsToday,
       },
     });
   } catch (err) {

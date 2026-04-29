@@ -35,16 +35,6 @@ export const handler = async (
       locationIds = activePool
         ? assignment.assignedLocationIds.filter((id) => activePool.has(id))
         : assignment.assignedLocationIds;
-    } else if (STAGE === 'dev') {
-      // Dev fallback: if no assignment yet, use daily config locations directly
-      console.log('[getTodayLocations] Dev fallback: using daily-config locations');
-
-      if (dailyConfig && dailyConfig.activeLocationIds.length > 0) {
-        locationIds = dailyConfig.activeLocationIds;
-      } else {
-        console.log('[getTodayLocations] No assignment and no daily-config, returning empty');
-        return success({ locations: [] });
-      }
     } else {
       // Lazy-create assignment for players who signed in after the 8 AM bulk assignment
       try {

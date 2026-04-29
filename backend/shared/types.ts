@@ -731,3 +731,66 @@ export interface DailyLocationPool {
   amPool: string[] | null;
   pmPool: string[] | null;
 }
+
+// ── Space Decoration System Types ───────────────────────
+
+export interface Space {
+  spaceId: string;
+  name: string;
+  polygonPoints: Array<{ x: number; y: number }>;
+  gridCells: Array<{ col: number; row: number }>;
+  gridColumns: number;
+  gridRows: number;
+  qrSecret: string;
+  qrNumber: number;
+  qrPayload?: string;
+  qrImageBase64?: string;
+  qrGeneratedAt?: string;
+  gpsLat: number;
+  gpsLng: number;
+  geofenceRadius: number;
+  mapPixelX: number;
+  mapPixelY: number;
+  active: boolean;
+  createdAt: string;
+  notes?: string;
+}
+
+export interface SpaceAssignment {
+  dateUserId: string;           // "YYYY-MM-DD#userId"
+  assignedSpaceIds: string[];
+  completedSpaceIds: string[];
+  createdAt: string;
+}
+
+export type DecorationPackCategory = 'furniture' | 'aesthetics' | 'nature';
+
+export interface PlacedDecorationAsset {
+  assetId: string;
+  packCategory: DecorationPackCategory;
+  x: number;
+  y: number;
+  rotation: number;             // 0, 90, 180, 270
+  gridW: number;
+  gridH: number;
+}
+
+export interface DecorationSurvey {
+  wantSpaceToBe: string;
+  whyChoseItems: string;
+  wouldVisitMore: 'yes' | 'maybe' | 'no';
+}
+
+export interface SpaceDecorationSubmission {
+  userSpaceId: string;          // "userId#spaceId"
+  date: string;                 // "YYYY-MM-DD"
+  layout: { placedAssets: PlacedDecorationAsset[] };
+  survey: DecorationSurvey;
+  screenshotS3Key: string;
+  packUsageSummary: Record<DecorationPackCategory, number>;
+  xpAwarded: number;
+  submittedAt: string;
+  userId: string;
+  spaceId: string;
+  clan: string;
+}

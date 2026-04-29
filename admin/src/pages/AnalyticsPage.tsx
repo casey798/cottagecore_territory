@@ -12,6 +12,7 @@ import {
   getAnalyticsClusters,
   getAnalyticsDecay,
   getClusterMigration,
+  getAnalyticsSpaces,
   type ClusterMigrationData,
 } from '@/api/analytics';
 import { getSeasonStatus } from '@/api/season';
@@ -31,11 +32,12 @@ import { CLAN_LABELS, CLAN_COLORS } from '../constants/clans';
 
 const CLAN_IDS: ClanId[] = ['ember', 'tide', 'bloom', 'gale', 'hearth'];
 
-type TabId = 'overview' | 'clans' | 'locations' | 'minigames' | 'free-roam' | 'clusters';
+type TabId = 'overview' | 'clans' | 'spaces' | 'locations' | 'minigames' | 'free-roam' | 'clusters';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
   { id: 'clans', label: 'Clans' },
+  { id: 'spaces', label: 'Spaces' },
   { id: 'locations', label: 'Locations' },
   { id: 'minigames', label: 'Minigames' },
   { id: 'free-roam', label: 'Free-Roam' },
@@ -247,6 +249,7 @@ export function AnalyticsPage() {
 
       {activeTab === 'overview' && <OverviewTab startDate={startDate} endDate={endDate} />}
       {activeTab === 'clans' && <ClansTab startDate={startDate} endDate={endDate} />}
+      {activeTab === 'spaces' && <SpacesTab startDate={startDate} endDate={endDate} />}
       {activeTab === 'locations' && <LocationsTab startDate={startDate} endDate={endDate} />}
       {activeTab === 'minigames' && <MinigamesTab startDate={startDate} endDate={endDate} />}
       {activeTab === 'free-roam' && <FreeRoamTab startDate={startDate} endDate={endDate} />}
@@ -321,6 +324,30 @@ function OverviewTab({ startDate, endDate }: { startDate: string; endDate: strin
         suggestion: 'Add to daily location pool with increased frequency',
       });
     }
+    if (a.decorationDecline?.triggered) {
+      result.push({
+        level: 'yellow',
+        text: `Decorations declining \u2014 down ${a.decorationDecline.dropPercent}% from peak of ${a.decorationDecline.peakDecorations} on ${formatDate(a.decorationDecline.peakDate)}`,
+        suggestion: 'Consider sending a decoration reminder or refreshing the asset catalog',
+      });
+    }
+    if (a.clansNotDecorating?.triggered) {
+      for (const clan of a.clansNotDecorating.clans) {
+        const name = CLAN_LABELS[clan.clanId as ClanId] ?? clan.clanId;
+        result.push({
+          level: 'yellow',
+          text: `${name} has 0 decorators in the last 2 days`,
+          suggestion: `Send targeted decoration reminder to ${name}`,
+        });
+      }
+    }
+    if (a.lowSpaceCompletion?.triggered) {
+      result.push({
+        level: 'yellow',
+        text: `Space assignment completion at ${Math.round(a.lowSpaceCompletion.completionRate * 100)}% (${a.lowSpaceCompletion.totalCompleted}/${a.lowSpaceCompletion.totalAssigned})`,
+        suggestion: 'Players may not understand the decoration flow \u2014 consider a nudge notification',
+      });
+    }
     return result;
   }, [decay]);
 
@@ -330,6 +357,7 @@ function OverviewTab({ startDate, endDate }: { startDate: string; endDate: strin
       {overviewError && <ErrorAlert message={(overviewError as Error).message} />}
 
       {overview && (
+        <>
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
           <MetricCard
             label="DAU"
@@ -352,6 +380,27 @@ function OverviewTab({ startDate, endDate }: { startDate: string; endDate: strin
             delta={overview.deltas.locations}
           />
         </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <MetricCard
+            label="Decorations Today"
+            value={String(overview.today.decorationsToday ?? 0)}
+            delta={overview.deltas.decorations ?? null}
+          />
+          <MetricCard
+            label="Unique Decorators"
+            value={String(overview.today.decoratorsToday ?? 0)}
+          />
+          <MetricCard
+            label="Decoration XP"
+            value={String(overview.today.decorationXpToday ?? 0)}
+          />
+          <MetricCard
+            label="Combined Activity"
+            value={String(overview.today.sessionsToday + (overview.today.decorationsToday ?? 0))}
+            subtitle={`${overview.today.sessionsToday} minigame + ${overview.today.decorationsToday ?? 0} decorations`}
+          />
+        </div>
+        </>
       )}
 
       {/* Decay Alerts */}
@@ -423,6 +472,7 @@ function OverviewTab({ startDate, endDate }: { startDate: string; endDate: strin
                   <Line type="monotone" dataKey="dau" name="DAU" stroke="#3D2B1F" strokeWidth={2.5} dot={false} />
                   <Line type="monotone" dataKey="totalSessions" name="Sessions" stroke="#D4A843" strokeWidth={1.5} dot={false} />
                   <Line type="monotone" dataKey="totalCheckins" name="Check-ins" stroke="#7BA3C4" strokeWidth={1.5} strokeDasharray="5 5" dot={false} />
+                  <Line type="monotone" dataKey="totalDecorations" name="Decorations" stroke="#4A9966" strokeWidth={1.5} strokeDasharray="3 3" dot={false} />
                 </>
               )}
             </LineChart>
@@ -558,6 +608,239 @@ function ClansTab({ startDate, endDate }: { startDate: string; endDate: string }
             ))}
           </tbody>
         </table>
+      </div>
+    </div>
+  );
+}
+
+// ── Spaces Tab ──────────────────────────────────────────────────────
+
+const SENTIMENT_COLORS = { yes: '#27AE60', maybe: '#F1C40F', no: '#C0392B' };
+const PACK_COLORS = { furniture: '#8B6914', aesthetics: '#D4A843', nature: '#4A9966' };
+
+function SpacesTab({ startDate, endDate }: { startDate: string; endDate: string }) {
+  const [sortKey, setSortKey] = useState('totalXp');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
+  const { data, isLoading, error: err } = useQuery({
+    queryKey: ['analytics-spaces', startDate, endDate],
+    queryFn: () => getAnalyticsSpaces(startDate, endDate),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  function handleSort(key: string) {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key); setSortDir('desc'); }
+  }
+
+  const sorted = useMemo(() => {
+    if (!data) return [];
+    return [...data.clanLeaderboard].sort((a, b) => {
+      const aVal = a[sortKey as keyof typeof a] as number;
+      const bVal = b[sortKey as keyof typeof b] as number;
+      return sortDir === 'asc' ? aVal - bVal : bVal - aVal;
+    });
+  }, [data, sortKey, sortDir]);
+
+  if (isLoading) return <LoadingSpinner />;
+  if (err) return <ErrorAlert message={(err as Error).message} />;
+  if (!data) return null;
+
+  const { totals, sentimentBreakdown, packCategoryUsage, dailyActivity } = data;
+
+  // XP source bar chart data
+  const xpSourceData = sorted.map((c) => ({
+    clan: CLAN_LABELS[c.clanId] || c.clanId,
+    'Minigame XP': c.minigameXp,
+    'Space XP': c.spaceXp,
+  }));
+
+  // Daily decorations chart - flatten per-clan
+  const dailyChartData = dailyActivity.map((d) => {
+    const entry: Record<string, unknown> = { date: d.date };
+    for (const clanId of CLAN_IDS) {
+      entry[clanId] = d.perClan[clanId]?.decorations ?? 0;
+    }
+    return entry;
+  });
+
+  // Sentiment pie data
+  const sentimentPie = [
+    { name: 'Yes', value: sentimentBreakdown.overall.yes },
+    { name: 'Maybe', value: sentimentBreakdown.overall.maybe },
+    { name: 'No', value: sentimentBreakdown.overall.no },
+  ].filter((s) => s.value > 0);
+
+  // Pack usage pie data
+  const packPie = [
+    { name: 'Furniture', value: packCategoryUsage.furniture },
+    { name: 'Aesthetics', value: packCategoryUsage.aesthetics },
+    { name: 'Nature', value: packCategoryUsage.nature },
+  ].filter((s) => s.value > 0);
+
+  return (
+    <div className="space-y-6">
+      {/* Summary Cards */}
+      <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+        <MetricCard label="Total Decorations" value={String(totals.totalDecorations)} />
+        <MetricCard label="Space XP" value={String(totals.totalSpaceXp)} />
+        <MetricCard label="Unique Decorators" value={String(totals.uniqueDecorators)} />
+        <MetricCard
+          label="Combined XP"
+          value={String(totals.totalMinigameXp + totals.totalSpaceXp)}
+          subtitle={`${totals.totalMinigameXp} minigame + ${totals.totalSpaceXp} space`}
+        />
+      </div>
+
+      {/* Combined Clan Leaderboard */}
+      <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
+        <h3 className="mb-3 text-sm font-semibold text-[#3D2B1F]">Combined Clan Leaderboard</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-sm">
+            <thead>
+              <tr className="border-b border-[#8B6914]/20">
+                <th className="py-2 pr-2 text-xs uppercase text-[#3D2B1F]/50">Rank</th>
+                <th className="py-2 pr-2 text-xs uppercase text-[#3D2B1F]/50">Clan</th>
+                <SortHeader label="Minigame XP" sortKey="minigameXp" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Space XP" sortKey="spaceXp" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Total XP" sortKey="totalXp" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Active Users" sortKey="activeUsers" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Spaces Done" sortKey="spacesDecorated" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Decorators" sortKey="uniqueDecorators" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+                <SortHeader label="Completion" sortKey="assignmentCompletionRate" currentSort={sortKey} currentDir={sortDir} onSort={handleSort} />
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((c, i) => (
+                <tr key={c.clanId} className="border-b border-[#8B6914]/10">
+                  <td className="py-2 pr-2 text-[#3D2B1F]/50">{i + 1}</td>
+                  <td className="py-2 pr-2">
+                    <span className="inline-block h-3 w-3 rounded-full mr-2" style={{ backgroundColor: CLAN_COLORS[c.clanId] }} />
+                    {CLAN_LABELS[c.clanId] || c.clanId}
+                  </td>
+                  <td className="py-2 pr-2 text-right">{c.minigameXp}</td>
+                  <td className="py-2 pr-2 text-right">{c.spaceXp}</td>
+                  <td className="py-2 pr-2 text-right font-bold">{c.totalXp}</td>
+                  <td className="py-2 pr-2 text-right">{c.activeUsers}</td>
+                  <td className="py-2 pr-2 text-right">{c.spacesDecorated}</td>
+                  <td className="py-2 pr-2 text-right">{c.uniqueDecorators}</td>
+                  <td className="py-2 pr-2 text-right">{(c.assignmentCompletionRate * 100).toFixed(0)}%</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* XP Source Breakdown */}
+      <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
+        <h3 className="mb-3 text-sm font-semibold text-[#3D2B1F]">XP Source Breakdown</h3>
+        <ResponsiveContainer width="100%" height={300}>
+          <BarChart data={xpSourceData}>
+            <CartesianGrid strokeDasharray="3 3" stroke="#E8DDB8" />
+            <XAxis dataKey="clan" tick={{ fontSize: 11 }} />
+            <YAxis tick={{ fontSize: 11 }} />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="Minigame XP" stackId="xp" fill="#D4A843" />
+            <Bar dataKey="Space XP" stackId="xp" fill="#4A9966" />
+          </BarChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Daily Space Decoration Activity */}
+      <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
+        <h3 className="mb-3 text-sm font-semibold text-[#3D2B1F]">Daily Space Decorations by Clan</h3>
+        {dailyChartData.length > 0 ? (
+          <ResponsiveContainer width="100%" height={300}>
+            <LineChart data={dailyChartData}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#E8DDB8" />
+              <XAxis dataKey="date" tickFormatter={formatDate} tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+              <Tooltip labelFormatter={formatDate} />
+              <Legend />
+              {CLAN_IDS.map((id) => (
+                <Line key={id} type="monotone" dataKey={id} name={CLAN_LABELS[id]} stroke={CLAN_COLORS[id]} strokeWidth={2} dot={false} />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        ) : (
+          <p className="py-8 text-center text-sm text-[#3D2B1F]/40">No data</p>
+        )}
+      </div>
+
+      {/* Sentiment + Pack Usage side by side */}
+      <div className="grid gap-6 md:grid-cols-2">
+        {/* Decoration Survey Sentiment */}
+        <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
+          <h3 className="mb-3 text-sm font-semibold text-[#3D2B1F]">&quot;Would you visit this space more?&quot;</h3>
+          {sentimentPie.length > 0 ? (
+            <>
+              <ResponsiveContainer width="100%" height={200}>
+                <PieChart>
+                  <Pie data={sentimentPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={70} label>
+                    {sentimentPie.map((entry) => (
+                      <Cell key={entry.name} fill={SENTIMENT_COLORS[entry.name.toLowerCase() as keyof typeof SENTIMENT_COLORS]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+              <table className="mt-3 w-full text-left text-xs">
+                <thead>
+                  <tr className="border-b border-[#8B6914]/20 text-[#3D2B1F]/50">
+                    <th className="py-1">Clan</th>
+                    <th className="py-1 text-right">Yes</th>
+                    <th className="py-1 text-right">Maybe</th>
+                    <th className="py-1 text-right">No</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {CLAN_IDS.map((clanId) => {
+                    const s = sentimentBreakdown.perClan[clanId];
+                    if (!s) return null;
+                    const total = s.yes + s.maybe + s.no;
+                    if (total === 0) return null;
+                    return (
+                      <tr key={clanId} className="border-b border-[#8B6914]/10">
+                        <td className="py-1">
+                          <span className="inline-block h-2 w-2 rounded-full mr-1" style={{ backgroundColor: CLAN_COLORS[clanId] }} />
+                          {CLAN_LABELS[clanId]}
+                        </td>
+                        <td className="py-1 text-right">{s.yes}</td>
+                        <td className="py-1 text-right">{s.maybe}</td>
+                        <td className="py-1 text-right">{s.no}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </>
+          ) : (
+            <p className="py-8 text-center text-sm text-[#3D2B1F]/40">No survey data</p>
+          )}
+        </div>
+
+        {/* Pack Category Usage */}
+        <div className="rounded-lg border border-[#8B6914]/20 bg-white p-4">
+          <h3 className="mb-3 text-sm font-semibold text-[#3D2B1F]">Decoration Pack Usage</h3>
+          {packPie.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <PieChart>
+                <Pie data={packPie} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} label>
+                  {packPie.map((entry) => (
+                    <Cell key={entry.name} fill={PACK_COLORS[entry.name.toLowerCase() as keyof typeof PACK_COLORS]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+                <Legend />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="py-8 text-center text-sm text-[#3D2B1F]/40">No data</p>
+          )}
+        </div>
       </div>
     </div>
   );

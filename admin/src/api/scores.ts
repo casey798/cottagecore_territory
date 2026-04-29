@@ -10,8 +10,8 @@ export interface CaptureHistoryEntry {
 }
 
 export async function getClanScores(): Promise<ClanScore[]> {
-  const res = await apiClient.get<ClanScore[]>('/scores/clans');
-  return res.data ?? [];
+  const res = await apiClient.get<{ clans: ClanScore[] }>('/scores/clans');
+  return res.data?.clans ?? [];
 }
 
 export async function getCaptureHistory(season = 1): Promise<CaptureHistoryEntry[]> {

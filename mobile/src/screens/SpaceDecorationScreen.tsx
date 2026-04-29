@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
+import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,7 @@ import {
   ImageBackground,
   StyleSheet,
   Pressable,
-  FlatList,
+  ScrollView,
   LayoutChangeEvent,
   ActivityIndicator,
   ViewStyle,
@@ -19,26 +19,32 @@ import {
   Path as SkiaPath,
   BlurMask,
   Skia,
+  useCanvasRef,
+  useImage,
+  ImageFormat,
 } from '@shopify/react-native-skia';
+import type { SkImage } from '@shopify/react-native-skia';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
-  withRepeat,
-  withTiming,
-  Easing,
+  runOnJS,
+  SharedValue,
 } from 'react-native-reanimated';
-import { PALETTE, CLAN_COLORS, UI } from '@/constants/colors';
+import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
 import { MainModalParamList } from '@/navigation/MainStack';
-import { PlayerAsset, AssetRarity, ClanId } from '@/types';
-import * as playerApi from '@/api/player';
+import { PlacedDecorationAsset } from '@/api/spaces';
 import * as spacesApi from '@/api/spaces';
-import { useAssetStore } from '@/store/useAssetStore';
-import { useAuthStore } from '@/store/useAuthStore';
 import { useMapStore } from '@/store/useMapStore';
-import { ASSET_MAP, DECORATION_ASSETS } from '@/constants/assets';
+import {
+  DECORATION_PACKS,
+  DecorationAsset,
+  DecorationPackCategory,
+  getAssetImage,
+} from '@/data/decorationPacks';
 
 const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 
@@ -48,28 +54,26 @@ const TILE_PX = 16;
 const TOP_BAR_HEIGHT = 72;
 const BOTTOM_TRAY_HEIGHT = 220;
 const TRAY_ITEM_SIZE = 64;
+const GHOST_SIZE = 80;
+const ACCENT_COLOR = PALETTE.honeyGold;
 
-const RARITY_COLORS: Record<AssetRarity, string> = {
-  common: PALETTE.stoneGrey,
-  uncommon: PALETTE.softGreen,
-  rare: PALETTE.honeyGold,
-  legendary: PALETTE.mutedRose,
-};
-
-const CATEGORY_LETTERS: Record<string, string> = {
-  banner: 'B',
-  statue: 'S',
-  furniture: 'F',
-  mural: 'M',
-  pet: 'P',
-  special: 'X',
-};
-
-function clanColorWithOpacity(clan: ClanId, opacity: number): string {
-  const hex = CLAN_COLORS[clan] ?? PALETTE.white;
-  const alpha = Math.round(opacity * 255).toString(16).padStart(2, '0');
-  return `${hex}${alpha}`;
+// Multi-cell placement types
+interface PlacedAnchor {
+  instanceId: string; // unique per placement — allows multiple of the same asset
+  asset: DecorationAsset;
+  x: number;      // top-left grid col (anchor)
+  y: number;      // top-left grid row (anchor)
+  gridW: number;
+  gridH: number;
 }
+
+let _instanceCounter = 0;
+function nextInstanceId(): string {
+  return `inst_${++_instanceCounter}_${Date.now()}`;
+}
+
+// "col,row" → instanceId of the anchor occupying that cell
+type OccupancyMap = Record<string, string>;
 
 function hexToRgba(hex: string, alpha: number): string {
   const r = parseInt(hex.slice(1, 3), 16);
@@ -78,162 +82,211 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-// Multi-cell placement types
-interface PlacedAnchor {
-  asset: PlayerAsset;
-  x: number;      // top-left grid col (anchor)
-  y: number;      // top-left grid row (anchor)
-  gridW: number;
-  gridH: number;
+function clanColorWithOpacity(hex: string, opacity: number): string {
+  const alpha = Math.round(opacity * 255).toString(16).padStart(2, '0');
+  return `${hex}${alpha}`;
 }
 
-// "col,row" → userAssetId of the anchor asset occupying that cell
-type OccupancyMap = Record<string, string>;
+const PACK_COLORS: Record<DecorationPackCategory, string> = {
+  furniture: PALETTE.warmBrown,
+  aesthetics: PALETTE.mutedRose,
+  nature: PALETTE.softGreen,
+};
 
-function lookupAssetGrid(assetId: string): { gridW: number; gridH: number } {
-  const def = DECORATION_ASSETS.find((d) => d.id === assetId);
-  return { gridW: def?.gridW ?? 1, gridH: def?.gridH ?? 1 };
+// ── Skia asset image — renders a decoration image inside the Canvas ───
+function SkiaAssetImage({
+  source,
+  x,
+  y,
+  width,
+  height,
+}: {
+  source: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}) {
+  const img = useImage(source);
+  if (!img) return null;
+  return <SkiaImage image={img} x={x} y={y} width={width} height={height} fit="contain" />;
 }
+
+// ── Draggable tray item ───────────────────────────────────
+
+function DraggableTrayItem({
+  asset,
+  isDimmed,
+  ghostX,
+  ghostY,
+  ghostOpacity,
+  isDraggingShared,
+  onDragStart,
+  onDrop,
+  onDragEnd,
+}: {
+  asset: DecorationAsset;
+  isDimmed: boolean;
+  ghostX: SharedValue<number>;
+  ghostY: SharedValue<number>;
+  ghostOpacity: SharedValue<number>;
+  isDraggingShared: SharedValue<boolean>;
+  onDragStart: (asset: DecorationAsset) => void;
+  onDrop: (x: number, y: number) => void;
+  onDragEnd: () => void;
+}) {
+  const packColor = PACK_COLORS[asset.category] ?? PALETTE.stoneGrey;
+  const gridLabel = `${asset.gridW}\u00D7${asset.gridH}`;
+  const imageSource = getAssetImage(asset.imageKey);
+
+  const panGesture = Gesture.Pan()
+    .activateAfterLongPress(300)
+    .onStart((e) => {
+      ghostX.value = e.absoluteX;
+      ghostY.value = e.absoluteY;
+      ghostOpacity.value = 1;
+      isDraggingShared.value = true;
+      runOnJS(onDragStart)(asset);
+    })
+    .onUpdate((e) => {
+      ghostX.value = e.absoluteX;
+      ghostY.value = e.absoluteY;
+    })
+    .onEnd((e) => {
+      runOnJS(onDrop)(e.absoluteX, e.absoluteY);
+    })
+    .onFinalize(() => {
+      ghostOpacity.value = 0;
+      isDraggingShared.value = false;
+      runOnJS(onDragEnd)();
+    });
+
+  return (
+    <GestureDetector gesture={panGesture}>
+      <Animated.View
+        style={[
+          styles.trayItem,
+          { borderColor: PALETTE.warmBrownMild },
+          isDimmed && styles.trayItemDimmed,
+        ]}
+      >
+        <View style={[styles.trayItemIcon, { backgroundColor: hexToRgba(packColor, 0.25) }]}>
+          {imageSource ? (
+            <Image source={imageSource} style={styles.assetThumb} resizeMode="contain" />
+          ) : (
+            <View style={styles.assetThumbPlaceholder} />
+          )}
+          <View style={styles.gridSizeBadge}>
+            <Text style={styles.gridSizeText}>{gridLabel}</Text>
+          </View>
+        </View>
+      </Animated.View>
+    </GestureDetector>
+  );
+}
+
+// ── Ghost overlay ──────────────────────────────────────────
+
+function GhostOverlay({
+  ghostX,
+  ghostY,
+  ghostOpacity,
+  imageSource,
+}: {
+  ghostX: SharedValue<number>;
+  ghostY: SharedValue<number>;
+  ghostOpacity: SharedValue<number>;
+  imageSource: ReturnType<typeof require> | null;
+}) {
+  const animStyle = useAnimatedStyle(() => ({
+    left: ghostX.value - GHOST_SIZE / 2,
+    top: ghostY.value - GHOST_SIZE / 2,
+    opacity: ghostOpacity.value,
+  }));
+
+  if (!imageSource) return null;
+
+  return (
+    <Animated.View style={[styles.ghostContainer, animStyle]} pointerEvents="none">
+      <Image source={imageSource} style={styles.ghostImage} resizeMode="contain" />
+    </Animated.View>
+  );
+}
+
+// ── Main component ─────────────────────────────────────────
 
 export default function SpaceDecorationScreen() {
   const navigation = useNavigation<NativeStackNavigationProp<MainModalParamList>>();
   const route = useRoute<Route>();
-  const { spaceId, spaceName, clan, gridCells, polygonPoints, userAssetId } = route.params;
+  const { spaceId, spaceName, gridCells, gridColumns, gridRows, polygonPoints } = route.params;
 
-  const clanColor = CLAN_COLORS[clan as ClanId] ?? PALETTE.honeyGold;
-
-  // Campus map from store for Fix 1
+  // Campus map from store
   const skiaMapImage = useMapStore((s) => s.skiaMapImage);
   const mapConfig = useMapStore((s) => s.mapConfig);
 
-  // ISSUE 3 — Clan ownership check
-  const playerClan = useAuthStore((s) => s.clan);
-  const [clanMismatch, setClanMismatch] = useState(false);
+  // Skia canvas ref for screenshot capture
+  const canvasRef = useCanvasRef();
 
-  useEffect(() => {
-    if (playerClan && clan !== playerClan) {
-      setClanMismatch(true);
-      const t = setTimeout(() => navigation.goBack(), 1500);
-      return () => clearTimeout(t);
-    }
-  }, [clan, playerClan, navigation]);
+  // Ref for measuring canvas area position on screen
+  const canvasAreaRef = useRef<View>(null);
 
   // Decoration state — multi-cell placement
   const [placedAnchors, setPlacedAnchors] = useState<PlacedAnchor[]>([]);
   const [occupancyMap, setOccupancyMap] = useState<OccupancyMap>({});
-  const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
 
-  // Inventory
-  const [allAssets, setAllAssets] = useState<PlayerAsset[]>([]);
-  const [assetsLoaded, setAssetsLoaded] = useState(false);
-
-  // Loading states
-  const [decorationLoading, setDecorationLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-
-  // Track asset IDs that were placed when we loaded (for sync on save)
-  const initialPlacedAssetIds = useRef<Set<string>>(new Set());
-
-  // ISSUE 4 — Ref-guarded timeout for navigation after save
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  // Load existing decoration on mount (for re-decoration)
   useEffect(() => {
-    return () => { if (timeoutRef.current) clearTimeout(timeoutRef.current); };
-  }, []);
-
-  // Loading skeleton pulse animation
-  const pulseVal = useSharedValue(0.15);
-  useEffect(() => {
-    pulseVal.value = withRepeat(
-      withTiming(0.35, { duration: 1200, easing: Easing.inOut(Easing.ease) }),
-      -1,
-      true,
-    );
-  }, [pulseVal]);
-
-  const pulseStyle = useAnimatedStyle(() => ({
-    opacity: pulseVal.value,
-  }));
-
-  // Fetch player assets first, then load existing decoration
-  useEffect(() => {
-    let cancelled = false;
-
     (async () => {
-      // Step 1: fetch player assets
-      let assets: PlayerAsset[] = [];
       try {
-        const assetsResult = await playerApi.getAssets();
-        if (assetsResult.success && assetsResult.data) {
-          assets = assetsResult.data.assets;
-        }
-      } catch {
-        // Continue with empty assets
-      }
-      if (cancelled) return;
-      setAllAssets(assets);
-      setAssetsLoaded(true);
+        const result = await spacesApi.getMyDecorations();
+        if (!result.success || !result.data) return;
+        const existing = result.data.decorations.find((d) => d.spaceId === spaceId);
+        if (!existing || !existing.placedAssets || existing.placedAssets.length === 0) return;
 
-      // Step 2: fetch existing decoration and restore multi-cell state
-      try {
-        const decoResult = await spacesApi.getDecoration(spaceId);
-        if (
-          decoResult.success &&
-          decoResult.data?.layout?.placedAssets?.length
-        ) {
-          const assetByUserAssetId = new Map<string, PlayerAsset>();
-          for (const a of assets) {
-            assetByUserAssetId.set(a.userAssetId, a);
-          }
-
-          const restoredAnchors: PlacedAnchor[] = [];
-          const restoredOccupancy: OccupancyMap = {};
-          const initialIds = new Set<string>();
-
-          for (const pa of decoResult.data.layout.placedAssets) {
-            const playerAsset = assetByUserAssetId.get(pa.userAssetId);
-            if (!playerAsset) continue;
-
-            const { gridW, gridH } = lookupAssetGrid(playerAsset.assetId);
-            restoredAnchors.push({
-              asset: playerAsset,
-              x: pa.x,
-              y: pa.y,
-              gridW,
-              gridH,
-            });
-            // Fill occupancy for all cells in this footprint
-            for (let dy = 0; dy < gridH; dy++) {
-              for (let dx = 0; dx < gridW; dx++) {
-                restoredOccupancy[`${pa.x + dx},${pa.y + dy}`] = playerAsset.userAssetId;
-              }
+        const allAssets = DECORATION_PACKS.flatMap((p) => p.assets);
+        const anchors: PlacedAnchor[] = [];
+        const occ: OccupancyMap = {};
+        for (const pa of existing.placedAssets) {
+          const asset = allAssets.find((a) => a.assetId === pa.assetId);
+          if (!asset) continue;
+          const gw = pa.gridW ?? asset.gridW ?? 1;
+          const gh = pa.gridH ?? asset.gridH ?? 1;
+          const id = nextInstanceId();
+          anchors.push({ instanceId: id, asset, x: pa.x, y: pa.y, gridW: gw, gridH: gh });
+          for (let dy = 0; dy < gh; dy++) {
+            for (let dx = 0; dx < gw; dx++) {
+              occ[`${pa.x + dx},${pa.y + dy}`] = id;
             }
-            initialIds.add(playerAsset.userAssetId);
-          }
-
-          if (!cancelled) {
-            setPlacedAnchors(restoredAnchors);
-            setOccupancyMap(restoredOccupancy);
-            initialPlacedAssetIds.current = initialIds;
           }
         }
+        setPlacedAnchors(anchors);
+        setOccupancyMap(occ);
       } catch {
-        // 404 or error — start fresh, which is the default empty state
-      }
-      if (!cancelled) {
-        setDecorationLoading(false);
+        // Non-fatal — start with empty grid
       }
     })();
-
-    return () => { cancelled = true; };
   }, [spaceId]);
 
-  // Pre-select asset when navigated from inventory with userAssetId
-  useEffect(() => {
-    if (userAssetId && allAssets.length > 0) {
-      setSelectedAssetId(userAssetId);
-    }
-  }, [userAssetId, allAssets]);
+  // Drag state
+  const [draggingAsset, setDraggingAsset] = useState<DecorationAsset | null>(null);
+  const draggingAssetRef = useRef<DecorationAsset | null>(null);
+
+  // Shared values for ghost (UI thread)
+  const ghostX = useSharedValue(0);
+  const ghostY = useSharedValue(0);
+  const ghostOpacity = useSharedValue(0);
+  const isDraggingShared = useSharedValue(false);
+
+  // Pack tab state
+  const [activePack, setActivePack] = useState<DecorationPackCategory>('furniture');
+  const currentPackAssets = useMemo(
+    () => DECORATION_PACKS.find((p) => p.category === activePack)?.assets ?? [],
+    [activePack],
+  );
+
+  // Submit state
+  const [submitting, setSubmitting] = useState(false);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Show toast briefly
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
@@ -241,96 +294,17 @@ export default function SpaceDecorationScreen() {
     setTimeout(() => setToast(null), type === 'success' ? 2000 : 4000);
   }, []);
 
-  // Save handler — iterate placedAnchors for API payload
-  const handleSave = useCallback(async () => {
-    setSaving(true);
-
-    const apiAssets = placedAnchors.map((anchor) => ({
-      userAssetId: anchor.asset.userAssetId,
-      x: anchor.x,
-      y: anchor.y,
-      rotation: 0,
-    }));
-
-    try {
-      const result = await spacesApi.saveDecoration(spaceId, apiAssets);
-      if (!result.success) {
-        throw new Error(result.error?.message ?? 'Failed to save decoration');
-      }
-    } catch (e) {
-      console.error(e);
-      setSaving(false);
-      showToast('error', e instanceof Error ? e.message : 'Failed to save decoration');
-      return;
-    }
-
-    // Sync asset store: compute new unplaced count
-    const currentPlacedIds = new Set<string>();
-    for (const anchor of placedAnchors) {
-      currentPlacedIds.add(anchor.asset.userAssetId);
-    }
-
-    const updatedAssets = allAssets.map((a) => {
-      if (currentPlacedIds.has(a.userAssetId)) {
-        return { ...a, placed: true };
-      }
-      if (initialPlacedAssetIds.current.has(a.userAssetId) && !currentPlacedIds.has(a.userAssetId)) {
-        return { ...a, placed: false };
-      }
-      return a;
-    });
-
-    const activeUnplaced = updatedAssets.filter((a) => {
-      return !a.expired && !a.placed;
-    });
-    useAssetStore.getState().setUnplacedCount(activeUnplaced.length);
-
-    setSaving(false);
-    showToast('success', 'Saved!');
-    // FIX 5 — Navigate back to Map with cleared params so selectSpace banner disappears
-    timeoutRef.current = setTimeout(() => navigation.navigate('Map', { mode: undefined, userAssetId: undefined }), 600);
-  }, [placedAnchors, spaceId, allAssets, navigation, showToast]);
-
-  // FIX 6 — Browse All: navigate to AssetInventory with fromSpace* params for direct return
-  const handleBrowseAll = useCallback(() => {
-    navigation.navigate('AssetInventory', {
-      fromSpaceId: spaceId,
-      fromSpaceName: spaceName,
-      fromSpaceClan: clan as ClanId,
-      fromSpaceGridCells: gridCells,
-      fromSpacePolygonPoints: polygonPoints,
-    });
-  }, [navigation, spaceId, spaceName, clan, gridCells, polygonPoints]);
-
-  // Unplaced assets: not expired, not placed on the server, and not placed locally
-  const placedAssetIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const anchor of placedAnchors) {
-      ids.add(anchor.asset.userAssetId);
-    }
-    return ids;
-  }, [placedAnchors]);
-
-  const unplacedAssets = useMemo(() => {
-    return allAssets.filter((a) => {
-      if (a.expired) return false;
-      if (a.placed && !initialPlacedAssetIds.current.has(a.userAssetId)) return false;
-      if (placedAssetIds.has(a.userAssetId)) return false;
-      return true;
-    });
-  }, [allAssets, placedAssetIds]);
-
-  // Grid bounds
+  // Grid bounds from gridCells
   const gridBounds = useMemo(() => {
     if (!gridCells || gridCells.length === 0) {
       return { minX: 0, minY: 0, maxX: 0, maxY: 0, cols: 1, rows: 1 };
     }
     let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
     for (const c of gridCells) {
-      if (c.x < minX) minX = c.x;
-      if (c.y < minY) minY = c.y;
-      if (c.x > maxX) maxX = c.x;
-      if (c.y > maxY) maxY = c.y;
+      if (c.col < minX) minX = c.col;
+      if (c.row < minY) minY = c.row;
+      if (c.col > maxX) maxX = c.col;
+      if (c.row > maxY) maxY = c.row;
     }
     return { minX, minY, maxX, maxY, cols: maxX - minX + 1, rows: maxY - minY + 1 };
   }, [gridCells]);
@@ -339,14 +313,10 @@ export default function SpaceDecorationScreen() {
   const cellSet = useMemo(() => {
     const s = new Set<string>();
     for (const c of gridCells) {
-      s.add(`${c.x},${c.y}`);
+      s.add(`${c.col},${c.row}`);
     }
     return s;
   }, [gridCells]);
-
-  // Total grid dimensions (for bounds checking)
-  const totalGridCols = gridBounds.maxX + 1;
-  const totalGridRows = gridBounds.maxY + 1;
 
   // Canvas sizing
   const [gridZoneWidth, setGridZoneWidth] = useState(0);
@@ -373,12 +343,7 @@ export default function SpaceDecorationScreen() {
     return { gridScale: s, offsetX: ox, offsetY: oy };
   }, [gridZoneWidth, gridZoneHeight, gridBounds, gridCells.length]);
 
-  // Fix 1 — Campus map aligned to grid cells.
-  // MapCanvas maps grid cells to polygon bounding box:
-  //   mapPixelX = polyMinX + (gridX - gridMinX) * (polyWidth / gridCols)
-  // Decoration canvas renders grid cells at:
-  //   canvasX = (gridX - gridMinX) * TILE_PX * gridScale + offsetX
-  // So scaleX = TILE_PX * gridScale / cellMapW, imgX = -polyMinX * scaleX + offsetX
+  // Campus map aligned to grid cells
   const mapCrop = useMemo(() => {
     if (
       !polygonPoints || polygonPoints.length < 3 ||
@@ -386,7 +351,6 @@ export default function SpaceDecorationScreen() {
     ) {
       return null;
     }
-    // Polygon bounding box in map pixel space
     let polyMinX = Infinity, polyMinY = Infinity, polyMaxX = -Infinity, polyMaxY = -Infinity;
     for (const p of polygonPoints) {
       if (p.x < polyMinX) polyMinX = p.x;
@@ -398,11 +362,8 @@ export default function SpaceDecorationScreen() {
     const polyH = polyMaxY - polyMinY;
     if (polyW <= 0 || polyH <= 0) return null;
 
-    // Map-pixel size of one grid cell (matches MapCanvas logic)
     const cellMapW = polyW / gridBounds.cols;
     const cellMapH = polyH / gridBounds.rows;
-
-    // Scale: canvas pixels per map pixel
     const scaleX = (TILE_PX * gridScale) / cellMapW;
     const scaleY = (TILE_PX * gridScale) / cellMapH;
 
@@ -419,7 +380,7 @@ export default function SpaceDecorationScreen() {
     };
   }, [polygonPoints, mapConfig, gridZoneWidth, gridZoneHeight, gridCells.length, gridScale, gridBounds, offsetX, offsetY]);
 
-  // Territory outline path — polygon points transformed to canvas coordinates
+  // Territory outline path
   const territoryPath = useMemo(() => {
     if (!polygonPoints || polygonPoints.length < 3 || !mapCrop) return null;
     const path = Skia.Path.Make();
@@ -435,7 +396,7 @@ export default function SpaceDecorationScreen() {
     return path;
   }, [polygonPoints, mapCrop]);
 
-  // ISSUE 2 — Canvas bounds for the grid area
+  // Canvas bounds for tap/drop rejection
   const canvasMaxX = useMemo(
     () => gridBounds.cols * TILE_PX * gridScale + offsetX,
     [gridBounds.cols, gridScale, offsetX],
@@ -445,108 +406,115 @@ export default function SpaceDecorationScreen() {
     [gridBounds.rows, gridScale, offsetY],
   );
 
-  // Handle grid cell tap — multi-cell aware
-  const handleCanvasTap = useCallback((screenX: number, screenY: number) => {
-    if (gridScale <= 0 || decorationLoading) return;
+  // Place an asset at a grid cell — shared by handleDrop
+  const placeAssetAtCell = useCallback((asset: DecorationAsset, cellCol: number, cellRow: number) => {
+    const { gridW, gridH } = asset;
 
-    // ISSUE 2 — Reject taps outside canvas bounds
+    // Bounds + collision check for all cells in the footprint
+    for (let dy = 0; dy < gridH; dy++) {
+      for (let dx = 0; dx < gridW; dx++) {
+        const cx = cellCol + dx;
+        const cy = cellRow + dy;
+        const ck = `${cx},${cy}`;
+        if (!cellSet.has(ck)) {
+          showToast('error', 'Not enough space here');
+          return;
+        }
+        if (occupancyMap[ck] !== undefined) {
+          showToast('error', 'Not enough space here');
+          return;
+        }
+      }
+    }
+
+    const id = nextInstanceId();
+    const newAnchor: PlacedAnchor = { instanceId: id, asset, x: cellCol, y: cellRow, gridW, gridH };
+
+    setPlacedAnchors((prev) => [...prev, newAnchor]);
+    setOccupancyMap((prev) => {
+      const next = { ...prev };
+      for (let dy = 0; dy < gridH; dy++) {
+        for (let dx = 0; dx < gridW; dx++) {
+          next[`${cellCol + dx},${cellRow + dy}`] = id;
+        }
+      }
+      return next;
+    });
+  }, [cellSet, occupancyMap, showToast]);
+
+  // Drag callbacks
+  const startDrag = useCallback((asset: DecorationAsset) => {
+    draggingAssetRef.current = asset;
+    setDraggingAsset(asset);
+  }, []);
+
+  const clearDrag = useCallback(() => {
+    draggingAssetRef.current = null;
+    setDraggingAsset(null);
+  }, []);
+
+  const handleDrop = useCallback((absoluteX: number, absoluteY: number) => {
+    const asset = draggingAssetRef.current;
+    if (!asset || !canvasAreaRef.current) return;
+
+    canvasAreaRef.current.measureInWindow((pageX, pageY, width, height) => {
+      const relX = absoluteX - pageX;
+      const relY = absoluteY - pageY;
+
+      // Dropped outside canvas area
+      if (relX < 0 || relY < 0 || relX > width || relY > height) return;
+
+      // Outside grid bounds within canvas
+      if (gridScale <= 0) return;
+      if (relX < offsetX || relY < offsetY || relX > canvasMaxX || relY > canvasMaxY) return;
+
+      const localX = (relX - offsetX) / gridScale;
+      const localY = (relY - offsetY) / gridScale;
+      const cellCol = Math.floor(localX / TILE_PX) + gridBounds.minX;
+      const cellRow = Math.floor(localY / TILE_PX) + gridBounds.minY;
+
+      placeAssetAtCell(asset, cellCol, cellRow);
+    });
+  }, [gridScale, offsetX, offsetY, canvasMaxX, canvasMaxY, gridBounds, placeAssetAtCell]);
+
+  // Handle grid cell tap — removal only
+  const handleCanvasTap = useCallback((screenX: number, screenY: number) => {
+    if (gridScale <= 0) return;
     if (screenX < offsetX || screenY < offsetY || screenX > canvasMaxX || screenY > canvasMaxY) return;
 
     const localX = (screenX - offsetX) / gridScale;
     const localY = (screenY - offsetY) / gridScale;
-    const cellX = Math.floor(localX / TILE_PX) + gridBounds.minX;
-    const cellY = Math.floor(localY / TILE_PX) + gridBounds.minY;
-    const key = `${cellX},${cellY}`;
+    const cellCol = Math.floor(localX / TILE_PX) + gridBounds.minX;
+    const cellRow = Math.floor(localY / TILE_PX) + gridBounds.minY;
+    const key = `${cellCol},${cellRow}`;
 
     if (!cellSet.has(key)) return;
 
     const occupyingId = occupancyMap[key];
+    if (!occupyingId) return;
 
-    if (occupyingId) {
-      // Remove the entire multi-cell asset
-      const anchor = placedAnchors.find((a) => a.asset.userAssetId === occupyingId);
-      if (!anchor) return;
+    // Remove the entire multi-cell asset by instanceId
+    const anchor = placedAnchors.find((a) => a.instanceId === occupyingId);
+    if (!anchor) return;
 
-      setPlacedAnchors((prev) => prev.filter((a) => a.asset.userAssetId !== occupyingId));
-      setOccupancyMap((prev) => {
-        const next = { ...prev };
-        for (let dy = 0; dy < anchor.gridH; dy++) {
-          for (let dx = 0; dx < anchor.gridW; dx++) {
-            delete next[`${anchor.x + dx},${anchor.y + dy}`];
-          }
-        }
-        return next;
-      });
-    } else if (selectedAssetId) {
-      const asset = allAssets.find((a) => a.userAssetId === selectedAssetId);
-      if (!asset) return;
-
-      const { gridW, gridH } = lookupAssetGrid(asset.assetId);
-
-      // Bounds + collision check for all cells in the footprint
-      for (let dy = 0; dy < gridH; dy++) {
-        for (let dx = 0; dx < gridW; dx++) {
-          const cx = cellX + dx;
-          const cy = cellY + dy;
-          if (cx >= totalGridCols || cy >= totalGridRows) {
-            showToast('error', 'Not enough space here');
-            return;
-          }
-          const ck = `${cx},${cy}`;
-          if (!cellSet.has(ck)) {
-            showToast('error', 'Not enough space here');
-            return;
-          }
-          if (occupancyMap[ck] !== undefined) {
-            showToast('error', 'Not enough space here');
-            return;
-          }
+    setPlacedAnchors((prev) => prev.filter((a) => a.instanceId !== occupyingId));
+    setOccupancyMap((prev) => {
+      const next = { ...prev };
+      for (let dy = 0; dy < anchor.gridH; dy++) {
+        for (let dx = 0; dx < anchor.gridW; dx++) {
+          delete next[`${anchor.x + dx},${anchor.y + dy}`];
         }
       }
+      return next;
+    });
+  }, [gridScale, offsetX, offsetY, canvasMaxX, canvasMaxY, gridBounds, cellSet, occupancyMap, placedAnchors]);
 
-      // Remove this asset from any previous placement (re-place scenario)
-      const prevAnchor = placedAnchors.find((a) => a.asset.userAssetId === selectedAssetId);
-
-      const newAnchor: PlacedAnchor = { asset, x: cellX, y: cellY, gridW, gridH };
-
-      setPlacedAnchors((prev) => [
-        ...prev.filter((a) => a.asset.userAssetId !== selectedAssetId),
-        newAnchor,
-      ]);
-      setOccupancyMap((prev) => {
-        const next = { ...prev };
-        // Remove old occupancy if re-placing
-        if (prevAnchor) {
-          for (let dy = 0; dy < prevAnchor.gridH; dy++) {
-            for (let dx = 0; dx < prevAnchor.gridW; dx++) {
-              delete next[`${prevAnchor.x + dx},${prevAnchor.y + dy}`];
-            }
-          }
-        }
-        // Write new occupancy
-        for (let dy = 0; dy < gridH; dy++) {
-          for (let dx = 0; dx < gridW; dx++) {
-            next[`${cellX + dx},${cellY + dy}`] = selectedAssetId;
-          }
-        }
-        return next;
-      });
-      setSelectedAssetId(null);
-    }
-  }, [gridScale, offsetX, offsetY, canvasMaxX, canvasMaxY, gridBounds, cellSet, occupancyMap, placedAnchors, selectedAssetId, allAssets, decorationLoading, totalGridCols, totalGridRows, showToast]);
-
-  // Handle tray item tap
-  const handleTrayTap = useCallback((asset: PlayerAsset) => {
-    setSelectedAssetId((prev) =>
-      prev === asset.userAssetId ? null : asset.userAssetId,
-    );
-  }, []);
-
-  // Anchor lookup by userAssetId for rendering
-  const anchorByUserId = useMemo(() => {
+  // Anchor lookup by assetId for rendering
+  // Anchor lookup by instanceId for rendering
+  const anchorByInstanceId = useMemo(() => {
     const map = new Map<string, PlacedAnchor>();
     for (const a of placedAnchors) {
-      map.set(a.asset.userAssetId, a);
+      map.set(a.instanceId, a);
     }
     return map;
   }, [placedAnchors]);
@@ -554,98 +522,92 @@ export default function SpaceDecorationScreen() {
   // Prepare cell render data — multi-cell aware
   const cellRenderData = useMemo(() => {
     return gridCells.map((c) => {
-      const key = `${c.x},${c.y}`;
-      const rx = (c.x - gridBounds.minX) * TILE_PX * gridScale + offsetX;
-      const ry = (c.y - gridBounds.minY) * TILE_PX * gridScale + offsetY;
+      const key = `${c.col},${c.row}`;
+      const rx = (c.col - gridBounds.minX) * TILE_PX * gridScale + offsetX;
+      const ry = (c.row - gridBounds.minY) * TILE_PX * gridScale + offsetY;
       const size = TILE_PX * gridScale;
       const occupyingId = occupancyMap[key];
-      const anchor = occupyingId ? anchorByUserId.get(occupyingId) : undefined;
-      const isAnchorCell = anchor ? (anchor.x === c.x && anchor.y === c.y) : false;
-      return { key, x: c.x, y: c.y, rx, ry, size, occupyingId, anchor, isAnchorCell };
+      const anchor = occupyingId ? anchorByInstanceId.get(occupyingId) : undefined;
+      const isAnchorCell = anchor ? (anchor.x === c.col && anchor.y === c.row) : false;
+      return { key, col: c.col, row: c.row, rx, ry, size, occupyingId, anchor, isAnchorCell };
     });
-  }, [gridCells, occupancyMap, anchorByUserId, gridBounds, gridScale, offsetX, offsetY]);
+  }, [gridCells, occupancyMap, anchorByInstanceId, gridBounds, gridScale, offsetX, offsetY]);
 
-  // ISSUE 5 — Memoized dynamic style for grid zone pressable / canvas
+  // Memoized dynamic style for grid zone
   const gridZoneDynStyle = useMemo<ViewStyle>(
-    () => ({ width: gridZoneWidth, height: gridZoneHeight }),
+    () => ({ width: gridZoneWidth, height: gridZoneHeight, backgroundColor: '#1A120B' }),
     [gridZoneWidth, gridZoneHeight],
   );
 
-  // Render tray item — Fix 2: uniform fixed-size boxes
-  const renderTrayItem = useCallback(({ item }: { item: PlayerAsset }) => {
-    const isSelected = selectedAssetId === item.userAssetId;
-    const rarityColor = RARITY_COLORS[item.rarity] ?? PALETTE.stoneGrey;
-    const def = ASSET_MAP[item.assetId];
-    const decoDef = DECORATION_ASSETS.find((d) => d.id === item.assetId);
-    const gridLabel = decoDef ? `${decoDef.gridW}\u00D7${decoDef.gridH}` : '1\u00D71';
-    return (
-      <Pressable
-        onPress={() => handleTrayTap(item)}
-        style={[
-          styles.trayItem,
-          { borderColor: isSelected ? clanColor : PALETTE.warmBrownMild },
-          isSelected && styles.trayItemSelected,
-        ]}
-      >
-        <View style={[styles.trayItemIcon, { backgroundColor: hexToRgba(rarityColor, 0.25) }]}>
-          {def ? (
-            <Image
-              source={def.image}
-              style={styles.trayItemImage}
-              resizeMode="contain"
-            />
-          ) : (
-            <Text style={[styles.trayItemLetter, { color: rarityColor }]}>
-              {CATEGORY_LETTERS[item.category] ?? '?'}
-            </Text>
-          )}
-          <View style={styles.gridSizeBadge}>
-            <Text style={styles.gridSizeText}>{gridLabel}</Text>
-          </View>
-        </View>
-      </Pressable>
-    );
-  }, [selectedAssetId, clanColor, handleTrayTap]);
+  // Submit handler — capture screenshot then navigate to survey
+  const handleSubmit = useCallback(async () => {
+    if (placedAnchors.length === 0) {
+      showToast('error', 'Place at least one item before submitting');
+      return;
+    }
 
-  const trayKeyExtractor = useCallback((item: PlayerAsset) => item.userAssetId, []);
+    setSubmitting(true);
 
-  // Occupied cell count for display
+    try {
+      const snapshot: SkImage | null = canvasRef.current?.makeImageSnapshot() ?? null;
+      if (!snapshot) throw new Error('Failed to capture canvas snapshot');
+      const base64 = snapshot.encodeToBase64(ImageFormat.PNG, 80);
+
+      const builtAssets: PlacedDecorationAsset[] = placedAnchors.map((anchor) => ({
+        assetId: anchor.asset.assetId,
+        packCategory: anchor.asset.category,
+        x: anchor.x,
+        y: anchor.y,
+        rotation: 0,
+        gridW: anchor.gridW,
+        gridH: anchor.gridH,
+      }));
+
+      setSubmitting(false);
+
+      navigation.navigate('DecorationSurvey', {
+        spaceId,
+        spaceName,
+        placedAssets: builtAssets,
+        screenshotBase64: base64,
+      });
+    } catch (e) {
+      console.error('[SpaceDecoration] screenshot capture failed:', e);
+      setSubmitting(false);
+      showToast('error', 'Failed to capture screenshot');
+    }
+  }, [placedAnchors, spaceId, spaceName, navigation, showToast]);
+
+  // Occupied cell count
   const occupiedCellCount = Object.keys(occupancyMap).length;
 
-  // ISSUE 3 — Show toast and bail if clan mismatch
-  if (clanMismatch) {
-    return (
-      <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
-        <View style={styles.emptyGrid}>
-          <Text style={styles.emptyGridText}>This space belongs to another clan</Text>
-        </View>
-      </ImageBackground>
-    );
-  }
+  // Ghost image source (React state, for rendering the correct image)
+  const ghostImageSource = draggingAsset ? getAssetImage(draggingAsset.imageKey) ?? null : null;
 
   return (
     <ImageBackground source={plainBg} style={styles.root} resizeMode="cover">
-      {/* Top bar — absolute overlay panel */}
+      {/* Top bar */}
       <View style={styles.topBar}>
         <Pressable onPress={() => navigation.goBack()} style={styles.backBtn}>
           <Text style={styles.backArrow}>{'\u2190'}</Text>
         </Pressable>
         <View style={styles.topBarCenter}>
-          <Text style={[styles.spaceName, { color: clanColor }]} numberOfLines={1} adjustsFontSizeToFit>{spaceName}</Text>
+          <Text style={[styles.spaceName, { color: ACCENT_COLOR }]} numberOfLines={1} adjustsFontSizeToFit>
+            {spaceName}
+          </Text>
         </View>
         <Pressable
-          onPress={handleSave}
-          disabled={saving || decorationLoading}
+          onPress={handleSubmit}
+          disabled={submitting || placedAnchors.length === 0}
           style={[
-            styles.saveBtn,
-            { backgroundColor: clanColor },
-            (saving || decorationLoading) && styles.saveBtnDisabled,
+            styles.submitBtn,
+            (submitting || placedAnchors.length === 0) && styles.submitBtnDisabled,
           ]}
         >
-          {saving ? (
+          {submitting ? (
             <ActivityIndicator size="small" color={PALETTE.cream} />
           ) : (
-            <Text style={styles.saveBtnText}>Save</Text>
+            <Text style={styles.submitBtnText}>Submit</Text>
           )}
         </Pressable>
       </View>
@@ -663,20 +625,8 @@ export default function SpaceDecorationScreen() {
       )}
 
       {/* Grid zone — canvas area between top bar and bottom tray */}
-      <View style={styles.canvasArea} onLayout={handleGridLayout}>
-        {/* Loading skeleton overlay */}
-        {decorationLoading && gridZoneWidth > 0 && gridZoneHeight > 0 && (
-          <Animated.View
-            style={[
-              styles.loadingSkeleton,
-              { backgroundColor: clanColor },
-              pulseStyle,
-            ]}
-            pointerEvents="none"
-          />
-        )}
-
-        {gridZoneWidth > 0 && gridZoneHeight > 0 && !decorationLoading && (
+      <View ref={canvasAreaRef} style={styles.canvasArea} onLayout={handleGridLayout}>
+        {gridZoneWidth > 0 && gridZoneHeight > 0 && (
           <Pressable
             style={gridZoneDynStyle}
             onPress={(e) => {
@@ -684,154 +634,110 @@ export default function SpaceDecorationScreen() {
               handleCanvasTap(locationX, locationY);
             }}
           >
-            <Canvas style={gridZoneDynStyle}>
-              {/* Fix 1 — Campus map image underneath grid */}
-              {skiaMapImage && mapCrop && (
-                <SkiaImage
-                  image={skiaMapImage}
-                  x={mapCrop.imgX}
-                  y={mapCrop.imgY}
-                  width={mapCrop.imgW}
-                  height={mapCrop.imgH}
-                  fit="fill"
-                  opacity={0.7}
-                />
-              )}
-
-              {/* Territory outline glow + border */}
-              {territoryPath && (
-                <>
-                  {/* Glow halo */}
-                  <SkiaPath
-                    path={territoryPath}
-                    style="stroke"
-                    strokeWidth={8}
-                    strokeJoin="round"
-                    strokeCap="round"
-                    color={clanColorWithOpacity(clan as ClanId, 0.3)}
-                  >
-                    <BlurMask blur={10} style="solid" respectCTM={true} />
-                  </SkiaPath>
-                  {/* Crisp border */}
-                  <SkiaPath
-                    path={territoryPath}
-                    style="stroke"
-                    strokeWidth={2}
-                    strokeJoin="round"
-                    strokeCap="round"
-                    color={clanColorWithOpacity(clan as ClanId, 0.9)}
+            <Canvas ref={canvasRef} style={gridZoneDynStyle}>
+                {/* Campus map image underneath grid */}
+                {skiaMapImage && mapCrop && (
+                  <SkiaImage
+                    image={skiaMapImage}
+                    x={mapCrop.imgX}
+                    y={mapCrop.imgY}
+                    width={mapCrop.imgW}
+                    height={mapCrop.imgH}
+                    fit="fill"
+                    opacity={0.7}
                   />
-                </>
-              )}
+                )}
 
-              {cellRenderData.map((cell) => {
-                if (cell.isAnchorCell && cell.anchor) {
-                  // This is the anchor cell — draw the full multi-cell asset
-                  const anchor = cell.anchor;
-                  const rarityColor = RARITY_COLORS[anchor.asset.rarity] ?? PALETTE.stoneGrey;
-                  const fullW = anchor.gridW * cell.size;
-                  const fullH = anchor.gridH * cell.size;
+                {/* Territory outline glow + border */}
+                {territoryPath && (
+                  <>
+                    <SkiaPath
+                      path={territoryPath}
+                      style="stroke"
+                      strokeWidth={8}
+                      strokeJoin="round"
+                      strokeCap="round"
+                      color={clanColorWithOpacity('#FF0000', 0.3)}
+                    >
+                      <BlurMask blur={10} style="solid" respectCTM={true} />
+                    </SkiaPath>
+                    <SkiaPath
+                      path={territoryPath}
+                      style="stroke"
+                      strokeWidth={2}
+                      strokeJoin="round"
+                      strokeCap="round"
+                      color={clanColorWithOpacity('#FF0000', 0.9)}
+                    />
+                  </>
+                )}
+
+                {cellRenderData.map((cell) => {
+                  if (cell.isAnchorCell && cell.anchor) {
+                    const anchor = cell.anchor;
+                    const fullW = anchor.gridW * cell.size;
+                    const fullH = anchor.gridH * cell.size;
+                    return (
+                      <React.Fragment key={cell.key}>
+                        <SkiaRect
+                          x={cell.rx}
+                          y={cell.ry}
+                          width={cell.size}
+                          height={cell.size}
+                          color={hexToRgba(ACCENT_COLOR, 0.4)}
+                          style="stroke"
+                          strokeWidth={1}
+                        />
+                        <RoundedRect
+                          x={cell.rx}
+                          y={cell.ry}
+                          width={fullW}
+                          height={fullH}
+                          r={2 * gridScale}
+                          color={ACCENT_COLOR}
+                          style="stroke"
+                          strokeWidth={1.5}
+                        />
+                      </React.Fragment>
+                    );
+                  }
+
+                  // Occupied by a neighbor or empty — grid line only
                   return (
                     <React.Fragment key={cell.key}>
-                      {/* Grid line */}
                       <SkiaRect
                         x={cell.rx}
                         y={cell.ry}
                         width={cell.size}
                         height={cell.size}
-                        color={hexToRgba(clanColor, 0.4)}
+                        color={hexToRgba(ACCENT_COLOR, 0.4)}
                         style="stroke"
                         strokeWidth={1}
                       />
-                      {/* Full-span asset border */}
-                      <RoundedRect
+                    </React.Fragment>
+                  );
+                })}
+                {/* Placed decoration assets — rendered inside Skia for snapshot capture */}
+                {cellRenderData
+                  .filter((c) => c.isAnchorCell && c.anchor)
+                  .map((cell) => {
+                    const anchor = cell.anchor!;
+                    const fullW = anchor.gridW * cell.size;
+                    const fullH = anchor.gridH * cell.size;
+                    const imageSource = getAssetImage(anchor.asset.imageKey);
+                    if (!imageSource) return null;
+                    return (
+                      <SkiaAssetImage
+                        key={`skia-img-${cell.key}`}
+                        source={imageSource as number}
                         x={cell.rx}
                         y={cell.ry}
                         width={fullW}
                         height={fullH}
-                        r={2 * gridScale}
-                        color={clanColor}
-                        style="stroke"
-                        strokeWidth={1.5}
                       />
-                    </React.Fragment>
-                  );
-                }
-
-                if (cell.occupyingId && !cell.isAnchorCell) {
-                  // Occupied by a neighbor — grid line only
-                  return (
-                    <React.Fragment key={cell.key}>
-                      <SkiaRect
-                        x={cell.rx}
-                        y={cell.ry}
-                        width={cell.size}
-                        height={cell.size}
-                        color={hexToRgba(clanColor, 0.4)}
-                        style="stroke"
-                        strokeWidth={1}
-                      />
-                    </React.Fragment>
-                  );
-                }
-
-                // Empty cell — grid line only
-                return (
-                  <React.Fragment key={cell.key}>
-                    <SkiaRect
-                      x={cell.rx}
-                      y={cell.ry}
-                      width={cell.size}
-                      height={cell.size}
-                      color={hexToRgba(clanColor, 0.4)}
-                      style="stroke"
-                      strokeWidth={1}
-                    />
-                  </React.Fragment>
-                );
-              })}
-            </Canvas>
-            {/* Overlay images (or fallback letters) for anchor cells only */}
-            {cellRenderData
-              .filter((c) => c.isAnchorCell && c.anchor)
-              .map((cell) => {
-                const anchor = cell.anchor!;
-                const def = ASSET_MAP[anchor.asset.assetId];
-                const fullW = anchor.gridW * cell.size;
-                const fullH = anchor.gridH * cell.size;
-                return (
-                  <View
-                    key={`lbl-${cell.key}`}
-                    style={[
-                      styles.cellLabel,
-                      {
-                        left: cell.rx,
-                        top: cell.ry,
-                        width: fullW,
-                        height: fullH,
-                      },
-                    ]}
-                    pointerEvents="none"
-                  >
-                    {def ? (
-                      <Image
-                        source={def.image}
-                        style={styles.cellImage}
-                        resizeMode="contain"
-                      />
-                    ) : (
-                      <Text
-                        style={[
-                          styles.cellLabelText,
-                          { fontSize: Math.max(8, Math.min(fullW, fullH) * 0.45) },
-                        ]}
-                      >
-                        {CATEGORY_LETTERS[anchor.asset.category] ?? '?'}
-                      </Text>
-                    )}
-                  </View>
-                );
-              })}
+                    );
+                  })}
+              </Canvas>
           </Pressable>
         )}
         {gridCells.length === 0 && (
@@ -841,45 +747,85 @@ export default function SpaceDecorationScreen() {
         )}
       </View>
 
-      {/* Bottom tray — absolute overlay panel */}
+      {/* Bottom tray */}
       <View style={styles.bottomTray}>
-        {/* Placed count */}
+        {/* Placed count + drag hint */}
         <View style={styles.placedCountBar}>
           <Text style={styles.placedCountText}>
             {occupiedCellCount} / {gridCells.length} cells filled
           </Text>
-          {selectedAssetId && (
-            <Text style={[styles.selectHint, { color: clanColor }]}>
-              Tap a cell to place
+          {draggingAsset ? (
+            <Text style={[styles.selectHint, { color: ACCENT_COLOR }]} numberOfLines={1}>
+              {draggingAsset.name} — Drop on grid to place
+            </Text>
+          ) : (
+            <Text style={styles.selectHint}>
+              Long-press to drag
             </Text>
           )}
         </View>
 
+        {/* Pack tabs */}
+        <View style={styles.packTabRow}>
+          {DECORATION_PACKS.map((pack) => {
+            const isActive = activePack === pack.category;
+            return (
+              <Pressable
+                key={pack.category}
+                style={[
+                  styles.packTab,
+                  isActive && styles.packTabActive,
+                ]}
+                onPress={() => setActivePack(pack.category)}
+              >
+                <Text style={styles.packTabIcon}>{pack.icon}</Text>
+                <Text
+                  style={[
+                    styles.packTabLabel,
+                    isActive && styles.packTabLabelActive,
+                  ]}
+                >
+                  {pack.displayName} ({pack.assets.length})
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
         {/* Inventory tray */}
         <View style={styles.trayContainer}>
-          <View style={styles.trayHeader}>
-            <Text style={styles.trayTitle}>Your Assets</Text>
-            <Pressable onPress={handleBrowseAll} hitSlop={8}>
-              <Text style={[styles.browseAllText, { color: clanColor }]}>Browse All</Text>
-            </Pressable>
-          </View>
-          {!assetsLoaded ? (
-            <Text style={styles.trayLoading}>Loading assets...</Text>
-          ) : unplacedAssets.length === 0 ? (
-            <Text style={styles.trayEmpty}>No unplaced assets available</Text>
+          {currentPackAssets.length === 0 ? (
+            <Text style={styles.trayEmpty}>No items in this pack yet</Text>
           ) : (
-            <FlatList
-              data={unplacedAssets}
-              numColumns={4}
-              keyExtractor={trayKeyExtractor}
-              renderItem={renderTrayItem}
-              contentContainerStyle={styles.trayList}
-              columnWrapperStyle={styles.trayRow}
-              showsVerticalScrollIndicator={false}
-            />
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.trayScrollContent}>
+              <View style={styles.trayWrapContainer}>
+                {currentPackAssets.map((asset) => (
+                  <DraggableTrayItem
+                    key={asset.assetId}
+                    asset={asset}
+                    isDimmed={draggingAsset?.assetId === asset.assetId}
+                    ghostX={ghostX}
+                    ghostY={ghostY}
+                    ghostOpacity={ghostOpacity}
+                    isDraggingShared={isDraggingShared}
+                    onDragStart={startDrag}
+                    onDrop={handleDrop}
+                    onDragEnd={clearDrag}
+                  />
+                ))}
+              </View>
+            </ScrollView>
           )}
         </View>
       </View>
+
+      {/* Ghost overlay — rendered last so it's above everything */}
+      <GhostOverlay
+        ghostX={ghostX}
+        ghostY={ghostY}
+        ghostOpacity={ghostOpacity}
+        imageSource={ghostImageSource}
+      />
     </ImageBackground>
   );
 }
@@ -888,7 +834,6 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
-  // Top bar — absolute overlay
   topBar: {
     position: 'absolute',
     top: 0,
@@ -918,33 +863,26 @@ const styles = StyleSheet.create({
   },
   spaceName: {
     fontSize: 24,
-    fontFamily: FONTS.headerBold,
+    fontFamily: FONTS.heading,
     marginTop: 10,
   },
-  topBarSubtitle: {
-    fontSize: 13,
-    fontFamily: FONTS.bodySemiBold,
-    color: PALETTE.parchment,
-    marginTop: 0,
-    letterSpacing: 1,
-  },
-  saveBtn: {
+  submitBtn: {
+    backgroundColor: ACCENT_COLOR,
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderRadius: 10,
     justifyContent: 'center',
     alignItems: 'center',
-    minWidth: 60,
+    minWidth: 70,
   },
-  saveBtnDisabled: {
+  submitBtnDisabled: {
     opacity: 0.5,
   },
-  saveBtnText: {
+  submitBtnText: {
     fontSize: 14,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.cream,
   },
-  // Toast
   toast: {
     position: 'absolute',
     top: 70,
@@ -966,15 +904,10 @@ const styles = StyleSheet.create({
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.cream,
   },
-  // Canvas area — pushed between top bar and bottom tray
   canvasArea: {
     flex: 1,
     marginTop: TOP_BAR_HEIGHT,
     marginBottom: BOTTOM_TRAY_HEIGHT,
-  },
-  loadingSkeleton: {
-    ...StyleSheet.absoluteFillObject,
-    borderRadius: 0,
   },
   emptyGrid: {
     flex: 1,
@@ -992,14 +925,14 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   cellLabelText: {
-    fontFamily: FONTS.bodyBold,
+    fontFamily: FONTS.bodySemiBold,
     color: PALETTE.cream,
+    textAlign: 'center',
   },
-  cellImage: {
-    width: '90%',
-    height: '90%',
+  cellAssetImage: {
+    width: '100%',
+    height: '100%',
   },
-  // Bottom tray — absolute overlay
   bottomTray: {
     position: 'absolute',
     bottom: 0,
@@ -1025,32 +958,43 @@ const styles = StyleSheet.create({
   selectHint: {
     fontSize: 11,
     fontFamily: FONTS.bodySemiBold,
+    color: PALETTE.stoneGrey,
   },
-  // Inventory tray
-  trayContainer: {
+  packTabRow: {
+    flexDirection: 'row',
+    paddingHorizontal: 12,
+    gap: 8,
+    marginBottom: 6,
+  },
+  packTab: {
     flex: 1,
-  },
-  trayHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    marginBottom: 4,
+    justifyContent: 'center',
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    gap: 4,
   },
-  trayTitle: {
+  packTabActive: {
+    backgroundColor: 'rgba(212, 168, 67, 0.3)',
+    borderWidth: 1,
+    borderColor: ACCENT_COLOR,
+  },
+  packTabIcon: {
+    fontSize: 14,
+  },
+  packTabLabel: {
     fontSize: 11,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.parchment,
   },
-  browseAllText: {
-    fontSize: 11,
-    fontFamily: FONTS.bodySemiBold,
+  packTabLabelActive: {
+    color: ACCENT_COLOR,
   },
-  trayLoading: {
-    fontSize: 12,
-    fontFamily: FONTS.bodyRegular,
-    color: PALETTE.stoneGrey,
-    paddingHorizontal: 16,
+  trayContainer: {
+    flex: 1,
+    justifyContent: 'center',
   },
   trayEmpty: {
     fontSize: 12,
@@ -1058,14 +1002,15 @@ const styles = StyleSheet.create({
     color: PALETTE.stoneGrey,
     paddingHorizontal: 16,
   },
-  trayList: {
+  trayScrollContent: {
     paddingHorizontal: 12,
+  },
+  trayWrapContainer: {
+    flexDirection: 'column',
+    flexWrap: 'wrap',
+    height: TRAY_ITEM_SIZE * 2 + 8 * 3,
     gap: 8,
   },
-  trayRow: {
-    gap: 8,
-  },
-  // Fix 2 — Uniform fixed-size tray items
   trayItem: {
     width: TRAY_ITEM_SIZE,
     height: TRAY_ITEM_SIZE,
@@ -1075,13 +1020,8 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     backgroundColor: PALETTE.parchmentBg,
   },
-  trayItemSelected: {
-    borderWidth: 2.5,
-    elevation: 4,
-    shadowColor: PALETTE.darkBrown,
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.2,
-    shadowRadius: 2,
+  trayItemDimmed: {
+    opacity: 0.5,
   },
   trayItemIcon: {
     width: TRAY_ITEM_SIZE - 8,
@@ -1090,13 +1030,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  trayItemLetter: {
-    fontSize: 22,
-    fontFamily: FONTS.headerBold,
-  },
-  trayItemImage: {
+  assetThumb: {
     width: TRAY_ITEM_SIZE - 16,
     height: TRAY_ITEM_SIZE - 16,
+  },
+  assetThumbPlaceholder: {
+    width: TRAY_ITEM_SIZE - 16,
+    height: TRAY_ITEM_SIZE - 16,
+    backgroundColor: 'rgba(0,0,0,0.1)',
+    borderRadius: 6,
   },
   gridSizeBadge: {
     position: 'absolute',
@@ -1111,5 +1053,16 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontFamily: FONTS.bodySemiBold,
     color: PALETTE.parchment,
+  },
+  ghostContainer: {
+    position: 'absolute',
+    width: GHOST_SIZE,
+    height: GHOST_SIZE,
+    zIndex: 100,
+    elevation: 100,
+  },
+  ghostImage: {
+    width: GHOST_SIZE,
+    height: GHOST_SIZE,
   },
 });

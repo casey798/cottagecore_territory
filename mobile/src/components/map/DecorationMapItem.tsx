@@ -8,7 +8,17 @@ import {
 } from '@shopify/react-native-skia';
 import type { SkFont } from '@shopify/react-native-skia';
 import { ASSET_MAP } from '@/constants/assets';
+import { DECORATION_PACKS, getAssetImage } from '@/data/decorationPacks';
 import { PALETTE } from '@/constants/colors';
+
+// Build a static lookup: assetId → require() image source from decoration packs
+const DECO_PACK_IMAGE_MAP: Record<string, ReturnType<typeof require>> = {};
+for (const pack of DECORATION_PACKS) {
+  for (const asset of pack.assets) {
+    const img = getAssetImage(asset.imageKey);
+    if (img) DECO_PACK_IMAGE_MAP[asset.assetId] = img;
+  }
+}
 
 interface Props {
   assetId: string;
@@ -31,8 +41,9 @@ export function DecorationMapItem({
   color,
   font,
 }: Props) {
+  // Try curated asset map first, then decoration packs
   const assetDef = ASSET_MAP[assetId];
-  const imageSource = assetDef?.image ?? null;
+  const imageSource = assetDef?.image ?? DECO_PACK_IMAGE_MAP[assetId] ?? null;
   const skiaImage = useImage(imageSource as number | null);
 
   if (skiaImage) {

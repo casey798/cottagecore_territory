@@ -23,8 +23,6 @@ import {
   User,
 } from '../../shared/types';
 
-const DAILY_XP_CAP = 100;
-
 export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayProxyResult> => {
   try {
     const userId = extractUserId(event);
@@ -114,11 +112,6 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         partnerUser = await getItem<User>('users', { userId: coopPartnerId });
         if (!partnerUser) {
           return error(ErrorCode.NOT_FOUND, 'Co-op partner not found', 404);
-        }
-
-        // Check partner daily XP cap
-        if (partnerUser.todayXp >= DAILY_XP_CAP) {
-          return error(ErrorCode.PARTNER_CAP_REACHED, 'Your partner has already reached the daily XP cap', 400);
         }
 
         // Check partner lock at this location (compare lockedUntil to handle TTL lag)

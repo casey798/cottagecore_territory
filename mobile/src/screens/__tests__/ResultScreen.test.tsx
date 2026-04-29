@@ -56,7 +56,7 @@ describe('ResultScreen', () => {
   it('win state shows XP earned', () => {
     mockParams = {
       result: 'win',
-      xpEarned: 25,
+      xpEarned: 10,
       newTodayXp: 50,
       clanTodayXp: 200,
       chestDrop: { dropped: false },
@@ -65,15 +65,15 @@ describe('ResultScreen', () => {
 
     const { getByText } = render(<ResultScreen />);
 
-    expect(getByText('+25 XP')).toBeTruthy();
-    expect(getByText('Your XP: 50/100')).toBeTruthy();
+    expect(getByText('+10 XP')).toBeTruthy();
+    expect(getByText('Your XP today: 50')).toBeTruthy();
     expect(getByText('Your clan now has 200 XP today!')).toBeTruthy();
   });
 
   it('win state with chest drop shows asset info', async () => {
     mockParams = {
       result: 'win',
-      xpEarned: 25,
+      xpEarned: 10,
       newTodayXp: 75,
       clanTodayXp: 300,
       chestDrop: {
@@ -107,7 +107,7 @@ describe('ResultScreen', () => {
   it('win state without chest shows "no chest" message', () => {
     mockParams = {
       result: 'win',
-      xpEarned: 25,
+      xpEarned: 10,
       newTodayXp: 25,
       clanTodayXp: 100,
       chestDrop: { dropped: false },
@@ -167,7 +167,7 @@ describe('ResultScreen', () => {
   it('shows mini clan scoreboard', () => {
     mockParams = {
       result: 'win',
-      xpEarned: 25,
+      xpEarned: 10,
       newTodayXp: 25,
       clanTodayXp: 100,
       chestDrop: { dropped: false },

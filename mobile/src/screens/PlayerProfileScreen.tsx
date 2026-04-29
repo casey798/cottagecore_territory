@@ -16,7 +16,6 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { PALETTE, CLAN_COLORS, UI, CLAN_LABELS } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { DAILY_XP_CAP } from '@/constants/config';
 import { useAuthStore } from '@/store/useAuthStore';
 import * as playerApi from '@/api/player';
 import { PlayerProfile } from '@/types';
@@ -105,7 +104,6 @@ export default function PlayerProfileScreen() {
   }
 
   const clanColor = CLAN_COLORS[profile.clan] ?? PALETTE.honeyGold;
-  const xpFraction = Math.min(profile.todayXp / DAILY_XP_CAP, 1);
   const clanLabel = CLAN_LABELS[profile.clan] ?? profile.clan;
   const streak = profile.currentStreak ?? 0;
   const bestStreak = profile.bestStreak ?? 0;
@@ -195,19 +193,9 @@ export default function PlayerProfileScreen() {
       {/* TODAY'S XP */}
       <View style={styles.section}>
         <Text style={styles.sectionLabel}>Today's XP</Text>
-        <View style={styles.xpRow}>
-          <View style={styles.xpBarTrack}>
-            <View
-              style={[
-                styles.xpBarFill,
-                { width: `${xpFraction * 100}%`, backgroundColor: clanColor },
-              ]}
-            />
-          </View>
-          <Text style={styles.xpLabel}>
-            {profile.todayXp} / {DAILY_XP_CAP} XP
-          </Text>
-        </View>
+        <Text style={styles.xpLabel}>
+          {profile.todayXp} XP
+        </Text>
       </View>
 
       {/* STATS ROW */}

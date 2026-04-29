@@ -18,6 +18,7 @@ import {
 import Orientation from 'react-native-orientation-locker';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
@@ -345,7 +346,7 @@ export default function LeafSortGame(props: MinigamePlayProps) {
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
           practiceMode={practiceMode}
           onContinue={handleContinue}
         />

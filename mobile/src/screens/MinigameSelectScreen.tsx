@@ -16,7 +16,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { DAILY_XP_CAP, COLOR_SORT_TIME_LIMIT } from '@/constants/config';
+import { COLOR_SORT_TIME_LIMIT } from '@/constants/config';
 import { useGameStore } from '@/store/useGameStore';
 import { useDebugStore } from '@/store/useDebugStore';
 import * as gameApi from '@/api/game';
@@ -257,7 +257,7 @@ export default function MinigameSelectScreen() {
         </Text>
         {!practiceMode && (
           <Text style={[styles.xpBadge, !xpAvailable && styles.xpBadgeMuted]}>
-            {todayXp}/{DAILY_XP_CAP} XP
+            {todayXp} XP
           </Text>
         )}
         {practiceMode && (

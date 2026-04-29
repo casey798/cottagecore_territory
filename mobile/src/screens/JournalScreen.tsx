@@ -11,11 +11,10 @@ import {
 import { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { MainModalParamList } from '@/navigation/MainStack';
 import { getJournal } from '@/api/player';
+import { getSpaceAssignments, SpaceAssignmentsResponse } from '@/api/spaces';
 import { DayJournal, JournalEntry, JournalLocationStatus } from '@/types';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { useAuthStore } from '@/store/useAuthStore';
-import { useGameStore } from '@/store/useGameStore';
 import { LoadingOverlay } from '@/components/common/LoadingOverlay';
 import { ErrorToast } from '@/components/common/ErrorToast';
 import { format, subDays, addDays } from 'date-fns';
@@ -38,16 +37,6 @@ const STATUS_LABELS: Record<JournalLocationStatus, string> = {
 
 const plainBg = require('@/assets/ui/backgrounds/bg_plain.png');
 const IST_TIMEZONE = 'Asia/Kolkata';
-const DAILY_XP_CAP = 100;
-
-// ── Clan XP bar colors ──────────────────────────────────────────────
-const CLAN_XP_COLORS: Record<string, string> = {
-  ember: '#9E5550',
-  tide: '#4E7FA3',
-  bloom: '#C4A832',
-  gale: '#4A9966',
-  hearth: '#6E5082',
-};
 
 type Props = NativeStackScreenProps<MainModalParamList, 'Journal'>;
 
@@ -100,19 +89,89 @@ function JournalEntryCard({
   );
 }
 
+// ── Decor Spaces Section ────────────────────────────────────────────
+function DecorSpacesSection({
+  spaceAssignments,
+  spacesLoading,
+  navigation,
+}: {
+  spaceAssignments: SpaceAssignmentsResponse | null;
+  spacesLoading: boolean;
+  navigation: Props['navigation'];
+}) {
+  if (!spaceAssignments && !spacesLoading) return null;
+
+  return (
+    <View style={styles.decorCard}>
+      {spacesLoading && !spaceAssignments ? (
+        <ActivityIndicator size="small" color={PALETTE.honeyGold} />
+      ) : spaceAssignments ? (
+        <>
+          <View style={styles.decorHeader}>
+            <Text style={styles.decorTitle}>{'🌿 Today\'s Decor Spaces'}</Text>
+            <Text style={styles.decorCount}>
+              {spaceAssignments.completedCount} / {spaceAssignments.spacesPerDay} done
+            </Text>
+          </View>
+          <View style={styles.decorBarTrack}>
+            <View
+              style={[
+                styles.decorBarFill,
+                {
+                  width: spaceAssignments.spacesPerDay > 0
+                    ? `${(spaceAssignments.completedCount / spaceAssignments.spacesPerDay) * 100}%`
+                    : '0%',
+                },
+              ]}
+            />
+          </View>
+          {spaceAssignments.assignments.map((item, idx) => (
+            <View
+              key={item.spaceId}
+              style={[
+                styles.decorRow,
+                idx < spaceAssignments.assignments.length - 1 && styles.decorRowBorder,
+              ]}
+            >
+              <Text style={styles.decorSpaceName} numberOfLines={1}>
+                {item.spaceName}
+              </Text>
+              {item.completed ? (
+                <View style={styles.decorDonePill}>
+                  <Text style={styles.decorDoneText}>{'✓ Done'}</Text>
+                </View>
+              ) : (
+                <TouchableOpacity
+                  style={styles.decorGoePill}
+                  onPress={() => {
+                    try {
+                      navigation.navigate('QRScanner', { mode: 'space' });
+                    } catch {}
+                  }}
+                >
+                  <Text style={styles.decorGoeText}>{'Decorate →'}</Text>
+                </TouchableOpacity>
+              )}
+            </View>
+          ))}
+        </>
+      ) : null}
+    </View>
+  );
+}
+
 // ── Main Screen ─────────────────────────────────────────────────────
 export default function JournalScreen({ navigation }: Props): React.JSX.Element {
   const [journal, setJournal] = useState<DayJournal | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [spaceAssignments, setSpaceAssignments] = useState<SpaceAssignmentsResponse | null>(null);
+  const [spacesLoading, setSpacesLoading] = useState(false);
   const [selectedDate, setSelectedDate] = useState<Date>(() =>
     toZonedTime(new Date(), IST_TIMEZONE),
   );
 
   const todayIST = toZonedTime(new Date(), IST_TIMEZONE);
-  const clan = useAuthStore((s) => s.clan ?? 'ember');
-  const dailyInfo = useGameStore((s) => s.dailyInfo);
-  const xpBarColor = CLAN_XP_COLORS[clan] ?? CLAN_XP_COLORS.ember;
 
   const selectedDateStr = format(selectedDate, 'yyyy-MM-dd');
   const todayStr = format(todayIST, 'yyyy-MM-dd');
@@ -133,9 +192,28 @@ export default function JournalScreen({ navigation }: Props): React.JSX.Element 
     }
   }, []);
 
+  const fetchSpaceAssignments = useCallback(async (isToday: boolean) => {
+    if (!isToday) {
+      setSpaceAssignments(null);
+      return;
+    }
+    setSpacesLoading(true);
+    try {
+      const response = await getSpaceAssignments();
+      if (response.success && response.data) {
+        setSpaceAssignments(response.data);
+      }
+    } catch {
+      // Silently swallow — decor section simply won't show
+    } finally {
+      setSpacesLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchJournal(selectedDate);
-  }, [selectedDate, fetchJournal]);
+    fetchSpaceAssignments(isSelectedToday);
+  }, [selectedDate, fetchJournal, fetchSpaceAssignments, isSelectedToday]);
 
   const handlePrevDay = () => setSelectedDate((prev) => subDays(prev, 1));
   const handleNextDay = () => {
@@ -154,9 +232,6 @@ export default function JournalScreen({ navigation }: Props): React.JSX.Element 
     return format(date, 'MMM d, yyyy');
   };
 
-  const xpFill = journal
-    ? Math.min(100, Math.max(0, (journal.totalXp / DAILY_XP_CAP) * 100))
-    : 0;
 
   const renderItem = ({ item }: { item: JournalEntry }) => (
     <JournalEntryCard entry={item} isToday={isSelectedToday} />
@@ -198,39 +273,14 @@ export default function JournalScreen({ navigation }: Props): React.JSX.Element 
         </TouchableOpacity>
       </View>
 
-      {/* XP summary bar */}
-      {journal && (
-        <View style={styles.xpSection}>
-          <Text style={styles.xpSummaryText}>
-            {journal.totalXp} / {DAILY_XP_CAP} XP
-          </Text>
-          <View style={styles.xpBarTrack}>
-            <View
-              style={[
-                styles.xpBarFill,
-                { width: `${xpFill}%`, backgroundColor: xpBarColor },
-              ]}
-            />
-          </View>
-        </View>
-      )}
 
-      {/* Today's capturable space banner */}
-      {isSelectedToday && dailyInfo?.targetSpace && (
-        <View style={styles.targetSpaceBanner}>
-          <View style={styles.targetSpaceBannerInner}>
-            <Text style={styles.targetSpaceBannerEyebrow}>Today's prize space</Text>
-            <Text style={styles.targetSpaceBannerName}>
-              {dailyInfo.targetSpace.name}
-            </Text>
-            {dailyInfo.targetSpace.description ? (
-              <Text style={styles.targetSpaceBannerDesc} numberOfLines={2}>
-                {dailyInfo.targetSpace.description}
-              </Text>
-            ) : null}
-          </View>
-          <Text style={styles.targetSpaceBannerIcon}>🏡</Text>
-        </View>
+      {/* Today's Decor Spaces */}
+      {isSelectedToday && (
+        <DecorSpacesSection
+          spaceAssignments={spaceAssignments}
+          spacesLoading={spacesLoading}
+          navigation={navigation}
+        />
       )}
 
       {/* Content */}
@@ -321,28 +371,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // XP bar
-  xpSection: {
-    paddingHorizontal: 24,
-    paddingVertical: 8,
-  },
-  xpSummaryText: {
-    fontFamily: FONTS.pixel,
-    fontSize: 14,
-    color: PALETTE.cream,
-    marginBottom: 4,
-    textAlign: 'center',
-  },
-  xpBarTrack: {
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: PALETTE.warmBrownMild,
-    overflow: 'hidden',
-  },
-  xpBarFill: {
-    height: '100%',
-    borderRadius: 5,
-  },
 
   // List
   listContent: {
@@ -436,44 +464,79 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Today's capturable space banner
-  targetSpaceBanner: {
-    marginHorizontal: 16,
-    marginBottom: 8,
-    borderRadius: 12,
-    backgroundColor: '#3B2A1A',
+  // Decor spaces section
+  decorCard: {
+    backgroundColor: PALETTE.parchmentBg,
+    borderRadius: 10,
+    marginHorizontal: 12,
+    marginBottom: 10,
+    padding: 12,
+    elevation: 2,
+  },
+  decorHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  decorTitle: {
+    fontFamily: FONTS.heading,
+    fontSize: 16,
+    color: PALETTE.darkBrown,
+  },
+  decorCount: {
+    fontFamily: FONTS.pixel,
+    fontSize: 13,
+    color: PALETTE.stoneGrey,
+  },
+  decorBarTrack: {
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'rgba(160, 147, 125, 0.2)',
+    overflow: 'hidden',
+    marginBottom: 4,
+  },
+  decorBarFill: {
+    height: '100%',
+    borderRadius: 2,
+    backgroundColor: PALETTE.softGreen,
+  },
+  decorRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    gap: 12,
-    elevation: 3,
+    paddingVertical: 8,
   },
-  targetSpaceBannerInner: {
+  decorRowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(160, 147, 125, 0.15)',
+  },
+  decorSpaceName: {
+    fontFamily: FONTS.pixel,
+    fontSize: 14,
+    color: PALETTE.darkBrown,
     flex: 1,
   },
-  targetSpaceBannerEyebrow: {
-    fontFamily: FONTS.pixel,
-    fontSize: 10,
-    color: '#BDB49A',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-    marginBottom: 2,
+  decorDonePill: {
+    backgroundColor: 'rgba(124, 170, 94, 0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
   },
-  targetSpaceBannerName: {
-    fontFamily: FONTS.heading,
-    fontSize: 22,
-    color: '#F5EACB',
-    lineHeight: 26,
-  },
-  targetSpaceBannerDesc: {
+  decorDoneText: {
     fontFamily: FONTS.pixel,
     fontSize: 12,
-    color: '#BDB49A',
-    marginTop: 3,
-    lineHeight: 16,
+    color: PALETTE.softGreen,
   },
-  targetSpaceBannerIcon: {
-    fontSize: 32,
+  decorGoePill: {
+    backgroundColor: 'rgba(212, 168, 67, 0.15)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 8,
   },
+  decorGoeText: {
+    fontFamily: FONTS.pixel,
+    fontSize: 12,
+    color: PALETTE.honeyGold,
+  },
+
 });

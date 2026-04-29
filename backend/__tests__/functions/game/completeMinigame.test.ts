@@ -138,25 +138,25 @@ describe('completeMinigame handler', () => {
     // Default: client hash succeeds
     mockVerifyClientCompletionHash.mockReturnValue(true);
     mockVerifyCompletionHash.mockReturnValue(false);
-    mockUpdateItem.mockResolvedValue({ todayXp: 25, seasonXp: 25 });
+    mockUpdateItem.mockResolvedValue({ todayXp: 10, seasonXp: 10 });
     mockPutItem.mockResolvedValue(undefined);
     mockScan.mockResolvedValue({ items: [] });
     mockQuery.mockResolvedValue({ items: [] });
   });
 
   describe('win path', () => {
-    it('awards 25 XP, updates clan atomically, and rolls chest on valid win', async () => {
+    it('awards 10 XP, updates clan atomically, no chest drop (modified playtest)', async () => {
       mockGetItem.mockImplementation(async (table: string, key?: Record<string, string | number>) => {
         if (table === 'game-sessions') return makeSession();
         if (table === 'users') return makeUser();
         if (table === 'locations') {
           return { locationId: LOCATION_ID, chestDropModifier: 1 };
         }
-        if (table === 'clans') return { clanId: 'ember', todayXp: 25 };
+        if (table === 'clans') return { clanId: 'ember', todayXp: 10 };
         return undefined;
       });
 
-      mockUpdateItem.mockResolvedValue({ todayXp: 25, seasonXp: 25 });
+      mockUpdateItem.mockResolvedValue({ todayXp: 10, seasonXp: 10 });
 
       const event = makeEvent(makeValidBody());
       const result = await handler(event);
@@ -165,16 +165,14 @@ describe('completeMinigame handler', () => {
       expect(result.statusCode).toBe(200);
       expect(responseBody.success).toBe(true);
       expect(responseBody.data.result).toBe('win');
-      expect(responseBody.data.xpEarned).toBe(25);
+      expect(responseBody.data.xpEarned).toBe(10);
 
-      // Verify user XP was updated with ADD (atomic, with daily cap condition)
+      // Verify user XP was updated with ADD (atomic, no daily cap in modified playtest)
       expect(mockUpdateItem).toHaveBeenCalledWith(
         'users',
         { userId: USER_ID },
         expect.stringContaining('ADD todayXp'),
-        expect.objectContaining({ ':xp': 25 }),
-        undefined,
-        'todayXp <= :maxXp'
+        expect.objectContaining({ ':xp': 10 })
       );
 
       // Verify clan XP was updated with ADD (atomic)
@@ -182,8 +180,11 @@ describe('completeMinigame handler', () => {
         'clans',
         { clanId: 'ember' },
         expect.stringContaining('ADD todayXp'),
-        expect.objectContaining({ ':xp': 25 })
+        expect.objectContaining({ ':xp': 10 })
       );
+
+      // Verify no chest drop (disabled for playtest)
+      expect(responseBody.data.chestDrop).toEqual({ dropped: false });
     });
 
     it('increments streak when lastActiveDate is not today', async () => {
@@ -211,7 +212,7 @@ describe('completeMinigame handler', () => {
       );
     });
 
-    it('awards XP to co-op partner on win', async () => {
+    it('awards XP to co-op partner on win, no partner chest (modified playtest)', async () => {
       const session = makeSession({ coopPartnerId: PARTNER_ID });
       const callCount: Record<string, number> = {};
 
@@ -229,7 +230,7 @@ describe('completeMinigame handler', () => {
         if (table === 'locations') {
           return { locationId: LOCATION_ID, chestDropModifier: 1 };
         }
-        if (table === 'clans') return { clanId: 'ember', todayXp: 50 };
+        if (table === 'clans') return { clanId: 'ember', todayXp: 20 };
         return undefined;
       });
 
@@ -240,14 +241,12 @@ describe('completeMinigame handler', () => {
       expect(result.statusCode).toBe(200);
       expect(responseBody.data.result).toBe('win');
 
-      // Verify partner XP was also updated (with daily cap condition)
+      // Verify partner XP was also updated (no daily cap in modified playtest)
       expect(mockUpdateItem).toHaveBeenCalledWith(
         'users',
         { userId: PARTNER_ID },
         expect.stringContaining('ADD todayXp'),
-        expect.objectContaining({ ':xp': 25 }),
-        undefined,
-        'todayXp <= :maxXp'
+        expect.objectContaining({ ':xp': 10 })
       );
 
       // Verify clan XP was incremented twice (player + partner)
@@ -255,6 +254,9 @@ describe('completeMinigame handler', () => {
         (call: unknown[]) => call[0] === 'clans'
       );
       expect(clanCalls.length).toBe(2);
+
+      // Verify no partner chest drop (disabled for playtest)
+      expect(responseBody.data.partnerChestDrop).toEqual({ dropped: false });
     });
 
     it('does not write completedMinigameIds to player-assignments', async () => {
@@ -266,7 +268,7 @@ describe('completeMinigame handler', () => {
         return undefined;
       });
 
-      mockUpdateItem.mockResolvedValue({ todayXp: 25, seasonXp: 25 });
+      mockUpdateItem.mockResolvedValue({ todayXp: 10, seasonXp: 10 });
 
       const event = makeEvent(makeValidBody());
       await handler(event);
@@ -427,16 +429,16 @@ describe('completeMinigame handler', () => {
     });
 
     it('returns SUSPICIOUS_TIME when completion exceeds timeLimit + grace period', async () => {
-      const twoHundredSecondsAgo = new Date(Date.now() - 200 * 1000).toISOString();
-
       mockGetItem.mockImplementation(async (table: string) => {
         if (table === 'game-sessions') {
-          return makeSession({ startedAt: twoHundredSecondsAgo, timeLimit: 120 });
+          return makeSession({ timeLimit: 120 });
         }
         return undefined;
       });
 
-      const event = makeEvent(makeValidBody());
+      const body = makeValidBody();
+      body.timeTaken = 200; // exceeds 120 + 15 = 135
+      const event = makeEvent(body);
       const result = await handler(event);
       const responseBody = JSON.parse(result.body);
 

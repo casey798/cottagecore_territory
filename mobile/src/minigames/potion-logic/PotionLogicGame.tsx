@@ -18,7 +18,7 @@ import {
 } from 'react-native';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { LOGIC_GRID_TIME_LIMIT } from '@/constants/config';
+import { LOGIC_GRID_TIME_LIMIT, XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import {
@@ -559,7 +559,7 @@ export default function PotionLogicGame(props: MinigamePlayProps): React.JSX.Ele
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' && !practiceMode ? 25 : 0}
+          xpEarned={overlayResult === 'win' && !practiceMode ? XP_PER_WIN : 0}
           onContinue={handleContinue}
           practiceMode={practiceMode}
         />

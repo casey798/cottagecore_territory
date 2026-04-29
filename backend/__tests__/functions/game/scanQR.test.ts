@@ -355,62 +355,7 @@ describe('scanQR handler', () => {
       expect(responseBody.error.lockedUntil).toBeDefined();
     });
 
-    it('returns capReached when user todayXp is 100', async () => {
-      mockGetItem.mockImplementation(async (table: string) => {
-        if (table === 'location-master-config') {
-          return { locationId: LOCATION_ID, qrSecret: 'per-location-secret' };
-        }
-        if (table === 'daily-config') {
-          return {
-            date: TODAY,
-            qrSecret: 'secret',
-            activeLocationIds: [LOCATION_ID],
-            targetSpace: { name: 'Test', description: 'test', mapOverlayId: 'o1' },
-            status: 'active',
-                       winnerClan: null,
-          };
-        }
-        if (table === 'locations') {
-          return {
-            locationId: LOCATION_ID,
-            name: 'Test Location',
-            gpsLat: 13.0,
-            gpsLng: 80.2,
-            geofenceRadius: 100,
-            category: 'courtyard',
-            active: true,
-            chestDropModifier: 1,
-            notes: '',
-          };
-        }
-        if (table === 'player-assignments') {
-          return {
-            dateUserId: `${TODAY}#${USER_ID}`,
-            assignedLocationIds: [LOCATION_ID],
-          };
-        }
-        if (table === 'player-locks') {
-          return undefined;
-        }
-        if (table === 'users') {
-          return {
-            userId: USER_ID,
-            todayXp: 100,
-            clan: 'ember',
-          };
-        }
-        return undefined;
-      });
-      mockQuery.mockResolvedValue({ items: [] });
-
-      const event = makeEvent(makeValidBody());
-      const result = await handler(event);
-      const responseBody = JSON.parse(result.body);
-
-      expect(result.statusCode).toBe(200);
-      expect(responseBody.success).toBe(true);
-      expect(responseBody.data.capReached).toBe(true);
-    });
+    // Daily XP cap removed — capReached is always false
 
   });
 

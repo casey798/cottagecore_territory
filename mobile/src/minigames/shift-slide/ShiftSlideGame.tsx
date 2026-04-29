@@ -22,6 +22,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import { PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
@@ -319,7 +320,7 @@ export default function ShiftSlideGame(props: MinigamePlayProps) {
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
           onContinue={handleContinue}
           practiceMode={practiceMode}
         />

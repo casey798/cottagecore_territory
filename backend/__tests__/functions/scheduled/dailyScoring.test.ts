@@ -284,15 +284,8 @@ describe('dailyScoring handler', () => {
 
       await handler(MOCK_EVENT);
 
-      // sendToAll should be called with capture result message
-      expect(mockSendToAll).toHaveBeenCalledWith(
-        expect.objectContaining({
-          notification: expect.objectContaining({
-            title: 'Seekers wins!',
-          }),
-          data: expect.objectContaining({ type: 'CAPTURE_RESULT', winnerClan: 'ember' }),
-        })
-      );
+      // Territory capture notifications disabled in modified playtest
+      expect(mockSendToAll).not.toHaveBeenCalled();
     });
   });
 

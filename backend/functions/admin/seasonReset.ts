@@ -4,7 +4,7 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { ScanCommand, BatchWriteCommand } from '@aws-sdk/lib-dynamodb';
 import { success, error, ErrorCode } from '../../shared/response';
 import { seasonResetSchema } from '../../shared/schemas';
-import { scan, updateItem, getItem, docClient, tableName } from '../../shared/db';
+import { scan, updateItem, getItem, deleteItem, docClient, tableName } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
 import type { User, Clan, CapturedSpace, GameSession, CheckIn } from '../../shared/types';
 
@@ -222,10 +222,10 @@ export async function handler(
     );
     const currentSeasonNumber = (existingMeta?.seasonNumber as number | undefined) ?? 1;
 
-    if (newSeasonNumber !== currentSeasonNumber + 1) {
+    if (newSeasonNumber < currentSeasonNumber || newSeasonNumber > currentSeasonNumber + 1) {
       return error(
         ErrorCode.VALIDATION_ERROR,
-        `newSeasonNumber must be currentSeasonNumber + 1. Expected ${currentSeasonNumber + 1}, got ${newSeasonNumber}.`,
+        `newSeasonNumber must be ${currentSeasonNumber} (restart) or ${currentSeasonNumber + 1} (new season). Got ${newSeasonNumber}.`,
         400,
       );
     }
@@ -296,9 +296,10 @@ export async function handler(
       stepErrors.push(`Step 2 (clans): ${msg}`);
     }
 
-    // ── STEP 3: SOFT-ARCHIVE CAPTURED SPACES (conditional) ──────────────────
-    let territoriesArchived = 0;
+    // ── STEP 3: HANDLE CAPTURED SPACES (conditional) ────────────────────────
+    let territoriesHandled = 0;
     if (resetTerritories) {
+      const isSameSeasonRestart = newSeasonNumber === currentSeasonNumber;
       try {
         let lastSpaceKey: Record<string, unknown> | undefined;
         do {
@@ -308,21 +309,27 @@ export async function handler(
           lastSpaceKey = result.lastEvaluatedKey;
           for (const space of result.items) {
             if (space.season === String(currentSeasonNumber)) {
-              await updateItem(
-                'captured-spaces',
-                { spaceId: space.spaceId },
-                'SET #s = :prevSeason',
-                { ':prevSeason': String(newSeasonNumber - 1) },
-                { '#s': 'season' },
-              );
-              territoriesArchived++;
+              if (isSameSeasonRestart) {
+                // Same-season restart: delete the row outright
+                await deleteItem('captured-spaces', { spaceId: space.spaceId });
+              } else {
+                // New season: relabel to previous season for archival
+                await updateItem(
+                  'captured-spaces',
+                  { spaceId: space.spaceId },
+                  'SET #s = :prevSeason',
+                  { ':prevSeason': String(newSeasonNumber - 1) },
+                  { '#s': 'season' },
+                );
+              }
+              territoriesHandled++;
             }
           }
         } while (lastSpaceKey);
-        console.log(`[Step 3] Archived ${territoriesArchived} territories`);
+        console.log(`[Step 3] ${isSameSeasonRestart ? 'Deleted' : 'Archived'} ${territoriesHandled} territories`);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        console.error('[Step 3] Territory archive failed:', msg);
+        console.error('[Step 3] Territory handling failed:', msg);
         stepErrors.push(`Step 3 (territories): ${msg}`);
       }
     }

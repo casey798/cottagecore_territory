@@ -261,18 +261,7 @@ describe('startMinigame co-op tests', () => {
     expect(session.partnerIsGuest).toBe(true);
   });
 
-  it('returns PARTNER_CAP_REACHED when partner todayXp >= 100', async () => {
-    setupGetItem({
-      partner: { userId: PARTNER_ID, displayName: 'Bob', clan: 'tide', todayXp: 100 },
-    });
-
-    const event = makeEvent(makeBody());
-    const result = await handler(event);
-    const body = JSON.parse(result.body);
-
-    expect(result.statusCode).toBe(400);
-    expect(body.error.code).toBe('PARTNER_CAP_REACHED');
-  });
+  // Daily XP cap removed — partner cap check no longer applies
 
   it('returns PARTNER_LOCATION_LOCKED when partner is locked at this location', async () => {
     setupGetItem({

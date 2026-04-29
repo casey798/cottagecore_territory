@@ -59,6 +59,8 @@ Globals:
         CLUSTER_WEIGHT_CONFIG_TABLE: !Ref ClusterWeightConfigTable
         CLUSTERING_RUNS_TABLE: !Ref ClusteringRunsTable
         CLUSTER_HISTORY_TABLE: !Ref ClusterHistoryTable
+        SPACES_TABLE: !Ref SpacesTable
+        SPACE_ASSIGNMENTS_TABLE: !Ref SpaceAssignmentsTable
 
 # ---------------------------------------------------------------------------
 # Resources
@@ -457,9 +459,30 @@ Resources:
       AttributeDefinitions:
         - AttributeName: userSpaceId
           AttributeType: S
+        - AttributeName: spaceId
+          AttributeType: S
+        - AttributeName: date
+          AttributeType: S
       KeySchema:
         - AttributeName: userSpaceId
           KeyType: HASH
+      GlobalSecondaryIndexes:
+        - IndexName: SpaceDateIndex
+          KeySchema:
+            - AttributeName: spaceId
+              KeyType: HASH
+            - AttributeName: date
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: DateIndex
+          KeySchema:
+            - AttributeName: date
+              KeyType: HASH
+            - AttributeName: spaceId
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
 
   # 12. Map Calibration
   MapCalibrationTable:
@@ -621,6 +644,32 @@ Resources:
           KeyType: HASH
         - AttributeName: date
           KeyType: RANGE
+
+  # 22. Spaces (decoration system)
+  SpacesTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-spaces
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: spaceId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: spaceId
+          KeyType: HASH
+
+  # 23. Space Assignments (decoration system)
+  SpaceAssignmentsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub grovewars-${Stage}-space-assignments
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: dateUserId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: dateUserId
+          KeyType: HASH
 
   # =========================================================================
   # Lambda Authorizer
@@ -1565,6 +1614,35 @@ Resources:
         External:
           - '@aws-sdk/*'
 
+  GetMyDecorationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getMyDecorations
+      CodeUri: functions/spaces/
+      Handler: getMyDecorations.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /spaces/my-decorations
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getMyDecorations.ts
+        External:
+          - '@aws-sdk/*'
+
   SaveDecorationFunction:
     Type: AWS::Serverless::Function
     Properties:
@@ -2356,6 +2434,10 @@ Resources:
         - DynamoDBCrudPolicy:
             TableName: !Ref CapturedSpacesTable
         - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref PlayerAssetsTable
+        - DynamoDBCrudPolicy:
             TableName: !Ref WsConnectionsTable
         - Statement:
             - Effect: Allow
@@ -2518,6 +2600,10 @@ Resources:
             TableName: !Ref LocationMasterConfigTable
         - DynamoDBCrudPolicy:
             TableName: !Ref ClusterWeightConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
         - Statement:
             - Effect: Allow
               Action:
@@ -2896,6 +2982,8 @@ Resources:
             TableName: !Ref UsersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
       Events:
         Api:
           Type: Api
@@ -2928,6 +3016,8 @@ Resources:
             TableName: !Ref CheckInsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
       Events:
         Api:
           Type: Api
@@ -2960,6 +3050,8 @@ Resources:
             TableName: !Ref UsersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref CapturedSpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
       Events:
         Api:
           Type: Api
@@ -3035,6 +3127,40 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - analyticsMinigames.ts
+        External:
+          - '@aws-sdk/*'
+
+  AnalyticsSpacesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-analyticsSpaces
+      CodeUri: functions/admin/
+      Handler: analyticsSpaces.handler
+      Timeout: 30
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/analytics/spaces
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - analyticsSpaces.ts
         External:
           - '@aws-sdk/*'
 
@@ -3120,6 +3246,10 @@ Resources:
             TableName: !Ref UsersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
       Events:
         Api:
           Type: Api
@@ -3245,6 +3375,10 @@ Resources:
             TableName: !Ref GameSessionsTable
         - DynamoDBCrudPolicy:
             TableName: !Ref ClusterWeightConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
         - Statement:
             - Effect: Allow
               Action:
@@ -3619,10 +3753,10 @@ Resources:
   AssetExpiryRule:
     Type: AWS::Events::Rule
     Properties:
+      State: DISABLED
       Name: !Sub grovewars-${Stage}-asset-expiry
-      Description: Asset expiry at midnight IST (18:30 UTC)
+      Description: Asset expiry at midnight IST (18:30 UTC) — disabled for modified playtest
       ScheduleExpression: cron(30 18 * * ? *)
-      State: ENABLED
       Targets:
         - Arn: !GetAtt AssetExpiryFunction.Arn
           Id: AssetExpiryTarget
@@ -3639,10 +3773,10 @@ Resources:
   AssetExpiryWarningRule:
     Type: AWS::Events::Rule
     Properties:
+      State: DISABLED
       Name: !Sub grovewars-${Stage}-asset-expiry-warning
-      Description: Asset expiry warning at 9:00 PM IST (15:30 UTC)
+      Description: Asset expiry warning at 9:00 PM IST (15:30 UTC) — disabled for modified playtest
       ScheduleExpression: cron(30 15 * * ? *)
-      State: ENABLED
       Targets:
         - Arn: !GetAtt AssetExpiryWarningFunction.Arn
           Id: AssetExpiryWarningTarget
@@ -3714,6 +3848,57 @@ Resources:
       FunctionName: !Ref EventWindowFinalFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt FinalPushRule.Arn
+
+  # -------------------------------------------------------------------------
+  # Spaces Remaining Nudge — 4:00 PM IST (10:30 UTC)
+  # -------------------------------------------------------------------------
+  SpacesRemainingNudgeFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-spacesRemainingNudge
+      CodeUri: functions/scheduled/
+      Handler: spacesRemainingNudge.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - Statement:
+            - Effect: Allow
+              Action:
+                - ssm:GetParameter
+                - kms:Decrypt
+              Resource: !Sub arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/grovewars/${Stage}/fcm-service-account
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - spacesRemainingNudge.ts
+        External:
+          - '@aws-sdk/*'
+
+  SpacesRemainingNudgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub grovewars-${Stage}-spaces-remaining-nudge
+      Description: Spaces remaining nudge at 4:00 PM IST (10:30 UTC)
+      ScheduleExpression: cron(30 10 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt SpacesRemainingNudgeFunction.Arn
+          Id: SpacesRemainingNudgeTarget
+
+  SpacesRemainingNudgePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SpacesRemainingNudgeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt SpacesRemainingNudgeRule.Arn
 
   # Dwell fallback — 6:30 PM IST (1:00 PM UTC)
   ComputeDwellFallbacksFunction:
@@ -4094,6 +4279,8 @@ Resources:
             TableName: !Ref UsersTable
         - DynamoDBCrudPolicy:
             TableName: !Ref LocationMasterConfigTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref DailyConfigTable
       Events:
         Api:
           Type: Api
@@ -4267,6 +4454,505 @@ Resources:
         Sourcemap: true
         EntryPoints:
           - exportClusterHistory.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Space Decoration System Functions
+  # =========================================================================
+  ScanSpaceQRFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-scanSpaceQR
+      CodeUri: functions/game/
+      Handler: scanSpaceQR.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /spaces/scan-qr
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - scanSpaceQR.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetSpaceAssignmentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getSpaceAssignments
+      CodeUri: functions/game/
+      Handler: getSpaceAssignments.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /spaces/assignments/today
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getSpaceAssignments.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminGetSpacesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminGetSpaces
+      CodeUri: functions/admin/
+      Handler: adminGetSpaces.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/spaces
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminGetSpaces.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminCreateSpaceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminCreateSpace
+      CodeUri: functions/admin/
+      Handler: adminCreateSpace.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/spaces
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminCreateSpace.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminUpdateSpaceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminUpdateSpace
+      CodeUri: functions/admin/
+      Handler: adminUpdateSpace.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/spaces/{spaceId}
+            Method: PUT
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminUpdateSpace.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminDeleteSpaceFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminDeleteSpace
+      CodeUri: functions/admin/
+      Handler: adminDeleteSpace.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/spaces/{spaceId}
+            Method: DELETE
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminDeleteSpace.ts
+        External:
+          - '@aws-sdk/*'
+
+  # =========================================================================
+  # Space Decoration Submission & Admin Endpoints
+  # =========================================================================
+  SubmitSpaceDecorationFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-submitSpaceDecoration
+      CodeUri: functions/game/
+      Handler: submitSpaceDecoration.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ClansTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /spaces/decoration/submit
+            Method: POST
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - submitSpaceDecoration.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminGetSpaceDecorationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminGetSpaceDecorations
+      CodeUri: functions/admin/
+      Handler: adminGetSpaceDecorations.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/spaces/{spaceId}/decorations
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminGetSpaceDecorations.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminGetAllDecorationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminGetAllDecorations
+      CodeUri: functions/admin/
+      Handler: adminGetAllDecorations.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/decorations/all
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminGetAllDecorations.ts
+        External:
+          - '@aws-sdk/*'
+
+  GetDecorationImageManifestFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-getDecorationImageManifest
+      CodeUri: functions/admin/
+      Handler: getDecorationImageManifest.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - S3CrudPolicy:
+            BucketName: !Ref AssetsBucket
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/decorations/image-manifest
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - getDecorationImageManifest.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminExportDecorationsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminExportDecorations
+      CodeUri: functions/admin/
+      Handler: adminExportDecorations.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/spaces/export
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminExportDecorations.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportSpaceAssignmentsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportSpaceAssignments
+      CodeUri: functions/admin/
+      Handler: exportSpaceAssignments.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceAssignmentsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/space-assignments
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportSpaceAssignments.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportDecorationSurveysFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportDecorationSurveys
+      CodeUri: functions/admin/
+      Handler: exportDecorationSurveys.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/decoration-surveys
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportDecorationSurveys.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportSentimentTimeSeriesFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportSentimentTimeSeries
+      CodeUri: functions/admin/
+      Handler: exportSentimentTimeSeries.handler
+      Timeout: 120
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref GameSessionsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref CheckInsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/sentiment-time-series
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportSentimentTimeSeries.ts
+        External:
+          - '@aws-sdk/*'
+
+  ExportAssetPlacementsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-exportAssetPlacements
+      CodeUri: functions/admin/
+      Handler: exportAssetPlacements.handler
+      Timeout: 60
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpaceDecorationsTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref UsersTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/export/asset-placements
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - exportAssetPlacements.ts
+        External:
+          - '@aws-sdk/*'
+
+  AdminGenerateSpaceQRsFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub grovewars-${Stage}-adminGenerateSpaceQRs
+      CodeUri: functions/admin/
+      Handler: adminGenerateSpaceQRs.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref SpacesTable
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref RestApi
+            Path: /admin/spaces/qr-codes
+            Method: GET
+    Metadata:
+      BuildMethod: esbuild
+      BuildProperties:
+        Minify: false
+        Target: es2020
+        Sourcemap: true
+        EntryPoints:
+          - adminGenerateSpaceQRs.ts
         External:
           - '@aws-sdk/*'
 

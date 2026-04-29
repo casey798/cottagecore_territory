@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { CLAN_COLORS, PALETTE, UI } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
+import { XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import type { ClanId } from '@/types';
@@ -624,7 +625,7 @@ export default function StonePairsCoopGame(props: MinigamePlayProps) {
         {overlayVisible && (
           <GameCompleteOverlay
             result={overlayResult}
-            xpEarned={overlayResult === 'win' ? 25 : 0}
+            xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
             onContinue={handleContinue}
             practiceMode={practiceMode}
           />

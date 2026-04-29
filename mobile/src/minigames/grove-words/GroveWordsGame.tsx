@@ -14,7 +14,7 @@ import {
 } from 'react-native';
 import { PALETTE, UI, KEYBOARD } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { GROVE_WORDS_TIME_LIMIT } from '@/constants/config';
+import { GROVE_WORDS_TIME_LIMIT, XP_PER_WIN } from '@/constants/config';
 
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
@@ -441,7 +441,7 @@ export default function GroveWordsGame(props: MinigamePlayProps): React.JSX.Elem
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
           correctWord={targetWord}
           loseTitle={loseTitle}
           practiceMode={practiceMode}

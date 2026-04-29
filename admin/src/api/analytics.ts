@@ -8,6 +8,7 @@ import type {
   AnalyticsFreeRoamData,
   AnalyticsClustersData,
   AnalyticsDecayData,
+  AnalyticsSpacesData,
 } from '@/types';
 
 function buildQuery(startDate?: string, endDate?: string): string {
@@ -63,6 +64,13 @@ export async function getAnalyticsFreeRoam(startDate?: string, endDate?: string)
 export async function getAnalyticsClusters(startDate?: string, endDate?: string) {
   const res = await apiClient.get<AnalyticsClustersData>(
     `/admin/analytics/clusters${buildQuery(startDate, endDate)}`
+  );
+  return res.data;
+}
+
+export async function getAnalyticsSpaces(startDate?: string, endDate?: string) {
+  const res = await apiClient.get<AnalyticsSpacesData>(
+    `/admin/analytics/spaces${buildQuery(startDate, endDate)}`
   );
   return res.data;
 }

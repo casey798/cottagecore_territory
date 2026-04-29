@@ -25,8 +25,8 @@ import { useGameStore } from '@/store/useGameStore';
 import { useMapStore } from '@/store/useMapStore';
 import { useGPS } from '@/hooks/useGPS';
 import { parseQrPayload } from '@/utils/qrValidation';
-import { getTodayISTString } from '@/utils/time';
 import * as gameApi from '@/api/game';
+import * as spacesApi from '@/api/spaces';
 import { ErrorCode, PlayerSearchResult, ScanQRMinigameResponse } from '@/types';
 import PartnerSearchModal from '@/components/common/PartnerSearchModal';
 import { useErrorStore } from '@/store/useErrorStore';
@@ -72,6 +72,7 @@ export default function QRScannerScreen() {
   const route = useRoute<Route>();
   const locationName = route.params?.locationName;
   const prefilledLocationId = route.params?.locationId;
+  const scanMode = route.params?.mode ?? 'location';
   const setScanResult = useGameStore((s) => s.setScanResult);
   const todayLocations = useMapStore((s) => s.todayLocations);
   const gps = useGPS();
@@ -172,12 +173,17 @@ export default function QRScannerScreen() {
       }
 
       if (gps.latitude === null || gps.longitude === null) {
-        showErrorAndResume('Waiting for GPS signal. Please try again in a moment.');
-        return;
+        if (!__DEV__) {
+          showErrorAndResume('Waiting for GPS signal. Please try again in a moment.');
+          return;
+        }
       }
 
+      const scanLat = gps.latitude ?? 0;
+      const scanLng = gps.longitude ?? 0;
+
       try {
-        const result = await gameApi.scanQR(qrData, gps.latitude, gps.longitude);
+        const result = await gameApi.scanQR(qrData, scanLat, scanLng);
         if (!mountedRef.current) return;
         if (result.success && result.data) {
           // Check if co-op partner is required
@@ -214,13 +220,22 @@ export default function QRScannerScreen() {
       setProcessing(true);
 
       const qrData = pendingQrRef.current;
-      if (!qrData || gps.latitude === null || gps.longitude === null) {
+      if (!qrData) {
         showErrorAndResume('Something went wrong. Please scan again.');
         return;
       }
+      if (gps.latitude === null || gps.longitude === null) {
+        if (!__DEV__) {
+          showErrorAndResume('Something went wrong. Please scan again.');
+          return;
+        }
+      }
+
+      const partnerScanLat = gps.latitude ?? 0;
+      const partnerScanLng = gps.longitude ?? 0;
 
       try {
-        const result = await gameApi.scanQR(qrData, gps.latitude, gps.longitude, partner.userId);
+        const result = await gameApi.scanQR(qrData, partnerScanLat, partnerScanLng, partner.userId);
         if (!mountedRef.current) return;
         if (result.success && result.data && !('partnerRequired' in result.data)) {
           const data = result.data as ScanQRMinigameResponse;
@@ -276,11 +291,66 @@ export default function QRScannerScreen() {
     setProcessing(false);
   }, []);
 
+  // Handle space QR scan — separate flow from location QR
+  const handleSpaceQRScan = useCallback(
+    async (rawPayload: string) => {
+      if (gps.latitude === null || gps.longitude === null) {
+        if (!__DEV__) {
+          showErrorAndResume('Waiting for GPS signal. Please try again in a moment.');
+          return;
+        }
+      }
+
+      const spaceScanLat = gps.latitude ?? 0;
+      const spaceScanLng = gps.longitude ?? 0;
+
+      try {
+        const result = await spacesApi.scanSpaceQR({
+          qrPayload: rawPayload,
+          gpsLat: spaceScanLat,
+          gpsLng: spaceScanLng,
+        });
+        if (!mountedRef.current) return;
+
+        if (result.success && result.data) {
+          if (result.data.alreadyDecorated) {
+            showErrorAndResume("You've already decorated this space today");
+            return;
+          }
+          setProcessing(false);
+          navigation.replace('SpaceDecoration', {
+            spaceId: result.data.spaceId,
+            spaceName: result.data.spaceName,
+            gridCells: result.data.gridCells,
+            gridColumns: result.data.gridColumns,
+            gridRows: result.data.gridRows,
+            polygonPoints: result.data.polygonPoints,
+          });
+        } else {
+          const message = result.error?.message || 'Failed to validate space QR code.';
+          showErrorAndResume(message, result.error?.code || undefined);
+        }
+      } catch {
+        showErrorAndResume('Something went wrong. Please try again.');
+      }
+    },
+    [gps.latitude, gps.longitude, navigation, showErrorAndResume],
+  );
+
   const handleQRDetected = useCallback(
     async (rawData: string) => {
       if (processing || showPartnerModal) return;
       setProcessing(true);
 
+      // Prefix-based routing: space QR codes start with 'GROVE_SPACE:'
+      const isSpaceQR = rawData.startsWith('GROVE_SPACE:');
+
+      if (isSpaceQR || scanMode === 'space') {
+        await handleSpaceQRScan(rawData);
+        return;
+      }
+
+      // Location QR flow (existing)
       const qrData = parseQrPayload(rawData);
       if (!qrData) {
         showErrorAndResume('This is not a valid GroveWars QR code.');
@@ -289,7 +359,7 @@ export default function QRScannerScreen() {
 
       await handleScanResult(qrData);
     },
-    [processing, showPartnerModal, showErrorAndResume, handleScanResult],
+    [processing, showPartnerModal, showErrorAndResume, handleScanResult, handleSpaceQRScan, scanMode],
   );
 
   const codeScanner = useCodeScanner({
@@ -392,9 +462,39 @@ export default function QRScannerScreen() {
       {__DEV__ && (
         <TouchableOpacity
           style={styles.devButton}
-          onPress={() => {
+          onPress={async () => {
             if (processing) return;
 
+            // ── Space QR mode ──────────────────────────────────────────────
+            if (scanMode === 'space') {
+              const res = await spacesApi.getSpaceAssignments();
+              const spaces = res.success && res.data ? res.data.assignments : [];
+              if (spaces.length === 0) {
+                Alert.alert('No spaces', 'No spaces assigned today');
+                return;
+              }
+
+              const doSpaceScan = (sp: { spaceId: string; spaceName: string }) => {
+                console.log('[DEV Space Scan]', sp.spaceId, sp.spaceName);
+                setProcessing(true);
+                handleSpaceQRScan(`GROVE_SPACE:${sp.spaceId}:permanent:dev-bypass`);
+              };
+
+              if (spaces.length === 1) {
+                doSpaceScan(spaces[0]);
+                return;
+              }
+
+              const buttons = spaces.map((sp) => ({
+                text: sp.spaceName,
+                onPress: () => doSpaceScan(sp),
+              }));
+              buttons.push({ text: 'Cancel', onPress: () => {} });
+              Alert.alert('Select Space', 'Pick a space to simulate scan:', buttons);
+              return;
+            }
+
+            // ── Location QR mode ───────────────────────────────────────────
             const todayLocations = useMapStore.getState().todayLocations;
             if (!todayLocations || todayLocations.length === 0) {
               Alert.alert('No locations', 'No locations assigned today');
@@ -403,9 +503,8 @@ export default function QRScannerScreen() {
 
             const doScan = (loc: { locationId: string; name: string }) => {
               console.log('[DEV Scan] Target location:', loc.locationId, loc.name);
-              const today = getTodayISTString();
               setProcessing(true);
-              handleScanResult({ v: 1, l: loc.locationId, d: today, h: 'dev-bypass' });
+              handleScanResult({ v: 2, l: loc.locationId, d: 'permanent', h: 'dev-bypass' });
             };
 
             // If locationId was pre-filled from the bottom sheet, use it directly

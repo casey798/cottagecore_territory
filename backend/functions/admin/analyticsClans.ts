@@ -3,7 +3,7 @@ import { success, error, ErrorCode } from '../../shared/response';
 import { scan } from '../../shared/db';
 import { getTodayISTString } from '../../shared/time';
 import { ClanId } from '../../shared/types';
-import type { GameSession, User, CapturedSpace } from '../../shared/types';
+import type { GameSession, User, CapturedSpace, SpaceDecorationSubmission } from '../../shared/types';
 
 const CLAN_IDS: string[] = [ClanId.Ember, ClanId.Tide, ClanId.Bloom, ClanId.Gale, ClanId.Hearth];
 
@@ -33,8 +33,8 @@ export async function handler(
     const endDate = params.endDate || today;
     const dates = getDatesInRange(startDate, endDate);
 
-    // Parallel scans: game-sessions, users, captured-spaces
-    const [sessionsData, usersData, capturedData] = await Promise.all([
+    // Parallel scans: game-sessions, users, captured-spaces, space-decorations
+    const [sessionsData, usersData, capturedData, decorationsData] = await Promise.all([
       (async () => {
         const items: GameSession[] = [];
         let lastKey: Record<string, unknown> | undefined;
@@ -70,6 +70,21 @@ export async function handler(
         } while (lastKey);
         return items;
       })(),
+      (async () => {
+        const items: SpaceDecorationSubmission[] = [];
+        let lastKey: Record<string, unknown> | undefined;
+        do {
+          const result = await scan<SpaceDecorationSubmission>('space-decorations', {
+            filterExpression: '#d BETWEEN :start AND :end',
+            expressionNames: { '#d': 'date' },
+            expressionValues: { ':start': startDate, ':end': endDate },
+            exclusiveStartKey: lastKey,
+          });
+          items.push(...result.items);
+          lastKey = result.lastEvaluatedKey;
+        } while (lastKey);
+        return items;
+      })(),
     ]);
 
     // Build userId → clan lookup and per-clan roster counts
@@ -91,9 +106,18 @@ export async function handler(
       sessionsByDate.set(s.date, list);
     }
 
-    // clanXpOverTime: per-date, per-clan sum of xpEarned
+    // Group decorations by date
+    const decorationsByDate = new Map<string, SpaceDecorationSubmission[]>();
+    for (const d of decorationsData) {
+      const list = decorationsByDate.get(d.date) || [];
+      list.push(d);
+      decorationsByDate.set(d.date, list);
+    }
+
+    // clanXpOverTime: per-date, per-clan sum of xpEarned (minigame + decoration)
     const xpDays = dates.map((date) => {
       const daySessions = sessionsByDate.get(date) || [];
+      const dayDecorations = decorationsByDate.get(date) || [];
       const xpByClan: Record<string, number> = {};
       for (const clanId of CLAN_IDS) xpByClan[clanId] = 0;
       for (const s of daySessions) {
@@ -102,18 +126,29 @@ export async function handler(
           xpByClan[clan] += s.xpEarned;
         }
       }
+      for (const d of dayDecorations) {
+        if (CLAN_IDS.includes(d.clan)) {
+          xpByClan[d.clan] += d.xpAwarded;
+        }
+      }
       return { date, ...xpByClan };
     });
 
-    // clanParticipation: per-date, per-clan, distinct users with xpEarned >= 25 / roster
+    // clanParticipation: per-date, per-clan, distinct users with xpEarned >= 25 OR decoration / roster
     const participationDays = dates.map((date) => {
       const daySessions = sessionsByDate.get(date) || [];
+      const dayDecorations = decorationsByDate.get(date) || [];
       const entry: Record<string, number> = { date: 0 }; // date added below
       for (const clanId of CLAN_IDS) {
         const clanUsers = new Set<string>();
         for (const s of daySessions) {
           if (s.xpEarned >= 25 && userClanMap.get(s.userId) === clanId) {
             clanUsers.add(s.userId);
+          }
+        }
+        for (const d of dayDecorations) {
+          if (d.clan === clanId) {
+            clanUsers.add(d.userId);
           }
         }
         const roster = clanRosterCounts[clanId] || 1;

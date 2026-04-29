@@ -3,6 +3,7 @@ import { getItem } from '../../shared/db';
 import { sendToAll, sendToClan } from '../../shared/notifications';
 import { Clan, ClanId } from '../../shared/types';
 import { clanDisplayName } from '../../shared/clanLabels';
+import { isQuietModeActive } from '../../shared/quietMode';
 
 type Window = 'morning' | 'lunch' | 'final';
 
@@ -12,12 +13,17 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
   const window = (process.env.WINDOW || 'morning') as Window;
   console.log(`Event window notification: ${window}`);
 
+  if (await isQuietModeActive()) {
+    console.log(`Quiet mode active — skipping ${window} notification`);
+    return;
+  }
+
   try {
     if (window === 'morning') {
       const delivered = await sendToAll({
         notification: {
           title: 'Break time!',
-          body: 'The grove has fresh challenges waiting nearby.',
+          body: 'Morning break! Visit your assigned spaces and locations to earn XP.',
         },
         data: {
           type: 'EVENT_WINDOW',
@@ -32,7 +38,7 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
       const delivered = await sendToAll({
         notification: {
           title: 'Lunch break!',
-          body: 'Perfect time to earn XP for your clan!',
+          body: 'Lunch break! Great time to decorate a space or win a minigame.',
         },
         data: {
           type: 'EVENT_WINDOW',
@@ -56,7 +62,7 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
       const delivered = await sendToAll({
         notification: {
           title: 'Last hour!',
-          body: 'No clan has scored yet — be the first!',
+          body: 'Last hour! Visit your spaces and locations before scoring at 6 PM.',
         },
         data: {
           type: 'FINAL_PUSH',
@@ -96,7 +102,7 @@ export const handler = async (_event: ScheduledEvent): Promise<void> => {
         const delivered = await sendToClan(clan.clanId, {
           notification: {
             title: 'Last hour!',
-            body: `${name} is ${deficit} XP behind ${leadingName}. Every win counts!`,
+            body: `${name} is ${deficit} XP behind ${leadingName}! Decorate your remaining spaces and win minigames before 6 PM.`,
           },
           data: {
             type: 'FINAL_PUSH',

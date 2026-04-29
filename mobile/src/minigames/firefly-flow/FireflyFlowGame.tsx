@@ -24,7 +24,7 @@ import {
 } from 'react-native-gesture-handler';
 import { PALETTE } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { FIREFLY_TIME_LIMIT } from '@/constants/config';
+import { FIREFLY_TIME_LIMIT, XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import { GameCompleteOverlay } from '@/components/minigames/GameCompleteOverlay';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
@@ -555,7 +555,7 @@ export default function FireflyFlowGame(props: MinigamePlayProps) {
           result={overlayResult}
           practiceMode={practiceMode}
           onContinue={handleContinue}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
         />
       )}
 

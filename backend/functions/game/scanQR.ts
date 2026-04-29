@@ -21,7 +21,6 @@ import {
   AvailableMinigame,
 } from '../../shared/types';
 
-const DAILY_XP_CAP = 100;
 const SOLO_SET_SIZE = 6;
 const COOP_SET_SIZE = 3;
 const TARGET_EASY = 2;
@@ -215,7 +214,7 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
       return error(ErrorCode.NOT_FOUND, 'User not found', 400);
     }
 
-    const capReached = user.todayXp >= DAILY_XP_CAP;
+    const capReached = false;
 
     // Step 7: Query all sessions played today (needed for cross-location locking + XP check)
     const { items: todaySessions } = await query<GameSession>(

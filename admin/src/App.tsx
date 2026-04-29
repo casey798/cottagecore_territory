@@ -20,6 +20,8 @@ import { CaptureHistoryPage } from '@/pages/CaptureHistoryPage';
 import { ClusterConfigPage } from '@/pages/ClusterConfigPage';
 import { Phase1ImportPage } from '@/pages/Phase1ImportPage';
 import { ExportsPage } from '@/pages/ExportsPage';
+import { SpacesPage } from '@/pages/SpacesPage';
+import { DecorationViewerPage } from '@/pages/DecorationViewerPage';
 
 const GOOGLE_CLIENT_ID =
   '425457815141-c7qp4l9sjkn5fgcv9t3odnu83j4nd3nh.apps.googleusercontent.com';
@@ -201,6 +203,22 @@ export function App() {
               element={
                 <ProtectedLayout>
                   <ExportsPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/spaces"
+              element={
+                <ProtectedLayout>
+                  <SpacesPage />
+                </ProtectedLayout>
+              }
+            />
+            <Route
+              path="/decorations"
+              element={
+                <ProtectedLayout>
+                  <DecorationViewerPage />
                 </ProtectedLayout>
               }
             />

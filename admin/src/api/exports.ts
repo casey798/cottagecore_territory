@@ -134,3 +134,45 @@ export async function exportClusterHistory(startDate: string, endDate: string): 
     `cluster-history-${startDate}-to-${endDate}.csv`,
   );
 }
+
+export async function exportSpaceDecorations(startDate: string, endDate: string): Promise<void> {
+  await downloadCsv(
+    `/admin/spaces/export${buildQuery({ startDate, endDate })}`,
+    `space-decorations-${startDate}-to-${endDate}.csv`,
+  );
+}
+
+export async function exportSeasonData(): Promise<void> {
+  await downloadCsv(
+    '/admin/season/export',
+    'season-export.csv',
+  );
+}
+
+export async function exportSpaceAssignments(startDate: string, endDate: string): Promise<void> {
+  await downloadCsv(
+    `/admin/export/space-assignments${buildQuery({ startDate, endDate })}`,
+    `space-assignments-${startDate}-to-${endDate}.csv`,
+  );
+}
+
+export async function exportDecorationSurveys(startDate: string, endDate: string): Promise<void> {
+  await downloadCsv(
+    `/admin/export/decoration-surveys${buildQuery({ startDate, endDate })}`,
+    `decoration-surveys-${startDate}-to-${endDate}.csv`,
+  );
+}
+
+export async function exportSentimentTimeSeries(startDate: string, endDate: string): Promise<void> {
+  await downloadCsv(
+    `/admin/export/sentiment-time-series${buildQuery({ startDate, endDate })}`,
+    `sentiment-time-series-${startDate}-to-${endDate}.csv`,
+  );
+}
+
+export async function exportAssetPlacements(startDate: string, endDate: string): Promise<void> {
+  await downloadCsv(
+    `/admin/export/asset-placements${buildQuery({ startDate, endDate })}`,
+    `asset-placements-${startDate}-to-${endDate}.csv`,
+  );
+}

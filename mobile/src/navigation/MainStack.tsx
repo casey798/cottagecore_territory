@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { ClanId, ChestDrop } from '@/types';
+import { PlacedDecorationAsset } from '@/api/spaces';
 import { useWebSocket } from '@/hooks/useWebSocket';
 import { useAuthStore } from '@/store/useAuthStore';
 import { useGameStore } from '@/store/useGameStore';
@@ -11,6 +12,7 @@ import * as mapApi from '@/api/map';
 import MainMapScreen from '@/screens/MainMapScreen';
 import ClanScoreboardScreen from '@/screens/ClanScoreboardScreen';
 import PlayerProfileScreen from '@/screens/PlayerProfileScreen';
+// AssetInventory import kept for type safety — screen registration disabled
 import AssetInventoryScreen from '@/screens/AssetInventoryScreen';
 import QRScannerScreen from '@/screens/QRScannerScreen';
 import MinigameSelectScreen from '@/screens/MinigameSelectScreen';
@@ -18,6 +20,7 @@ import MinigamePlayScreen from '@/screens/MinigamePlayScreen';
 import ResultScreen from '@/screens/ResultScreen';
 import SpaceSentimentScreen from '@/screens/SpaceSentimentScreen';
 import SpaceDecorationScreen from '@/screens/SpaceDecorationScreen';
+import DecorationSurveyScreen from '@/screens/DecorationSurveyScreen';
 import CaptureCelebrationScreen from '@/screens/CaptureCelebrationScreen';
 import SettingsScreen from '@/screens/SettingsScreen';
 import CharacterCreationScreen from '@/screens/CharacterCreationScreen';
@@ -26,8 +29,11 @@ import FreeRoamCheckInScreen from '@/screens/FreeRoamCheckInScreen';
 import JournalScreen from '@/screens/JournalScreen';
 import TermsAndConditionsScreen from '@/screens/TermsAndConditionsScreen';
 
+// Suppress unused import warning — AssetInventoryScreen kept for type references
+void AssetInventoryScreen;
+
 export type MainModalParamList = {
-  Map: { mode?: 'selectSpace'; userAssetId?: string } | undefined;
+  Map: { clearedSpaceId?: string } | undefined;
   ClanScoreboard: undefined;
   PlayerProfile: undefined;
   AssetInventory: {
@@ -37,7 +43,11 @@ export type MainModalParamList = {
     fromSpaceGridCells?: Array<{ x: number; y: number }>;
     fromSpacePolygonPoints?: Array<{ x: number; y: number }>;
   } | undefined;
-  QRScanner: { locationId?: string; locationName?: string } | undefined;
+  QRScanner: {
+    locationId?: string;
+    locationName?: string;
+    mode?: 'location' | 'space';
+  } | undefined;
   MinigameSelect: {
     locationId: string;
     locationName: string;
@@ -79,10 +89,16 @@ export type MainModalParamList = {
   SpaceDecoration: {
     spaceId: string;
     spaceName: string;
-    clan: ClanId;
-    gridCells: Array<{ x: number; y: number }>;  // grid indices for decoration canvas
+    gridCells: Array<{ col: number; row: number }>;
+    gridColumns: number;
+    gridRows: number;
     polygonPoints?: Array<{ x: number; y: number }>;
-    userAssetId?: string;
+  };
+  DecorationSurvey: {
+    spaceId: string;
+    spaceName: string;
+    placedAssets: PlacedDecorationAsset[];
+    screenshotBase64: string;
   };
   CaptureCelebration: { clan: ClanId; spaceName: string };
   SeasonSummary: undefined;
@@ -166,11 +182,7 @@ export function MainStack() {
         component={PlayerProfileScreen}
         options={{ presentation: 'modal' }}
       />
-      <ModalStack.Screen
-        name="AssetInventory"
-        component={AssetInventoryScreen}
-        options={{ presentation: 'modal' }}
-      />
+      {/* AssetInventory screen registration disabled — old inventory flow removed */}
       <ModalStack.Screen
         name="QRScanner"
         component={QRScannerScreen}
@@ -199,6 +211,11 @@ export function MainStack() {
       <ModalStack.Screen
         name="SpaceDecoration"
         component={SpaceDecorationScreen}
+        options={{ presentation: 'modal' }}
+      />
+      <ModalStack.Screen
+        name="DecorationSurvey"
+        component={DecorationSurveyScreen}
         options={{ presentation: 'modal' }}
       />
       <ModalStack.Screen

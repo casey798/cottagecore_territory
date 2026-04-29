@@ -14,7 +14,7 @@ import {
 import Orientation from 'react-native-orientation-locker';
 import { PALETTE, UI, KEYBOARD } from '@/constants/colors';
 import { FONTS } from '@/constants/fonts';
-import { CIPHER_STONES_TIME_LIMIT } from '@/constants/config';
+import { CIPHER_STONES_TIME_LIMIT, XP_PER_WIN } from '@/constants/config';
 import { generateClientCompletionHash } from '@/utils/hmac';
 import type { MinigamePlayProps, MinigameResult } from '@/types/minigame';
 import { generatePuzzle, checkGuess, getProgress, MINIGAME_CONFIG } from './CipherStonesLogic';
@@ -720,7 +720,7 @@ export default function CipherStonesGame(props: MinigamePlayProps) {
       {showCompleteOverlay && (
         <GameCompleteOverlay
           result={overlayResult}
-          xpEarned={overlayResult === 'win' ? 25 : 0}
+          xpEarned={overlayResult === 'win' ? XP_PER_WIN : 0}
           practiceMode={practiceMode}
           revealQuote={decodedQuote}
           onContinue={handleContinue}
